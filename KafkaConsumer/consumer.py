@@ -13,7 +13,7 @@ if __name__ == '__main__':
          'security.protocol': 'SASL_PLAINTEXT',
          'sasl.mechanisms': 'PLAIN',
          'sasl.username': 'blstriggers',
-         'sasl.password': '7pdS7iTkNDfn'
+         'sasl.password': '******'
     }
 
 c = Consumer(**conf)
