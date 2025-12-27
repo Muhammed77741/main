@@ -96,7 +96,8 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
 
     def _detect_patterns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Detect chart patterns and generate signals
+        Detect CONTINUATION chart patterns only
+        (Flags, Pennants, Wedges, Triangles)
         """
         df = df.copy()
 
@@ -118,39 +119,7 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
             if len(recent_highs) < 2 or len(recent_lows) < 2:
                 continue
 
-            # 1. DOUBLE TOP (Bearish Reversal)
-            pattern = self._detect_double_top(df, i, recent_highs)
-            if pattern:
-                df, added = self._add_pattern_signal(df, i, pattern, 'double_top')
-                if added:
-                    patterns_found += 1
-                    continue
-
-            # 2. DOUBLE BOTTOM (Bullish Reversal)
-            pattern = self._detect_double_bottom(df, i, recent_lows)
-            if pattern:
-                df, added = self._add_pattern_signal(df, i, pattern, 'double_bottom')
-                if added:
-                    patterns_found += 1
-                    continue
-
-            # 3. HEAD AND SHOULDERS (Bearish Reversal)
-            pattern = self._detect_head_and_shoulders(df, i, recent_highs)
-            if pattern:
-                df, added = self._add_pattern_signal(df, i, pattern, 'head_shoulders')
-                if added:
-                    patterns_found += 1
-                    continue
-
-            # 4. INVERSE HEAD AND SHOULDERS (Bullish Reversal)
-            pattern = self._detect_inverse_head_shoulders(df, i, recent_lows)
-            if pattern:
-                df, added = self._add_pattern_signal(df, i, pattern, 'inv_head_shoulders')
-                if added:
-                    patterns_found += 1
-                    continue
-
-            # 5. ASCENDING TRIANGLE (Bullish Continuation)
+            # 1. ASCENDING TRIANGLE (Bullish Continuation)
             pattern = self._detect_ascending_triangle(df, i, recent_highs, recent_lows)
             if pattern:
                 df, added = self._add_pattern_signal(df, i, pattern, 'asc_triangle')
@@ -158,7 +127,7 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
                     patterns_found += 1
                     continue
 
-            # 6. DESCENDING TRIANGLE (Bearish Continuation)
+            # 2. DESCENDING TRIANGLE (Bearish Continuation)
             pattern = self._detect_descending_triangle(df, i, recent_highs, recent_lows)
             if pattern:
                 df, added = self._add_pattern_signal(df, i, pattern, 'desc_triangle')
@@ -166,147 +135,322 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
                     patterns_found += 1
                     continue
 
-        print(f"   Detected {patterns_found} chart patterns")
+            # 3. SYMMETRICAL TRIANGLE
+            pattern = self._detect_symmetrical_triangle(df, i, recent_highs, recent_lows)
+            if pattern:
+                df, added = self._add_pattern_signal(df, i, pattern, 'sym_triangle')
+                if added:
+                    patterns_found += 1
+                    continue
+
+            # 4. BULLISH FLAG
+            pattern = self._detect_bull_flag(df, i, recent_highs, recent_lows)
+            if pattern:
+                df, added = self._add_pattern_signal(df, i, pattern, 'bull_flag')
+                if added:
+                    patterns_found += 1
+                    continue
+
+            # 5. BEARISH FLAG
+            pattern = self._detect_bear_flag(df, i, recent_highs, recent_lows)
+            if pattern:
+                df, added = self._add_pattern_signal(df, i, pattern, 'bear_flag')
+                if added:
+                    patterns_found += 1
+                    continue
+
+            # 6. BULLISH PENNANT
+            pattern = self._detect_bull_pennant(df, i, recent_highs, recent_lows)
+            if pattern:
+                df, added = self._add_pattern_signal(df, i, pattern, 'bull_pennant')
+                if added:
+                    patterns_found += 1
+                    continue
+
+            # 7. BEARISH PENNANT
+            pattern = self._detect_bear_pennant(df, i, recent_highs, recent_lows)
+            if pattern:
+                df, added = self._add_pattern_signal(df, i, pattern, 'bear_pennant')
+                if added:
+                    patterns_found += 1
+                    continue
+
+            # 8. FALLING WEDGE (Bullish)
+            pattern = self._detect_falling_wedge(df, i, recent_highs, recent_lows)
+            if pattern:
+                df, added = self._add_pattern_signal(df, i, pattern, 'falling_wedge')
+                if added:
+                    patterns_found += 1
+                    continue
+
+            # 9. RISING WEDGE (Bearish)
+            pattern = self._detect_rising_wedge(df, i, recent_highs, recent_lows)
+            if pattern:
+                df, added = self._add_pattern_signal(df, i, pattern, 'rising_wedge')
+                if added:
+                    patterns_found += 1
+                    continue
+
+        print(f"   Detected {patterns_found} continuation patterns")
 
         return df
 
-    def _detect_double_top(self, df, idx, recent_highs):
+    def _detect_symmetrical_triangle(self, df, idx, recent_highs, recent_lows):
         """
-        Detect Double Top pattern (Bearish Reversal)
-        Two peaks at similar level with a valley between
+        Detect Symmetrical Triangle (Continuation - direction depends on breakout)
+        Rising lows + Falling highs converging
         """
-        if len(recent_highs) < 2:
+        if len(recent_highs) < 2 or len(recent_lows) < 2:
             return None
 
-        # Get last 2 swing highs
-        high1 = recent_highs.iloc[-2]
-        high2 = recent_highs.iloc[-1]
+        # Highs: falling
+        high1 = recent_highs.iloc[-2]['high']
+        high2 = recent_highs.iloc[-1]['high']
 
-        price1 = high1['high']
-        price2 = high2['high']
+        # Lows: rising
+        low1 = recent_lows.iloc[-2]['low']
+        low2 = recent_lows.iloc[-1]['low']
 
-        # Check if peaks are at similar level (с погрешностью)
-        tolerance = price1 * self.pattern_tolerance
-        if abs(price1 - price2) <= tolerance:
-            # Check if current price breaks neckline (valley between peaks)
-            valley_data = df[(df.index > high1.name) & (df.index < high2.name)]
-            if len(valley_data) > 0:
-                neckline = valley_data['low'].min()
+        if high2 < high1 and low2 > low1:  # Converging
+            resistance = high2
+            support = low2
 
-                # Breakout below neckline
-                if df['close'].iloc[idx] < neckline:
-                    return {
-                        'type': 'double_top',
-                        'direction': -1,
-                        'entry': df['close'].iloc[idx],
-                        'resistance': max(price1, price2),
-                        'neckline': neckline
-                    }
+            # Breakout above (bullish)
+            if df['close'].iloc[idx] > resistance:
+                return {
+                    'type': 'sym_triangle',
+                    'direction': 1,
+                    'entry': df['close'].iloc[idx],
+                    'resistance': resistance,
+                    'support': support
+                }
+            # Breakout below (bearish)
+            elif df['close'].iloc[idx] < support:
+                return {
+                    'type': 'sym_triangle',
+                    'direction': -1,
+                    'entry': df['close'].iloc[idx],
+                    'resistance': resistance,
+                    'support': support
+                }
 
         return None
 
-    def _detect_double_bottom(self, df, idx, recent_lows):
+    def _detect_bull_flag(self, df, idx, recent_highs, recent_lows):
         """
-        Detect Double Bottom pattern (Bullish Reversal)
+        Detect Bullish Flag (Continuation)
+        Strong uptrend + consolidation channel (slight down) + breakout up
         """
-        if len(recent_lows) < 2:
+        if len(recent_highs) < 3 or len(recent_lows) < 3:
             return None
 
-        low1 = recent_lows.iloc[-2]
-        low2 = recent_lows.iloc[-1]
+        # Check for uptrend before flag (flagpole)
+        lookback = min(idx, 10)
+        flagpole_data = df.iloc[max(0, idx-lookback):idx]
+        if len(flagpole_data) < 5:
+            return None
 
-        price1 = low1['low']
-        price2 = low2['low']
+        # Uptrend check
+        if flagpole_data['close'].iloc[-1] <= flagpole_data['close'].iloc[0] * 1.01:
+            return None  # No uptrend
 
-        tolerance = price1 * self.pattern_tolerance
-        if abs(price1 - price2) <= tolerance:
-            # Neckline (peak between valleys)
-            peak_data = df[(df.index > low1.name) & (df.index < low2.name)]
-            if len(peak_data) > 0:
-                neckline = peak_data['high'].max()
+        # Flag: parallel channel sloping slightly down
+        flag_highs = recent_highs.tail(2)
+        flag_lows = recent_lows.tail(2)
 
-                # Breakout above neckline
-                if df['close'].iloc[idx] > neckline:
+        if len(flag_highs) == 2 and len(flag_lows) == 2:
+            # Channel resistance
+            resistance = flag_highs['high'].max()
+
+            # Breakout above
+            if df['close'].iloc[idx] > resistance:
+                return {
+                    'type': 'bull_flag',
+                    'direction': 1,
+                    'entry': df['close'].iloc[idx],
+                    'resistance': resistance,
+                    'support': flag_lows['low'].min()
+                }
+
+        return None
+
+    def _detect_bear_flag(self, df, idx, recent_highs, recent_lows):
+        """
+        Detect Bearish Flag (Continuation)
+        Strong downtrend + consolidation channel (slight up) + breakout down
+        """
+        if len(recent_highs) < 3 or len(recent_lows) < 3:
+            return None
+
+        # Check for downtrend before flag
+        lookback = min(idx, 10)
+        flagpole_data = df.iloc[max(0, idx-lookback):idx]
+        if len(flagpole_data) < 5:
+            return None
+
+        # Downtrend check
+        if flagpole_data['close'].iloc[-1] >= flagpole_data['close'].iloc[0] * 0.99:
+            return None  # No downtrend
+
+        # Flag channel
+        flag_highs = recent_highs.tail(2)
+        flag_lows = recent_lows.tail(2)
+
+        if len(flag_highs) == 2 and len(flag_lows) == 2:
+            support = flag_lows['low'].min()
+
+            # Breakout below
+            if df['close'].iloc[idx] < support:
+                return {
+                    'type': 'bear_flag',
+                    'direction': -1,
+                    'entry': df['close'].iloc[idx],
+                    'resistance': flag_highs['high'].max(),
+                    'support': support
+                }
+
+        return None
+
+    def _detect_bull_pennant(self, df, idx, recent_highs, recent_lows):
+        """
+        Detect Bullish Pennant (Continuation)
+        Like flag but converging (symmetrical triangle after uptrend)
+        """
+        if len(recent_highs) < 2 or len(recent_lows) < 2:
+            return None
+
+        # Check for uptrend before pennant
+        lookback = min(idx, 10)
+        pole_data = df.iloc[max(0, idx-lookback):idx]
+        if len(pole_data) < 5:
+            return None
+
+        if pole_data['close'].iloc[-1] <= pole_data['close'].iloc[0] * 1.01:
+            return None  # No uptrend
+
+        # Converging highs and lows
+        high1 = recent_highs.iloc[-2]['high']
+        high2 = recent_highs.iloc[-1]['high']
+        low1 = recent_lows.iloc[-2]['low']
+        low2 = recent_lows.iloc[-1]['low']
+
+        if high2 < high1 and low2 > low1:  # Converging
+            resistance = high2
+
+            # Breakout above
+            if df['close'].iloc[idx] > resistance:
+                return {
+                    'type': 'bull_pennant',
+                    'direction': 1,
+                    'entry': df['close'].iloc[idx],
+                    'resistance': resistance,
+                    'support': low2
+                }
+
+        return None
+
+    def _detect_bear_pennant(self, df, idx, recent_highs, recent_lows):
+        """
+        Detect Bearish Pennant (Continuation)
+        """
+        if len(recent_highs) < 2 or len(recent_lows) < 2:
+            return None
+
+        # Check for downtrend before pennant
+        lookback = min(idx, 10)
+        pole_data = df.iloc[max(0, idx-lookback):idx]
+        if len(pole_data) < 5:
+            return None
+
+        if pole_data['close'].iloc[-1] >= pole_data['close'].iloc[0] * 0.99:
+            return None  # No downtrend
+
+        # Converging
+        high1 = recent_highs.iloc[-2]['high']
+        high2 = recent_highs.iloc[-1]['high']
+        low1 = recent_lows.iloc[-2]['low']
+        low2 = recent_lows.iloc[-1]['low']
+
+        if high2 < high1 and low2 > low1:  # Converging
+            support = low2
+
+            # Breakout below
+            if df['close'].iloc[idx] < support:
+                return {
+                    'type': 'bear_pennant',
+                    'direction': -1,
+                    'entry': df['close'].iloc[idx],
+                    'resistance': high2,
+                    'support': support
+                }
+
+        return None
+
+    def _detect_falling_wedge(self, df, idx, recent_highs, recent_lows):
+        """
+        Detect Falling Wedge (Bullish Continuation)
+        Both highs and lows falling but converging (lows fall slower)
+        """
+        if len(recent_highs) < 2 or len(recent_lows) < 2:
+            return None
+
+        high1 = recent_highs.iloc[-2]['high']
+        high2 = recent_highs.iloc[-1]['high']
+        low1 = recent_lows.iloc[-2]['low']
+        low2 = recent_lows.iloc[-1]['low']
+
+        # Both falling
+        if high2 < high1 and low2 < low1:
+            # Converging (lows fall slower than highs)
+            high_slope = (high1 - high2) / high1
+            low_slope = (low1 - low2) / low1
+
+            if high_slope > low_slope:  # Converging
+                resistance = high2
+
+                # Bullish breakout above
+                if df['close'].iloc[idx] > resistance:
                     return {
-                        'type': 'double_bottom',
+                        'type': 'falling_wedge',
                         'direction': 1,
                         'entry': df['close'].iloc[idx],
-                        'support': min(price1, price2),
-                        'neckline': neckline
+                        'resistance': resistance,
+                        'support': low2
                     }
 
         return None
 
-    def _detect_head_and_shoulders(self, df, idx, recent_highs):
+    def _detect_rising_wedge(self, df, idx, recent_highs, recent_lows):
         """
-        Detect Head and Shoulders pattern (Bearish Reversal)
-        Left shoulder - Head (higher) - Right shoulder
+        Detect Rising Wedge (Bearish Continuation)
+        Both highs and lows rising but converging (highs rise slower)
         """
-        if len(recent_highs) < 3:
+        if len(recent_highs) < 2 or len(recent_lows) < 2:
             return None
 
-        left_shoulder = recent_highs.iloc[-3]
-        head = recent_highs.iloc[-2]
-        right_shoulder = recent_highs.iloc[-1]
+        high1 = recent_highs.iloc[-2]['high']
+        high2 = recent_highs.iloc[-1]['high']
+        low1 = recent_lows.iloc[-2]['low']
+        low2 = recent_lows.iloc[-1]['low']
 
-        ls_price = left_shoulder['high']
-        head_price = head['high']
-        rs_price = right_shoulder['high']
+        # Both rising
+        if high2 > high1 and low2 > low1:
+            # Converging (highs rise slower than lows)
+            high_slope = (high2 - high1) / high1
+            low_slope = (low2 - low1) / low1
 
-        # Head должна быть выше плеч
-        if head_price > ls_price and head_price > rs_price:
-            # Плечи примерно на одном уровне (с погрешностью)
-            tolerance = ls_price * self.pattern_tolerance
-            if abs(ls_price - rs_price) <= tolerance:
-                # Neckline - lowest point between shoulders
-                neckline_data = df[(df.index > left_shoulder.name) & (df.index < right_shoulder.name)]
-                if len(neckline_data) > 0:
-                    neckline = neckline_data['low'].min()
+            if low_slope > high_slope:  # Converging
+                support = low2
 
-                    # Breakout below neckline
-                    if df['close'].iloc[idx] < neckline:
-                        return {
-                            'type': 'head_shoulders',
-                            'direction': -1,
-                            'entry': df['close'].iloc[idx],
-                            'head': head_price,
-                            'neckline': neckline
-                        }
-
-        return None
-
-    def _detect_inverse_head_shoulders(self, df, idx, recent_lows):
-        """
-        Detect Inverse Head and Shoulders (Bullish Reversal)
-        """
-        if len(recent_lows) < 3:
-            return None
-
-        left_shoulder = recent_lows.iloc[-3]
-        head = recent_lows.iloc[-2]
-        right_shoulder = recent_lows.iloc[-1]
-
-        ls_price = left_shoulder['low']
-        head_price = head['low']
-        rs_price = right_shoulder['low']
-
-        # Head должна быть ниже плеч
-        if head_price < ls_price and head_price < rs_price:
-            tolerance = ls_price * self.pattern_tolerance
-            if abs(ls_price - rs_price) <= tolerance:
-                neckline_data = df[(df.index > left_shoulder.name) & (df.index < right_shoulder.name)]
-                if len(neckline_data) > 0:
-                    neckline = neckline_data['high'].max()
-
-                    # Breakout above neckline
-                    if df['close'].iloc[idx] > neckline:
-                        return {
-                            'type': 'inv_head_shoulders',
-                            'direction': 1,
-                            'entry': df['close'].iloc[idx],
-                            'head': head_price,
-                            'neckline': neckline
-                        }
+                # Bearish breakout below
+                if df['close'].iloc[idx] < support:
+                    return {
+                        'type': 'rising_wedge',
+                        'direction': -1,
+                        'entry': df['close'].iloc[idx],
+                        'resistance': high2,
+                        'support': support
+                    }
 
         return None
 
