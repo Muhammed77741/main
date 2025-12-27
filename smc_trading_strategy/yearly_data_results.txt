@@ -1,0 +1,56 @@
+======================================================================
+YEARLY REAL DATA BACKTEST RESULTS (1 YEAR)
+======================================================================
+
+Data Period: 2024-12-27 22:07:25.355486 to 2025-12-27 22:07:25.355486
+Total Candles: 8761
+Days: 365
+
+
+1. Pattern Recognition (2.618)
+   Total PnL: +806.72%
+   Monthly Avg PnL: +67.23%
+   Win Rate: 66.4%
+   Total Trades: 709
+   Trades/Month: 59.1
+   Avg Win: 2.26%
+   Avg Loss: -1.09%
+   Max Drawdown: 23.37%
+   Sharpe Ratio: 0.19
+   Profitable Months: 11/12
+
+2. Pattern Recognition (1.618)
+   Total PnL: +789.80%
+   Monthly Avg PnL: +65.82%
+   Win Rate: 67.3%
+   Total Trades: 709
+   Trades/Month: 59.1
+   Avg Win: 2.19%
+   Avg Loss: -1.11%
+   Max Drawdown: 25.09%
+   Sharpe Ratio: 0.18
+   Profitable Months: 11/12
+
+3. Original Multi-Signal
+   Total PnL: +677.93%
+   Monthly Avg PnL: +52.15%
+   Win Rate: 64.6%
+   Total Trades: 633
+   Trades/Month: 48.7
+   Avg Win: 2.12%
+   Avg Loss: -0.84%
+   Max Drawdown: 12.76%
+   Sharpe Ratio: 0.07
+   Profitable Months: 7/13
+
+4. Fibonacci 1.618
+   Total PnL: +338.01%
+   Monthly Avg PnL: +28.17%
+   Win Rate: 54.5%
+   Total Trades: 213
+   Trades/Month: 17.8
+   Avg Win: 3.72%
+   Avg Loss: -0.96%
+   Max Drawdown: 10.13%
+   Sharpe Ratio: 0.15
+   Profitable Months: 9/12
