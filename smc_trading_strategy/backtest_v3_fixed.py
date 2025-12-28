@@ -36,7 +36,7 @@ class RealisticBacktestV3Fixed:
         self.max_loss_per_day = -5.0  # %
         self.max_positions = 999  # UNLIMITED positions (was 5)
         self.max_consecutive_losses = 5  # Increased from 3 to 5 (like V2)
-        self.max_drawdown = -12.0  # Maximum allowed drawdown % (was -5)
+        self.max_drawdown = -999.0  # UNLIMITED DD (was -12)
 
     def backtest(self, df, strategy, tp1=20, tp2=35, tp3=50,
                  close_pct1=0.5, close_pct2=0.3, close_pct3=0.2):
