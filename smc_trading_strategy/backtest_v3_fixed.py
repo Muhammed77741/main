@@ -36,6 +36,7 @@ class RealisticBacktestV3Fixed:
         self.max_loss_per_day = -5.0  # %
         self.max_positions = 999  # UNLIMITED positions (was 5)
         self.max_consecutive_losses = 5  # Increased from 3 to 5 (like V2)
+        self.max_drawdown = -5.0  # Maximum allowed drawdown %
 
     def backtest(self, df, strategy, tp1=20, tp2=35, tp3=50,
                  close_pct1=0.5, close_pct2=0.3, close_pct3=0.2):
@@ -66,6 +67,7 @@ class RealisticBacktestV3Fixed:
         else:
             print(f"   Max positions: {self.max_positions}")
         print(f"   Max trades/day: {self.max_trades_per_day}")
+        print(f"   Max DD: {self.max_drawdown}% 🛡️")
         print(f"\n   📈 FEATURES:")
         print(f"   ✅ Multiple independent positions (no averaging)")
         print(f"   ✅ Trailing stop after TP1: {self.trailing_distance}п")
@@ -83,6 +85,11 @@ class RealisticBacktestV3Fixed:
         skip_max_positions = 0
         skip_daily_limit = 0
         skip_consecutive = 0
+        skip_max_dd = 0
+
+        # Track cumulative PnL for DD calculation
+        cumulative_pnl = 0.0
+        peak_pnl = 0.0
 
         # Process candles chronologically
         for i in range(len(df_strategy)):
@@ -97,12 +104,21 @@ class RealisticBacktestV3Fixed:
             if signal != 0:
                 signals_total += 1
 
+                # Calculate current DD
+                current_dd = cumulative_pnl - peak_pnl
+
                 # Check daily limits
                 current_date = candle_time.date()
                 today_trades = [t for t in trades if pd.to_datetime(t['exit_time']).date() == current_date]
 
                 can_open = True
                 skip_reason = None
+
+                # Check max drawdown limit
+                if current_dd <= self.max_drawdown:
+                    can_open = False
+                    skip_reason = 'max_drawdown'
+                    skip_max_dd += 1
 
                 if len(today_trades) >= self.max_trades_per_day:
                     can_open = False
@@ -371,6 +387,12 @@ class RealisticBacktestV3Fixed:
             for idx in sorted(positions_to_close, reverse=True):
                 del open_positions[idx]
 
+            # Update cumulative PnL and peak after closing positions
+            if len(trades) > 0:
+                cumulative_pnl = sum([t['pnl_pct'] for t in trades])
+                if cumulative_pnl > peak_pnl:
+                    peak_pnl = cumulative_pnl
+
         # Print signal statistics
         print(f"\n{'='*80}")
         print(f"📊 SIGNAL STATISTICS")
@@ -379,9 +401,10 @@ class RealisticBacktestV3Fixed:
         print(f"   Signals opened: {signals_opened} ({signals_opened/signals_total*100 if signals_total > 0 else 0:.1f}%)")
         print(f"   Signals skipped: {signals_total - signals_opened}")
         print(f"\n   Skip reasons:")
-        print(f"   - Max positions (5): {skip_max_positions} ({skip_max_positions/signals_total*100 if signals_total > 0 else 0:.1f}%)")
+        print(f"   - Max positions: {skip_max_positions} ({skip_max_positions/signals_total*100 if signals_total > 0 else 0:.1f}%)")
         print(f"   - Daily limits: {skip_daily_limit} ({skip_daily_limit/signals_total*100 if signals_total > 0 else 0:.1f}%)")
         print(f"   - Consecutive losses: {skip_consecutive} ({skip_consecutive/signals_total*100 if signals_total > 0 else 0:.1f}%)")
+        print(f"   - Max DD (-5%): {skip_max_dd} ({skip_max_dd/signals_total*100 if signals_total > 0 else 0:.1f}%)")
 
         # Convert to DataFrame
         if len(trades) == 0:
