@@ -36,7 +36,7 @@ class RealisticBacktestV3Fixed:
         self.max_loss_per_day = -5.0  # %
         self.max_positions = 999  # UNLIMITED positions (was 5)
         self.max_consecutive_losses = 5  # Increased from 3 to 5 (like V2)
-        self.max_drawdown = -5.0  # Maximum allowed drawdown %
+        self.max_drawdown = -12.0  # Maximum allowed drawdown % (was -5)
 
     def backtest(self, df, strategy, tp1=20, tp2=35, tp3=50,
                  close_pct1=0.5, close_pct2=0.3, close_pct3=0.2):
@@ -404,7 +404,7 @@ class RealisticBacktestV3Fixed:
         print(f"   - Max positions: {skip_max_positions} ({skip_max_positions/signals_total*100 if signals_total > 0 else 0:.1f}%)")
         print(f"   - Daily limits: {skip_daily_limit} ({skip_daily_limit/signals_total*100 if signals_total > 0 else 0:.1f}%)")
         print(f"   - Consecutive losses: {skip_consecutive} ({skip_consecutive/signals_total*100 if signals_total > 0 else 0:.1f}%)")
-        print(f"   - Max DD (-5%): {skip_max_dd} ({skip_max_dd/signals_total*100 if signals_total > 0 else 0:.1f}%)")
+        print(f"   - Max DD ({self.max_drawdown}%): {skip_max_dd} ({skip_max_dd/signals_total*100 if signals_total > 0 else 0:.1f}%)")
 
         # Convert to DataFrame
         if len(trades) == 0:
