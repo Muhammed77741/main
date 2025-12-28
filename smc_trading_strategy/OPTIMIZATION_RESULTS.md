@@ -191,3 +191,34 @@ Based on Price Action strategies analysis, potential improvements:
 5. **Time-based filters** - Avoid high-impact news times
 
 Each improvement will be tested individually against baseline: **+305.93%, DD -7.55%**
+
+### ❌ Candlestick Patterns + Breakout Confirmation (Rejected)
+
+**Concept:** Improve #2 + #4 together - Add candlestick pattern filters (Pin Bar, Engulfing, Hammer) and breakout confirmation to reduce false signals.
+
+**Implementation:**
+- Pin Bar detection (long shadows confirming direction)
+- Engulfing pattern detection (current candle engulfs previous)
+- Hammer/Shooting Star detection (reversal patterns)
+- Breakout gap detection (avoid entering on gaps)
+- Reject signals with counter-patterns
+- Allow signals with confirming or neutral patterns
+
+**Results:**
+- Total PnL: +294.67% (baseline: +305.93%) → **-11.26% worse**
+- Max DD: -10.32% (baseline: -7.55%) → **+2.77% worse**
+- Win Rate: 69.7% (baseline: 70.9%) → **-1.2% worse**
+- Profit Factor: 4.54 (baseline: 4.54) → Same
+- Trades: 353 (baseline: 374) → -21 trades
+- Pattern rejected: 40 signals (9.2%)
+- Breakout rejected: 0 signals (0.0%)
+
+**Why rejected:**
+- Pattern filters too restrictive - removed profitable trades
+- Lost -11.26% profit trying to improve quality
+- DD actually got WORSE (-10.32% vs -7.55%)
+- Breakout confirmation ineffective (0 rejections)
+- TREND trades hit hardest: +130.53% (was +137.23%, -6.70%)
+
+**Conclusion:** Candlestick patterns don't add value to SMC strategy. Pattern recognition already built into strategy is sufficient. These filters hurt performance.
+
