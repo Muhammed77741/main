@@ -18,18 +18,20 @@ class RealisticBacktestV3Fixed:
     """Realistic backtest with multiple positions - FIXED VERSION"""
 
     def __init__(self, spread_points=2.0, commission_points=0.5, swap_per_day=-0.3,
-                 trailing_distance=15):
+                 trailing_distance=15, timeout_hours=48):
         """
         Args:
             spread_points: Average spread in points (default: 2 for XAUUSD)
             commission_points: Commission per trade in points (default: 0.5)
             swap_per_day: Swap cost per day in points (default: -0.3)
             trailing_distance: Trailing stop distance in points after TP1 (default: 15)
+            timeout_hours: Position timeout in hours (default: 48)
         """
         self.spread = spread_points
         self.commission = commission_points
         self.swap_per_day = swap_per_day
         self.trailing_distance = trailing_distance
+        self.timeout_hours = timeout_hours
 
         # Daily limits
         self.max_trades_per_day = 10
@@ -204,10 +206,10 @@ class RealisticBacktestV3Fixed:
                 if entry_time == candle_time:
                     continue
 
-                # Check timeout (48 hours)
+                # Check timeout
                 hours_in_trade = (candle_time - entry_time).total_seconds() / 3600
 
-                if hours_in_trade >= 48:
+                if hours_in_trade >= self.timeout_hours:
                     # Force close
                     if direction == 'LONG':
                         exit_price = close - self.spread / 2
@@ -578,6 +580,27 @@ def main():
     parser.add_argument('--trailing', type=float, default=15,
                         help='Trailing stop distance in points (default: 15)')
 
+    parser.add_argument('--tp1', type=float, default=20,
+                        help='TP1 distance in points (default: 20)')
+
+    parser.add_argument('--tp2', type=float, default=35,
+                        help='TP2 distance in points (default: 35)')
+
+    parser.add_argument('--tp3', type=float, default=50,
+                        help='TP3 distance in points (default: 50)')
+
+    parser.add_argument('--close1', type=float, default=0.5,
+                        help='Close percent at TP1 (default: 0.5)')
+
+    parser.add_argument('--close2', type=float, default=0.3,
+                        help='Close percent at TP2 (default: 0.3)')
+
+    parser.add_argument('--close3', type=float, default=0.2,
+                        help='Close percent at TP3 (default: 0.2)')
+
+    parser.add_argument('--timeout', type=float, default=48,
+                        help='Position timeout in hours (default: 48)')
+
     args = parser.parse_args()
 
     # Load data
@@ -605,14 +628,15 @@ def main():
         spread_points=args.spread,
         commission_points=args.commission,
         swap_per_day=args.swap,
-        trailing_distance=args.trailing
+        trailing_distance=args.trailing,
+        timeout_hours=args.timeout
     )
 
     trades_df = backtest.backtest(
         df=df,
         strategy=strategy,
-        tp1=20, tp2=35, tp3=50,
-        close_pct1=0.5, close_pct2=0.3, close_pct3=0.2
+        tp1=args.tp1, tp2=args.tp2, tp3=args.tp3,
+        close_pct1=args.close1, close_pct2=args.close2, close_pct3=args.close3
     )
 
     if trades_df is not None:
