@@ -17,17 +17,28 @@ from telegram_notifier import TelegramNotifier
 class PaperTradingBot:
     """Paper trading bot for Pattern Recognition strategy"""
 
-    def __init__(self, telegram_token=None, telegram_chat_id=None, check_interval=3600):
+    def __init__(self, telegram_token=None, telegram_chat_id=None, check_interval=3600,
+                 tp1=30, tp2=50, tp3=80, close_pct1=0.5, close_pct2=0.3, close_pct3=0.2):
         """
-        Initialize paper trading bot
+        Initialize paper trading bot with 3 TP levels (baseline configuration)
 
         Args:
             telegram_token: Telegram bot token
             telegram_chat_id: Telegram chat ID
             check_interval: How often to check for signals (seconds), default 1 hour
+            tp1, tp2, tp3: Take profit levels in points (default: 30/50/80)
+            close_pct1, close_pct2, close_pct3: Percentage to close at each TP (default: 50%/30%/20%)
         """
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
         self.check_interval = check_interval
+
+        # Baseline 3TP configuration
+        self.tp1 = tp1
+        self.tp2 = tp2
+        self.tp3 = tp3
+        self.close_pct1 = close_pct1
+        self.close_pct2 = close_pct2
+        self.close_pct3 = close_pct3
 
         # Telegram notifier
         if telegram_token and telegram_chat_id:
@@ -47,6 +58,8 @@ class PaperTradingBot:
         self.closed_trades = []
 
         print("✅ Paper Trading Bot initialized")
+        print(f"   TP Configuration: {tp1}п/{tp2}п/{tp3}п")
+        print(f"   Close %: {close_pct1*100:.0f}%/{close_pct2*100:.0f}%/{close_pct3*100:.0f}%")
 
     def download_realtime_data(self, symbol='GC=F', period='5d', interval='1h'):
         """
@@ -156,36 +169,63 @@ class PaperTradingBot:
                 self.notifier.send_error(f"Error checking signals: {str(e)}")
 
     def open_position(self, signal, timestamp):
-        """Open a new paper trading position"""
+        """Open a new paper trading position with 3 TP levels"""
+
+        entry_price = signal['entry_price']
+        direction = 'LONG' if signal['signal'] == 1 else 'SHORT'
+
+        # Calculate 3 TP levels
+        if direction == 'LONG':
+            tp1_price = entry_price + self.tp1
+            tp2_price = entry_price + self.tp2
+            tp3_price = entry_price + self.tp3
+        else:  # SHORT
+            tp1_price = entry_price - self.tp1
+            tp2_price = entry_price - self.tp2
+            tp3_price = entry_price - self.tp3
 
         position = {
             'entry_time': timestamp,
-            'direction': 'LONG' if signal['signal'] == 1 else 'SHORT',
-            'entry_price': signal['entry_price'],
+            'direction': direction,
+            'entry_price': entry_price,
             'stop_loss': signal['stop_loss'],
-            'take_profit': signal['take_profit'],
+            'tp1_price': tp1_price,
+            'tp2_price': tp2_price,
+            'tp3_price': tp3_price,
+            'tp1_hit': False,
+            'tp2_hit': False,
+            'tp3_hit': False,
+            'position_remaining': 1.0,  # 100% of position still open
+            'total_pnl_pct': 0.0,  # Accumulated PnL from partial closes
             'pattern': signal.get('pattern', 'N/A'),
             'signal_data': signal
         }
 
         self.open_positions.append(position)
 
-        print(f"✅ Position opened: {position['direction']} @ {position['entry_price']:.2f}")
+        print(f"✅ Position opened: {direction} @ {entry_price:.2f}")
+        print(f"   TP1: {tp1_price:.2f} ({self.close_pct1*100:.0f}%)")
+        print(f"   TP2: {tp2_price:.2f} ({self.close_pct2*100:.0f}%)")
+        print(f"   TP3: {tp3_price:.2f} ({self.close_pct3*100:.0f}%)")
+        print(f"   SL:  {signal['stop_loss']:.2f}")
 
         # Send Telegram notification
         if self.notifier:
             signal_data = {
-                'direction': position['direction'],
-                'entry_price': position['entry_price'],
-                'stop_loss': position['stop_loss'],
-                'take_profit': position['take_profit'],
+                'direction': direction,
+                'entry_price': entry_price,
+                'stop_loss': signal['stop_loss'],
+                'take_profit': tp1_price,  # Show first TP
+                'tp1': tp1_price,
+                'tp2': tp2_price,
+                'tp3': tp3_price,
                 'pattern': position['pattern'],
                 'timestamp': timestamp
             }
             self.notifier.send_entry_signal(signal_data)
 
     def check_open_positions(self):
-        """Check if any open positions hit SL/TP"""
+        """Check if any open positions hit SL/TP (3 TP levels with partial close)"""
 
         if len(self.open_positions) == 0:
             return
@@ -201,45 +241,118 @@ class PaperTradingBot:
         latest_close = latest_candle['close']
 
         positions_to_close = []
+        positions_to_update = []
 
         for i, pos in enumerate(self.open_positions):
+            if pos['position_remaining'] <= 0:
+                # Position fully closed
+                positions_to_close.append((i, pos['entry_price'], 'CLOSED', pos['total_pnl_pct']))
+                continue
+
             # Check timeout (48 hours)
             time_in_trade = (latest_time - pos['entry_time']).total_seconds() / 3600
 
             if time_in_trade >= 48:
-                # Close by timeout
-                positions_to_close.append((i, latest_close, 'EOD'))
+                # Close remaining position by timeout
+                if pos['direction'] == 'LONG':
+                    pnl_pct = ((latest_close - pos['entry_price']) / pos['entry_price']) * 100 * pos['position_remaining']
+                else:
+                    pnl_pct = ((pos['entry_price'] - latest_close) / pos['entry_price']) * 100 * pos['position_remaining']
+
+                pos['total_pnl_pct'] += pnl_pct
+                positions_to_close.append((i, latest_close, 'EOD', pos['total_pnl_pct']))
                 continue
 
             # Check SL/TP
             if pos['direction'] == 'LONG':
+                # Check SL first - closes entire remaining position
                 if latest_low <= pos['stop_loss']:
-                    positions_to_close.append((i, pos['stop_loss'], 'SL'))
-                elif latest_high >= pos['take_profit']:
-                    positions_to_close.append((i, pos['take_profit'], 'TP'))
+                    pnl_pct = ((pos['stop_loss'] - pos['entry_price']) / pos['entry_price']) * 100 * pos['position_remaining']
+                    pos['total_pnl_pct'] += pnl_pct
+                    positions_to_close.append((i, pos['stop_loss'], 'SL', pos['total_pnl_pct']))
+                    continue
+
+                # Check TPs in reverse order (TP3, TP2, TP1)
+                if latest_high >= pos['tp3_price'] and not pos['tp3_hit']:
+                    # TP3 hit - close remaining 20%
+                    pnl_pct = ((pos['tp3_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct3
+                    pos['total_pnl_pct'] += pnl_pct
+                    pos['position_remaining'] -= self.close_pct3
+                    pos['tp3_hit'] = True
+                    print(f"   🎯 TP3 HIT @ {pos['tp3_price']:.2f} (closed {self.close_pct3*100:.0f}%, remaining {pos['position_remaining']*100:.0f}%)")
+                    positions_to_update.append(i)
+
+                if latest_high >= pos['tp2_price'] and not pos['tp2_hit']:
+                    # TP2 hit - close 30%
+                    pnl_pct = ((pos['tp2_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct2
+                    pos['total_pnl_pct'] += pnl_pct
+                    pos['position_remaining'] -= self.close_pct2
+                    pos['tp2_hit'] = True
+                    print(f"   🎯 TP2 HIT @ {pos['tp2_price']:.2f} (closed {self.close_pct2*100:.0f}%, remaining {pos['position_remaining']*100:.0f}%)")
+                    positions_to_update.append(i)
+
+                if latest_high >= pos['tp1_price'] and not pos['tp1_hit']:
+                    # TP1 hit - close 50%
+                    pnl_pct = ((pos['tp1_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct1
+                    pos['total_pnl_pct'] += pnl_pct
+                    pos['position_remaining'] -= self.close_pct1
+                    pos['tp1_hit'] = True
+                    print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} (closed {self.close_pct1*100:.0f}%, remaining {pos['position_remaining']*100:.0f}%)")
+                    positions_to_update.append(i)
+
             else:  # SHORT
+                # Check SL first - closes entire remaining position
                 if latest_high >= pos['stop_loss']:
-                    positions_to_close.append((i, pos['stop_loss'], 'SL'))
-                elif latest_low <= pos['take_profit']:
-                    positions_to_close.append((i, pos['take_profit'], 'TP'))
+                    pnl_pct = ((pos['entry_price'] - pos['stop_loss']) / pos['entry_price']) * 100 * pos['position_remaining']
+                    pos['total_pnl_pct'] += pnl_pct
+                    positions_to_close.append((i, pos['stop_loss'], 'SL', pos['total_pnl_pct']))
+                    continue
 
-        # Close positions
-        for idx, exit_price, exit_type in reversed(positions_to_close):
-            self.close_position(idx, exit_price, exit_type, latest_time)
+                # Check TPs in reverse order
+                if latest_low <= pos['tp3_price'] and not pos['tp3_hit']:
+                    pnl_pct = ((pos['entry_price'] - pos['tp3_price']) / pos['entry_price']) * 100 * self.close_pct3
+                    pos['total_pnl_pct'] += pnl_pct
+                    pos['position_remaining'] -= self.close_pct3
+                    pos['tp3_hit'] = True
+                    print(f"   🎯 TP3 HIT @ {pos['tp3_price']:.2f} (closed {self.close_pct3*100:.0f}%, remaining {pos['position_remaining']*100:.0f}%)")
+                    positions_to_update.append(i)
 
-    def close_position(self, position_idx, exit_price, exit_type, exit_time):
-        """Close a position"""
+                if latest_low <= pos['tp2_price'] and not pos['tp2_hit']:
+                    pnl_pct = ((pos['entry_price'] - pos['tp2_price']) / pos['entry_price']) * 100 * self.close_pct2
+                    pos['total_pnl_pct'] += pnl_pct
+                    pos['position_remaining'] -= self.close_pct2
+                    pos['tp2_hit'] = True
+                    print(f"   🎯 TP2 HIT @ {pos['tp2_price']:.2f} (closed {self.close_pct2*100:.0f}%, remaining {pos['position_remaining']*100:.0f}%)")
+                    positions_to_update.append(i)
+
+                if latest_low <= pos['tp1_price'] and not pos['tp1_hit']:
+                    pnl_pct = ((pos['entry_price'] - pos['tp1_price']) / pos['entry_price']) * 100 * self.close_pct1
+                    pos['total_pnl_pct'] += pnl_pct
+                    pos['position_remaining'] -= self.close_pct1
+                    pos['tp1_hit'] = True
+                    print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} (closed {self.close_pct1*100:.0f}%, remaining {pos['position_remaining']*100:.0f}%)")
+                    positions_to_update.append(i)
+
+        # Close fully closed positions
+        for idx, exit_price, exit_type, total_pnl in reversed(positions_to_close):
+            self.close_position(idx, exit_price, exit_type, latest_time, total_pnl)
+
+    def close_position(self, position_idx, exit_price, exit_type, exit_time, total_pnl_pct=None):
+        """Close a position (full or partial close has been tracked)"""
 
         pos = self.open_positions[position_idx]
 
-        # Calculate PnL
-        if pos['direction'] == 'LONG':
-            pnl_points = exit_price - pos['entry_price']
-            pnl_pct = (pnl_points / pos['entry_price']) * 100
-        else:  # SHORT
-            pnl_points = pos['entry_price'] - exit_price
-            pnl_pct = (pnl_points / pos['entry_price']) * 100
+        # Use accumulated PnL from partial closes if provided
+        if total_pnl_pct is not None:
+            pnl_pct = total_pnl_pct
+        else:
+            # Calculate PnL for full position close
+            if pos['direction'] == 'LONG':
+                pnl_pct = ((exit_price - pos['entry_price']) / pos['entry_price']) * 100
+            else:  # SHORT
+                pnl_pct = ((pos['entry_price'] - exit_price) / pos['entry_price']) * 100
 
+        pnl_points = (pnl_pct / 100) * pos['entry_price']
         duration_hours = (exit_time - pos['entry_time']).total_seconds() / 3600
 
         closed_trade = {
@@ -249,7 +362,12 @@ class PaperTradingBot:
             'entry_price': pos['entry_price'],
             'exit_price': exit_price,
             'stop_loss': pos['stop_loss'],
-            'take_profit': pos['take_profit'],
+            'tp1_price': pos['tp1_price'],
+            'tp2_price': pos['tp2_price'],
+            'tp3_price': pos['tp3_price'],
+            'tp1_hit': pos['tp1_hit'],
+            'tp2_hit': pos['tp2_hit'],
+            'tp3_hit': pos['tp3_hit'],
             'exit_type': exit_type,
             'pnl_pct': pnl_pct,
             'pnl_points': pnl_points,
@@ -260,11 +378,12 @@ class PaperTradingBot:
         self.closed_trades.append(closed_trade)
 
         emoji = "✅" if pnl_pct > 0 else "❌"
-        print(f"\n{emoji} Position closed:")
+        print(f"\n{emoji} Position FULLY CLOSED:")
         print(f"   Direction: {pos['direction']}")
-        print(f"   Entry: {pos['entry_price']:.2f} → Exit: {exit_price:.2f}")
+        print(f"   Entry: {pos['entry_price']:.2f} → Final Exit: {exit_price:.2f}")
+        print(f"   TPs Hit: TP1={pos['tp1_hit']}, TP2={pos['tp2_hit']}, TP3={pos['tp3_hit']}")
         print(f"   Exit type: {exit_type}")
-        print(f"   PnL: {pnl_pct:+.2f}% ({pnl_points:+.2f} points)")
+        print(f"   Total PnL: {pnl_pct:+.2f}% ({pnl_points:+.2f} points)")
         print(f"   Duration: {duration_hours:.1f} hours")
 
         # Send Telegram notification
@@ -277,6 +396,9 @@ class PaperTradingBot:
                 'pnl_pct': pnl_pct,
                 'pnl_points': pnl_points,
                 'duration_hours': duration_hours,
+                'tp1_hit': pos['tp1_hit'],
+                'tp2_hit': pos['tp2_hit'],
+                'tp3_hit': pos['tp3_hit'],
                 'timestamp': exit_time
             }
             self.notifier.send_exit_signal(exit_data)
@@ -328,11 +450,13 @@ class PaperTradingBot:
         """Start the paper trading bot"""
 
         print("\n" + "="*80)
-        print("🤖 PAPER TRADING BOT STARTED")
+        print("🤖 PAPER TRADING BOT STARTED - BASELINE 3TP")
         print("="*80)
         print(f"⏱️  Check interval: {self.check_interval}s ({self.check_interval/3600:.1f}h)")
         print(f"📊 Strategy: Pattern Recognition (1.618)")
         print(f"📈 Asset: XAUUSD (Gold Futures - GC=F)")
+        print(f"🎯 TP Levels: {self.tp1}п / {self.tp2}п / {self.tp3}п")
+        print(f"   Close %: {self.close_pct1*100:.0f}% / {self.close_pct2*100:.0f}% / {self.close_pct3*100:.0f}%")
         print("="*80)
 
         # Test Telegram connection
