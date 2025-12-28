@@ -77,9 +77,26 @@ class PaperTradingBot:
             ticker = yf.Ticker(symbol)
             df = ticker.history(period=period, interval=interval)
 
-            if df is None or len(df) == 0:
-                print(f"❌ No data received from Yahoo Finance")
+            # Debug: Show what we got
+            print(f"   DEBUG: Received data type: {type(df)}")
+            print(f"   DEBUG: Data shape: {df.shape if df is not None else 'None'}")
+
+            if df is None:
+                print(f"❌ yfinance returned None - ticker might be invalid")
+                print(f"   Trying alternative ticker 'GLD' (Gold ETF)...")
+                ticker = yf.Ticker('GLD')
+                df = ticker.history(period=period, interval=interval)
+
+                if df is None or len(df) == 0:
+                    print(f"❌ Alternative ticker also failed")
+                    return None
+
+            if len(df) == 0:
+                print(f"❌ No data received from Yahoo Finance (empty DataFrame)")
                 return None
+
+            # Debug: Show columns
+            print(f"   DEBUG: Columns: {df.columns.tolist()}")
 
             # Rename columns to match our strategy
             df = df.rename(columns={
@@ -91,7 +108,13 @@ class PaperTradingBot:
             })
 
             # Keep only OHLCV
-            df = df[['open', 'high', 'low', 'close', 'volume']]
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                print(f"❌ Missing required columns: {missing_cols}")
+                return None
+
+            df = df[required_cols]
 
             # Add market hours
             df['is_london'] = df.index.hour.isin(range(7, 12))
@@ -101,12 +124,19 @@ class PaperTradingBot:
             df['is_best_hours'] = df.index.hour.isin([8, 9, 10, 13, 14, 15])
 
             print(f"✅ Downloaded {len(df)} candles")
-            print(f"   Latest: {df.index[-1]} | Price: {df['close'].iloc[-1]:.2f}")
+
+            if len(df) > 0:
+                print(f"   Latest: {df.index[-1]} | Price: {df['close'].iloc[-1]:.2f}")
+            else:
+                print(f"⚠️  Warning: Downloaded 0 candles")
+                return None
 
             return df
 
         except Exception as e:
             print(f"❌ Error downloading data: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def check_for_signals(self):
