@@ -1,8 +1,10 @@
 # SMC Trading Strategy Optimization Results
 
-## Summary: ADAPTIVE V3 BEATS BASELINE! 🎉
+## Summary: ADAPTIVE V3 (Conservative) - BEST BALANCE! 🎉
 
-**Final Winner: Adaptive V3 (Optimized) - +364.58%**
+**Final Winner: Adaptive V3 (max_positions=5) - +305.93% with DD -7.55%**
+
+**For aggressive trading: Adaptive V3 (max_positions=7) - +366.32% with DD -15.49%**
 
 ## Complete Results Comparison
 
@@ -149,3 +151,43 @@ The winning formula:
 4. **Unlimited positions** (capture all opportunities)
 
 Next step: Live trading with Adaptive V3 parameters.
+
+## Tested Improvements (Rejected)
+
+### ❌ H4 Multi-Timeframe Confirmation (Rejected)
+
+**Concept:** Require H4 trend confirmation for TREND mode signals to reduce false entries.
+
+**Implementation:**
+- Resample H1 to H4
+- Check H4 EMA trend direction
+- Reject TREND signals if H4 disagrees with H1 direction
+
+**Results:**
+- Total PnL: +302.77% (baseline: +305.93%) → **-3.16% worse**
+- Max DD: -7.55% (same as baseline)
+- Win Rate: 71.2% (baseline: 70.9%) → +0.3% better
+- Profit Factor: 4.93 (baseline: 4.54) → +0.39 better
+- Trades: 354 (baseline: 374) → -20 trades
+- H4 rejected: 23 TREND signals (10.7%)
+
+**Why rejected:**
+- H4 filter removed some profitable TREND trades
+- Lost -3.16% profit for marginal WR improvement
+- Baseline is better overall
+
+**Conclusion:** H4 confirmation is too restrictive for H1 strategy. Keep baseline.
+
+---
+
+## Next Improvements to Test
+
+Based on Price Action strategies analysis, potential improvements:
+
+1. **Dynamic TP based on volatility** - Adjust TP levels based on current ATR
+2. **Candlestick pattern filters** - Add Pin Bar, Engulfing, Hammer confirmations
+3. **Dynamic position sizing** - Increase size in strong trends, reduce in range
+4. **Breakout confirmation** - Wait 1-2 candles after level breakout
+5. **Time-based filters** - Avoid high-impact news times
+
+Each improvement will be tested individually against baseline: **+305.93%, DD -7.55%**
