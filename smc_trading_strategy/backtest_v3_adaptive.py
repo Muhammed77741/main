@@ -27,19 +27,19 @@ class AdaptiveBacktestV3:
         self.commission = commission_points
         self.swap_per_day = swap_per_day
 
-        # TREND MODE parameters (сильный тренд)
-        self.trend_tp1 = 20
-        self.trend_tp2 = 35
-        self.trend_tp3 = 50
-        self.trend_trailing = 15
-        self.trend_timeout = 48
+        # TREND MODE parameters (сильный тренд) - VERY AGGRESSIVE
+        self.trend_tp1 = 30
+        self.trend_tp2 = 55
+        self.trend_tp3 = 90
+        self.trend_trailing = 20
+        self.trend_timeout = 60
 
-        # RANGE MODE parameters (боковик)
-        self.range_tp1 = 10
-        self.range_tp2 = 18
-        self.range_tp3 = 30
-        self.range_trailing = 8
-        self.range_timeout = 72  # Дольше ждем в боковике
+        # RANGE MODE parameters (боковик) - SAME AS BASELINE
+        self.range_tp1 = 20
+        self.range_tp2 = 35
+        self.range_tp3 = 50
+        self.range_trailing = 15
+        self.range_timeout = 48
 
         # Daily limits
         self.max_trades_per_day = 10
@@ -49,9 +49,13 @@ class AdaptiveBacktestV3:
 
     def detect_market_regime(self, df, current_idx, lookback=100):
         """
-        Определяет режим рынка: TREND или RANGE
+        УЛУЧШЕННЫЙ детектор режима рынка: TREND или RANGE
 
-        Использует ATR и направленное движение
+        Использует:
+        1. EMA crossover (тренд определяется пересечением)
+        2. ATR (волатильность)
+        3. Направленное движение
+        4. Последовательные свечи в одном направлении
         """
         if current_idx < lookback:
             return 'RANGE'  # По умолчанию боковик
@@ -59,37 +63,67 @@ class AdaptiveBacktestV3:
         # Берем последние N свечей
         recent_data = df.iloc[current_idx - lookback:current_idx]
 
-        # 1. ATR (волатильность)
+        # 1. EMA CROSSOVER (главный индикатор тренда!)
+        closes = recent_data['close']
+        ema_fast = closes.ewm(span=20, adjust=False).mean()
+        ema_slow = closes.ewm(span=50, adjust=False).mean()
+
+        # Текущее положение EMA
+        current_fast = ema_fast.iloc[-1]
+        current_slow = ema_slow.iloc[-1]
+
+        # Разница между EMA в %
+        ema_diff_pct = abs((current_fast - current_slow) / current_slow) * 100
+
+        # Если EMA расходятся > 0.3% = явный тренд
+        ema_trend = ema_diff_pct > 0.3
+
+        # 2. ATR (волатильность - должна быть выше средней)
         high_low = recent_data['high'] - recent_data['low']
         atr = high_low.rolling(window=14).mean().iloc[-1]
         avg_atr = high_low.rolling(window=14).mean().mean()
 
-        # 2. Направленное движение
+        high_volatility = atr > avg_atr * 1.05  # Снизили с 1.1 до 1.05
+
+        # 3. Направленное движение (цена движется в одном направлении)
         price_change = recent_data['close'].iloc[-1] - recent_data['close'].iloc[0]
         price_range = recent_data['high'].max() - recent_data['low'].min()
 
-        # Если цена прошла больше 60% диапазона в одном направлении = тренд
+        # Снизили порог с 50% до 35%
         directional_move_pct = abs(price_change) / price_range if price_range > 0 else 0
+        strong_direction = directional_move_pct > 0.35
 
-        # 3. ADX-подобный индикатор (упрощенный)
-        # Считаем сколько свечей идут в одном направлении
-        closes = recent_data['close'].values
-        up_moves = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
-        down_moves = sum(1 for i in range(1, len(closes)) if closes[i] < closes[i-1])
+        # 4. Последовательность движений (свечи в одном направлении)
+        closes_arr = recent_data['close'].values
+        up_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] > closes_arr[i-1])
+        down_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] < closes_arr[i-1])
         total_moves = up_moves + down_moves
 
+        # Снизили порог с 0.25 до 0.15 (55% свечей в одном направлении)
         trend_strength = abs(up_moves - down_moves) / total_moves if total_moves > 0 else 0
+        directional_bias = trend_strength > 0.15
 
-        # УСЛОВИЯ ТРЕНДА:
-        # 1. ATR выше среднего (волатильность)
-        # 2. Направленное движение > 50%
-        # 3. Strength > 0.3 (60% свечей в одном направлении)
+        # 5. Последовательные higher highs / lower lows (для определения устойчивого тренда)
+        highs = recent_data['high'].values[-20:]  # Последние 20 свечей
+        lows = recent_data['low'].values[-20:]
 
-        is_trend = (
-            atr > avg_atr * 1.1 and
-            directional_move_pct > 0.5 and
-            trend_strength > 0.25
-        )
+        higher_highs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
+        lower_lows = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
+
+        # Если 60%+ свечей делают HH или LL = тренд
+        structural_trend = (higher_highs > 12) or (lower_lows > 12)
+
+        # УЛУЧШЕННЫЕ УСЛОВИЯ ТРЕНДА (достаточно 3 из 5):
+        trend_signals = sum([
+            ema_trend,           # EMA расходятся
+            high_volatility,     # Высокая волатильность
+            strong_direction,    # Направленное движение
+            directional_bias,    # Большинство свечей в одном направлении
+            structural_trend     # Higher highs или Lower lows
+        ])
+
+        # ТРЕНД если 3+ сигнала из 5 (было: все 3 обязательны)
+        is_trend = trend_signals >= 3
 
         return 'TREND' if is_trend else 'RANGE'
 
