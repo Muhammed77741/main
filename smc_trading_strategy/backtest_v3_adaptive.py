@@ -31,7 +31,7 @@ class AdaptiveBacktestV3:
         self.trend_tp1 = 30
         self.trend_tp2 = 55
         self.trend_tp3 = 90
-        self.trend_trailing = 20
+        self.trend_trailing = 18  # Reduced from 20п to limit worst loss
         self.trend_timeout = 60
 
         # RANGE MODE parameters (боковик) - SAME AS BASELINE
@@ -44,7 +44,7 @@ class AdaptiveBacktestV3:
         # Daily limits
         self.max_trades_per_day = 10
         self.max_loss_per_day = -5.0  # %
-        self.max_positions = 999  # UNLIMITED
+        self.max_positions = 5  # LIMITED to reduce DD (was 7, original 999)
         self.max_drawdown = -999.0  # UNLIMITED
 
     def detect_market_regime(self, df, current_idx, lookback=100):
@@ -153,6 +153,13 @@ class AdaptiveBacktestV3:
         print(f"   Commission: {self.commission}п")
         print(f"   Swap: {self.swap_per_day}п/day")
 
+        print(f"\n   🛡️ RISK LIMITS:")
+        if self.max_positions >= 999:
+            print(f"   Max positions: UNLIMITED")
+        else:
+            print(f"   Max positions: {self.max_positions}")
+        print(f"   Max trades/day: {self.max_trades_per_day}")
+
         # Run strategy
         df_strategy = strategy.run_strategy(df.copy())
 
@@ -189,6 +196,10 @@ class AdaptiveBacktestV3:
                     trailing = self.range_trailing
                     timeout = self.range_timeout
                     range_signals += 1
+
+                # Check max positions limit
+                if len(open_positions) >= self.max_positions:
+                    continue  # Skip if at max positions
 
                 # Open position
                 direction = 'LONG' if signal == 1 else 'SHORT'
