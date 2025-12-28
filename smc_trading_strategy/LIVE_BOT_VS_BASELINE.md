@@ -1,6 +1,6 @@
 # Сравнение Live Bot vs Baseline Adaptive V3
 
-## 📊 LIVE BOT (paper_trading_mt5.py)
+## 📊 LIVE BOT (paper_trading_improved.py)
 
 **TP Configuration:**
 - TP1: 30п (close 50%)
@@ -14,10 +14,13 @@
 - ❌ NO Max positions limit (unlimited)
 - ❌ NO Market regime detection
 
-**Other:**
+**Features:**
+- ✅ Dual-frequency checks (signals: 1h, positions: 5min)
 - Symbol: XAUUSD
 - Timeframe: H1
 - Strategy: PatternRecognitionStrategy (fib_mode='standard')
+
+**Note:** `paper_trading_mt5.py` имеет те же параметры, но без dual-frequency
 
 ---
 
