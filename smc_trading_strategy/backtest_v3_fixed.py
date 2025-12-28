@@ -34,7 +34,7 @@ class RealisticBacktestV3Fixed:
         # Daily limits
         self.max_trades_per_day = 10
         self.max_loss_per_day = -5.0  # %
-        self.max_positions = 5  # Maximum 5 positions at once
+        self.max_positions = 999  # UNLIMITED positions (was 5)
         self.max_consecutive_losses = 5  # Increased from 3 to 5 (like V2)
 
     def backtest(self, df, strategy, tp1=20, tp2=35, tp3=50,
@@ -61,7 +61,10 @@ class RealisticBacktestV3Fixed:
         print(f"   Commission: {self.commission}п")
         print(f"   Swap: {self.swap_per_day}п/day")
         print(f"\n   🛡️ LIMITS:")
-        print(f"   Max positions: {self.max_positions}")
+        if self.max_positions >= 999:
+            print(f"   Max positions: UNLIMITED")
+        else:
+            print(f"   Max positions: {self.max_positions}")
         print(f"   Max trades/day: {self.max_trades_per_day}")
         print(f"\n   📈 FEATURES:")
         print(f"   ✅ Multiple independent positions (no averaging)")
@@ -501,12 +504,35 @@ class RealisticBacktestV3Fixed:
         # Monthly
         trades_df['month'] = pd.to_datetime(trades_df['exit_time']).dt.to_period('M')
         monthly = trades_df.groupby('month').agg({
-            'pnl_pct': 'sum',
-            'entry_time': 'count'
-        }).rename(columns={'entry_time': 'trades'})
+            'pnl_pct': ['sum', 'mean', 'count'],
+            'pnl_points': 'sum'
+        })
+        monthly.columns = ['Total_PnL_%', 'Avg_PnL_%', 'Trades', 'Total_Points']
+
+        # Calculate win rate by month
+        monthly_wins = trades_df[trades_df['pnl_pct'] > 0].groupby('month').size()
+        monthly['Wins'] = monthly_wins
+        monthly['Wins'] = monthly['Wins'].fillna(0).astype(int)
+        monthly['Win_Rate_%'] = (monthly['Wins'] / monthly['Trades'] * 100).round(1)
 
         print(f"\n📅 Monthly Results:")
-        print(monthly)
+        print(f"\n{'Month':<10} {'Trades':<8} {'Wins':<6} {'WR%':<6} {'Total PnL%':<12} {'Avg PnL%':<10} {'Points':<10}")
+        print(f"{'='*80}")
+
+        cumulative_pnl = 0
+        for month, row in monthly.iterrows():
+            cumulative_pnl += row['Total_PnL_%']
+            trades_count = int(row['Trades'])
+            wins = int(row['Wins'])
+            wr = row['Win_Rate_%']
+            total_pnl = row['Total_PnL_%']
+            avg_pnl = row['Avg_PnL_%']
+            points = row['Total_Points']
+
+            print(f"{str(month):<10} {trades_count:<8} {wins:<6} {wr:<6.1f} {total_pnl:+11.2f}% {avg_pnl:+9.2f}% {points:+9.1f}п")
+
+        print(f"{'='*80}")
+        print(f"{'TOTAL':<10} {int(monthly['Trades'].sum()):<8} {int(monthly['Wins'].sum()):<6} {win_rate:<6.1f} {total_pnl:+11.2f}% {total_pnl/len(monthly):+9.2f}% {total_points:+9.1f}п")
 
 
 def main():
