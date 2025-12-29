@@ -90,6 +90,7 @@ class ImprovedPaperTradingBot:
         self.df = None
         self.last_signal_check = None
         self.last_position_check = None
+        self.last_processed_signal_time = None  # Prevent duplicate signals
         self.closed_trades = []
 
         print("✅ Improved Paper Trading Bot (MT5) initialized")
@@ -236,6 +237,12 @@ class ImprovedPaperTradingBot:
             last_signal = df_signals.iloc[-1]
             last_signal_time = df_signals.index[-1]
 
+            # Check if this signal was already processed (PREVENT DUPLICATES!)
+            if self.last_processed_signal_time is not None:
+                if last_signal_time == self.last_processed_signal_time:
+                    print(f"📊 Signal at {last_signal_time} already processed, skipping duplicate")
+                    return
+
             # Check if signal is recent
             if self.last_signal_check is not None:
                 time_since_last = (datetime.now() - self.last_signal_check).total_seconds()
@@ -262,6 +269,9 @@ class ImprovedPaperTradingBot:
 
             # Open position
             self.open_position(last_signal, last_signal_time, regime)
+
+            # Mark signal as processed (PREVENT DUPLICATES!)
+            self.last_processed_signal_time = last_signal_time
 
         except Exception as e:
             print(f"❌ Error checking signals: {e}")
