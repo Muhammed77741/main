@@ -35,19 +35,17 @@ class ImprovedPaperTradingBot:
     def __init__(self, telegram_token=None, telegram_chat_id=None,
                  signal_check_interval=3600,    # 1 час для новых сигналов
                  position_check_interval=300,   # 5 минут для позиций
-                 tp1=30, tp2=50, tp3=80,
-                 close_pct1=0.5, close_pct2=0.3, close_pct3=0.2,
-                 symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1):
+                 symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1,
+                 max_positions=5):
         """
         Initialize improved paper trading bot
 
         Args:
             signal_check_interval: Как часто искать НОВЫЕ сигналы (секунды, default: 3600 = 1 час)
             position_check_interval: Как часто проверять ОТКРЫТЫЕ позиции (секунды, default: 300 = 5 мин)
-            tp1, tp2, tp3: Take profit levels in points
-            close_pct1, close_pct2, close_pct3: Partial close percentages
             symbol: MT5 symbol
             timeframe: MT5 timeframe
+            max_positions: Maximum concurrent positions (default: 5)
         """
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
         self.signal_check_interval = signal_check_interval
@@ -55,13 +53,27 @@ class ImprovedPaperTradingBot:
         self.symbol = symbol
         self.timeframe = timeframe
 
-        # TP configuration
-        self.tp1 = tp1
-        self.tp2 = tp2
-        self.tp3 = tp3
-        self.close_pct1 = close_pct1
-        self.close_pct2 = close_pct2
-        self.close_pct3 = close_pct3
+        # TREND MODE parameters (from baseline)
+        self.trend_tp1 = 30
+        self.trend_tp2 = 55
+        self.trend_tp3 = 90
+        self.trend_trailing = 18
+        self.trend_timeout = 60
+
+        # RANGE MODE parameters (from baseline)
+        self.range_tp1 = 20
+        self.range_tp2 = 35
+        self.range_tp3 = 50
+        self.range_trailing = 15
+        self.range_timeout = 48
+
+        # Partial close percentages
+        self.close_pct1 = 0.5
+        self.close_pct2 = 0.3
+        self.close_pct3 = 0.2
+
+        # Risk management
+        self.max_positions = max_positions
 
         # MT5 data downloader
         self.mt5_downloader = MT5DataDownloader(symbol=symbol, timeframe=timeframe)
@@ -84,11 +96,95 @@ class ImprovedPaperTradingBot:
         print(f"   Symbol: {symbol}")
         print(f"   ⏰ Signal check: every {signal_check_interval}s ({signal_check_interval/60:.0f} min)")
         print(f"   ⏰ Position check: every {position_check_interval}s ({position_check_interval/60:.0f} min)")
-        print(f"   🎯 TP: {tp1}п/{tp2}п/{tp3}п (Close: {close_pct1*100:.0f}%/{close_pct2*100:.0f}%/{close_pct3*100:.0f}%)")
+        print(f"   🎯 TREND: TP {self.trend_tp1}/{self.trend_tp2}/{self.trend_tp3}п, Trailing {self.trend_trailing}п")
+        print(f"   📊 RANGE: TP {self.range_tp1}/{self.range_tp2}/{self.range_tp3}п, Trailing {self.range_trailing}п")
+        print(f"   🛡️ Max positions: {max_positions}")
 
     def connect_mt5(self, login=None, password=None, server=None):
         """Connect to MT5 terminal"""
         return self.mt5_downloader.connect(login=login, password=password, server=server)
+
+    def detect_market_regime(self, df, current_idx=None, lookback=100):
+        """
+        Detect market regime: TREND or RANGE
+
+        Uses 5 signals:
+        1. EMA crossover (trend indicator)
+        2. ATR (volatility)
+        3. Directional movement
+        4. Directional bias (candles in same direction)
+        5. Structural trend (higher highs / lower lows)
+
+        Returns 'TREND' if 3+ signals active, otherwise 'RANGE'
+        """
+        if current_idx is None:
+            current_idx = len(df) - 1
+
+        if current_idx < lookback:
+            return 'RANGE'  # Default to range
+
+        # Get recent data
+        recent_data = df.iloc[current_idx - lookback:current_idx]
+
+        # 1. EMA CROSSOVER (main trend indicator)
+        closes = recent_data['close']
+        ema_fast = closes.ewm(span=20, adjust=False).mean()
+        ema_slow = closes.ewm(span=50, adjust=False).mean()
+
+        current_fast = ema_fast.iloc[-1]
+        current_slow = ema_slow.iloc[-1]
+
+        # EMA difference in %
+        ema_diff_pct = abs((current_fast - current_slow) / current_slow) * 100
+
+        # If EMA diverge > 0.3% = clear trend
+        ema_trend = ema_diff_pct > 0.3
+
+        # 2. ATR (volatility - should be above average)
+        high_low = recent_data['high'] - recent_data['low']
+        atr = high_low.rolling(window=14).mean().iloc[-1]
+        avg_atr = high_low.rolling(window=14).mean().mean()
+
+        high_volatility = atr > avg_atr * 1.05
+
+        # 3. Directional movement (price moving in one direction)
+        price_change = recent_data['close'].iloc[-1] - recent_data['close'].iloc[0]
+        price_range = recent_data['high'].max() - recent_data['low'].min()
+
+        directional_move_pct = abs(price_change) / price_range if price_range > 0 else 0
+        strong_direction = directional_move_pct > 0.35
+
+        # 4. Sequential movements (candles in same direction)
+        closes_arr = recent_data['close'].values
+        up_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] > closes_arr[i-1])
+        down_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] < closes_arr[i-1])
+        total_moves = up_moves + down_moves
+
+        trend_strength = abs(up_moves - down_moves) / total_moves if total_moves > 0 else 0
+        directional_bias = trend_strength > 0.15
+
+        # 5. Sequential higher highs / lower lows
+        highs = recent_data['high'].values[-20:]
+        lows = recent_data['low'].values[-20:]
+
+        higher_highs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
+        lower_lows = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
+
+        # If 60%+ candles make HH or LL = trend
+        structural_trend = (higher_highs > 12) or (lower_lows > 12)
+
+        # TREND if 3+ signals out of 5
+        trend_signals = sum([
+            ema_trend,
+            high_volatility,
+            strong_direction,
+            directional_bias,
+            structural_trend
+        ])
+
+        is_trend = trend_signals >= 3
+
+        return 'TREND' if is_trend else 'RANGE'
 
     def download_data(self, period_hours=120):
         """Download data from MT5"""
@@ -149,46 +245,76 @@ class ImprovedPaperTradingBot:
                     print(f"📊 Signal too old ({signal_age/3600:.1f}h), ignoring")
                     return
 
+            # Check max positions limit
+            if len(self.open_positions) >= self.max_positions:
+                print(f"⚠️  Max positions limit reached ({self.max_positions}), skipping signal")
+                return
+
+            # Detect market regime
+            signal_idx = len(df_strategy) - 1
+            regime = self.detect_market_regime(df_strategy, signal_idx)
+
             print(f"🎯 NEW SIGNAL DETECTED!")
             print(f"   Time: {last_signal_time}")
             print(f"   Direction: {'LONG' if last_signal['signal'] == 1 else 'SHORT'}")
             print(f"   Entry: {last_signal['entry_price']:.2f}")
+            print(f"   Regime: {regime}")
 
             # Open position
-            self.open_position(last_signal, last_signal_time)
+            self.open_position(last_signal, last_signal_time, regime)
 
         except Exception as e:
             print(f"❌ Error checking signals: {e}")
             import traceback
             traceback.print_exc()
 
-    def open_position(self, signal, timestamp):
-        """Open new position"""
+    def open_position(self, signal, timestamp, regime):
+        """Open new position with adaptive parameters based on regime"""
 
         entry_price = signal['entry_price']
         direction = 'LONG' if signal['signal'] == 1 else 'SHORT'
 
+        # Choose parameters based on regime
+        if regime == 'TREND':
+            tp1 = self.trend_tp1
+            tp2 = self.trend_tp2
+            tp3 = self.trend_tp3
+            trailing = self.trend_trailing
+            timeout = self.trend_timeout
+        else:  # RANGE
+            tp1 = self.range_tp1
+            tp2 = self.range_tp2
+            tp3 = self.range_tp3
+            trailing = self.range_trailing
+            timeout = self.range_timeout
+
         # Calculate TPs
         if direction == 'LONG':
-            tp1_price = entry_price + self.tp1
-            tp2_price = entry_price + self.tp2
-            tp3_price = entry_price + self.tp3
+            tp1_price = entry_price + tp1
+            tp2_price = entry_price + tp2
+            tp3_price = entry_price + tp3
         else:
-            tp1_price = entry_price - self.tp1
-            tp2_price = entry_price - self.tp2
-            tp3_price = entry_price - self.tp3
+            tp1_price = entry_price - tp1
+            tp2_price = entry_price - tp2
+            tp3_price = entry_price - tp3
 
         position = {
             'entry_time': timestamp,
             'direction': direction,
             'entry_price': entry_price,
             'stop_loss': signal['stop_loss'],
+            'regime': regime,
             'tp1_price': tp1_price,
             'tp2_price': tp2_price,
             'tp3_price': tp3_price,
             'tp1_hit': False,
             'tp2_hit': False,
             'tp3_hit': False,
+            'trailing_active': False,
+            'trailing_distance': trailing,
+            'trailing_high': entry_price if direction == 'LONG' else 0,
+            'trailing_low': entry_price if direction == 'SHORT' else 999999,
+            'timeout_hours': timeout,
             'position_remaining': 1.0,
             'total_pnl_pct': 0.0,
             'pattern': signal.get('pattern', 'N/A'),
@@ -197,11 +323,13 @@ class ImprovedPaperTradingBot:
 
         self.open_positions.append(position)
 
-        print(f"✅ Position opened: {direction} @ {entry_price:.2f}")
+        print(f"✅ Position opened: {direction} @ {entry_price:.2f} [{regime}]")
         print(f"   TP1: {tp1_price:.2f} ({self.close_pct1*100:.0f}%)")
         print(f"   TP2: {tp2_price:.2f} ({self.close_pct2*100:.0f}%)")
         print(f"   TP3: {tp3_price:.2f} ({self.close_pct3*100:.0f}%)")
         print(f"   SL:  {signal['stop_loss']:.2f}")
+        print(f"   Trailing: {trailing}п (after TP1)")
+        print(f"   Timeout: {timeout}h")
 
         # Telegram notification
         if self.notifier:
@@ -246,10 +374,11 @@ class ImprovedPaperTradingBot:
                 positions_to_close.append((i, pos['entry_price'], 'CLOSED', pos['total_pnl_pct']))
                 continue
 
-            # Check timeout (48 hours)
+            # Check timeout (use position's timeout_hours)
             time_in_trade = (current_time - pos['entry_time']).total_seconds() / 3600
+            timeout_hours = pos.get('timeout_hours', 48)  # Default to 48 if not set
 
-            if time_in_trade >= 48:
+            if time_in_trade >= timeout_hours:
                 # Force close at current price
                 exit_price = current_bid if pos['direction'] == 'LONG' else current_ask
 
@@ -267,11 +396,23 @@ class ImprovedPaperTradingBot:
                 # Use bid for exits
                 exit_price = current_bid
 
+                # Update trailing high
+                if current_bid > pos.get('trailing_high', pos['entry_price']):
+                    pos['trailing_high'] = current_bid
+
+                # Update trailing SL if active
+                if pos.get('trailing_active', False):
+                    trailing_distance = pos.get('trailing_distance', 15)
+                    new_sl = pos['trailing_high'] - trailing_distance
+                    if new_sl > pos['stop_loss']:
+                        pos['stop_loss'] = new_sl
+
                 # Check SL
                 if exit_price <= pos['stop_loss']:
                     pnl_pct = ((pos['stop_loss'] - pos['entry_price']) / pos['entry_price']) * 100 * pos['position_remaining']
                     pos['total_pnl_pct'] += pnl_pct
-                    positions_to_close.append((i, pos['stop_loss'], 'SL', pos['total_pnl_pct']))
+                    exit_type = 'TRAILING_SL' if pos.get('trailing_active', False) else 'SL'
+                    positions_to_close.append((i, pos['stop_loss'], exit_type, pos['total_pnl_pct']))
                     continue
 
                 # Check TPs (обратный порядок)
@@ -294,17 +435,34 @@ class ImprovedPaperTradingBot:
                     pos['total_pnl_pct'] += pnl_pct
                     pos['position_remaining'] -= self.close_pct1
                     pos['tp1_hit'] = True
+                    # ACTIVATE TRAILING STOP after TP1
+                    pos['trailing_active'] = True
+                    trailing_distance = pos.get('trailing_distance', 15)
+                    pos['stop_loss'] = current_bid - trailing_distance
                     print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} ({self.close_pct1*100:.0f}%)")
+                    print(f"   🔄 Trailing stop activated: {trailing_distance}п")
 
             else:  # SHORT
                 # Use ask for exits
                 exit_price = current_ask
 
+                # Update trailing low
+                if current_ask < pos.get('trailing_low', 999999):
+                    pos['trailing_low'] = current_ask
+
+                # Update trailing SL if active
+                if pos.get('trailing_active', False):
+                    trailing_distance = pos.get('trailing_distance', 15)
+                    new_sl = pos['trailing_low'] + trailing_distance
+                    if new_sl < pos['stop_loss']:
+                        pos['stop_loss'] = new_sl
+
                 # Check SL
                 if exit_price >= pos['stop_loss']:
                     pnl_pct = ((pos['entry_price'] - pos['stop_loss']) / pos['entry_price']) * 100 * pos['position_remaining']
                     pos['total_pnl_pct'] += pnl_pct
-                    positions_to_close.append((i, pos['stop_loss'], 'SL', pos['total_pnl_pct']))
+                    exit_type = 'TRAILING_SL' if pos.get('trailing_active', False) else 'SL'
+                    positions_to_close.append((i, pos['stop_loss'], exit_type, pos['total_pnl_pct']))
                     continue
 
                 # Check TPs
@@ -327,7 +485,12 @@ class ImprovedPaperTradingBot:
                     pos['total_pnl_pct'] += pnl_pct
                     pos['position_remaining'] -= self.close_pct1
                     pos['tp1_hit'] = True
+                    # ACTIVATE TRAILING STOP after TP1
+                    pos['trailing_active'] = True
+                    trailing_distance = pos.get('trailing_distance', 15)
+                    pos['stop_loss'] = current_ask + trailing_distance
                     print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} ({self.close_pct1*100:.0f}%)")
+                    print(f"   🔄 Trailing stop activated: {trailing_distance}п")
 
         # Close positions
         for idx, exit_price, exit_type, total_pnl in reversed(positions_to_close):
@@ -353,6 +516,7 @@ class ImprovedPaperTradingBot:
             'entry_time': pos['entry_time'],
             'exit_time': exit_time,
             'direction': pos['direction'],
+            'regime': pos.get('regime', 'N/A'),
             'entry_price': pos['entry_price'],
             'exit_price': exit_price,
             'stop_loss': pos['stop_loss'],
@@ -360,15 +524,17 @@ class ImprovedPaperTradingBot:
             'pnl_pct': pnl_pct,
             'pnl_points': pnl_points,
             'duration_hours': duration_hours,
-            'pattern': pos['pattern']
+            'pattern': pos['pattern'],
+            'trailing_used': pos.get('trailing_active', False)
         }
 
         self.closed_trades.append(closed_trade)
 
         emoji = "✅" if pnl_pct > 0 else "❌"
         print(f"\n{emoji} POSITION CLOSED:")
-        print(f"   {pos['direction']}: {pos['entry_price']:.2f} → {exit_price:.2f}")
+        print(f"   {pos['direction']}: {pos['entry_price']:.2f} → {exit_price:.2f} [{pos.get('regime', 'N/A')}]")
         print(f"   TPs: TP1={pos['tp1_hit']}, TP2={pos['tp2_hit']}, TP3={pos['tp3_hit']}")
+        print(f"   Trailing: {pos.get('trailing_active', False)}")
         print(f"   Exit: {exit_type}")
         print(f"   PnL: {pnl_pct:+.2f}% ({pnl_points:+.2f}п)")
         print(f"   Duration: {duration_hours:.1f}h")
