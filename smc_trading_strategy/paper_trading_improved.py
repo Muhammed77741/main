@@ -576,7 +576,8 @@ class ImprovedPaperTradingBot:
         print("="*80)
         print(f"📊 Strategy: Pattern Recognition (1.618)")
         print(f"📈 Asset: {self.symbol}")
-        print(f"🎯 TP: {self.tp1}п/{self.tp2}п/{self.tp3}п")
+        print(f"🎯 TREND: TP {self.trend_tp1}/{self.trend_tp2}/{self.trend_tp3}п, Trailing {self.trend_trailing}п")
+        print(f"📊 RANGE: TP {self.range_tp1}/{self.range_tp2}/{self.range_tp3}п, Trailing {self.range_trailing}п")
         print(f"")
         print(f"⏰ DUAL FREQUENCY CHECKING:")
         print(f"   🔍 New signals: every {self.signal_check_interval}s ({self.signal_check_interval/60:.0f} min)")
@@ -586,6 +587,7 @@ class ImprovedPaperTradingBot:
         print(f"   ✅ TP/SL detected within {self.position_check_interval/60:.0f} minutes (not {self.signal_check_interval/60:.0f}!)")
         print(f"   ✅ Less load on MT5 (full data only every {self.signal_check_interval/60:.0f} min)")
         print(f"   ✅ Faster reactions to price movements")
+        print(f"   🛡️ Max positions: {self.max_positions}")
         print("="*80)
 
         # Test Telegram
