@@ -36,7 +36,7 @@ class ImprovedPaperTradingBot:
                  signal_check_interval=3600,    # 1 час для новых сигналов
                  position_check_interval=300,   # 5 минут для позиций
                  symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1,
-                 max_positions=5):
+                 max_positions=5, timezone_offset=5):
         """
         Initialize improved paper trading bot
 
@@ -46,6 +46,7 @@ class ImprovedPaperTradingBot:
             symbol: MT5 symbol
             timeframe: MT5 timeframe
             max_positions: Maximum concurrent positions (default: 5)
+            timezone_offset: Timezone offset in hours from UTC (default: 5 for UTC+5)
         """
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
         self.signal_check_interval = signal_check_interval
@@ -80,7 +81,7 @@ class ImprovedPaperTradingBot:
 
         # Telegram notifier
         if telegram_token and telegram_chat_id:
-            self.notifier = TelegramNotifier(telegram_token, telegram_chat_id)
+            self.notifier = TelegramNotifier(telegram_token, telegram_chat_id, timezone_offset=timezone_offset)
         else:
             self.notifier = None
             print("⚠️  Telegram notifications disabled")

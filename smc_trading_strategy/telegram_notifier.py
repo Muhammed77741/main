@@ -4,22 +4,24 @@ Telegram notification module for paper trading alerts
 
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class TelegramNotifier:
     """Send trading alerts to Telegram channel/chat"""
 
-    def __init__(self, bot_token, chat_id):
+    def __init__(self, bot_token, chat_id, timezone_offset=5):
         """
         Initialize Telegram notifier
 
         Args:
             bot_token: Telegram bot token (get from @BotFather)
             chat_id: Chat ID or channel username (e.g., @your_channel or -100123456789)
+            timezone_offset: Timezone offset in hours from UTC (default: 5 for UTC+5)
         """
         self.bot_token = bot_token
         self.chat_id = chat_id
+        self.timezone_offset = timezone_offset
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
 
     def send_message(self, text, parse_mode='HTML'):
@@ -59,6 +61,12 @@ class TelegramNotifier:
         trailing = signal_data.get('trailing', 0)
         timestamp = signal_data.get('timestamp', datetime.now())
 
+        # Convert to local timezone
+        if hasattr(timestamp, 'tz_localize'):
+            # Pandas Timestamp
+            timestamp = timestamp.to_pydatetime()
+        timestamp_local = timestamp + timedelta(hours=self.timezone_offset)
+
         # Calculate R:R (using TP3 as max reward)
         risk = abs(entry_price - stop_loss)
         reward_tp3 = abs(tp3 - entry_price)
@@ -71,7 +79,7 @@ class TelegramNotifier:
 {emoji} <b>НОВЫЙ СИГНАЛ - PAPER TRADING</b>
 
 📊 <b>Стратегия:</b> Pattern Recognition (1.618)
-⏰ <b>Время:</b> {timestamp.strftime('%Y-%m-%d %H:%M:%S')}
+⏰ <b>Время:</b> {timestamp_local.strftime('%Y-%m-%d %H:%M:%S')} (UTC+{self.timezone_offset})
 
 {emoji} <b>Направление:</b> {direction}
 {regime_emoji} <b>Режим:</b> {regime}
@@ -109,6 +117,12 @@ class TelegramNotifier:
         duration = exit_data.get('duration_hours', 0)
         timestamp = exit_data.get('timestamp', datetime.now())
 
+        # Convert to local timezone
+        if hasattr(timestamp, 'tz_localize'):
+            # Pandas Timestamp
+            timestamp = timestamp.to_pydatetime()
+        timestamp_local = timestamp + timedelta(hours=self.timezone_offset)
+
         # Determine emoji based on profit/loss
         if pnl_pct > 0:
             result_emoji = "✅"
@@ -128,7 +142,7 @@ class TelegramNotifier:
 {result_emoji} <b>{result_text} - ЗАКРЫТИЕ ПОЗИЦИИ</b>
 
 📊 <b>Стратегия:</b> Pattern Recognition (1.618)
-⏰ <b>Время:</b> {timestamp.strftime('%Y-%m-%d %H:%M:%S')}
+⏰ <b>Время:</b> {timestamp_local.strftime('%Y-%m-%d %H:%M:%S')} (UTC+{self.timezone_offset})
 
 {result_emoji} <b>Направление:</b> {direction}
 💰 <b>Вход:</b> {entry_price:.2f}
@@ -179,11 +193,14 @@ class TelegramNotifier:
     def send_startup_message(self):
         """Send bot startup notification"""
 
+        # Get current time in local timezone
+        now_local = datetime.now() + timedelta(hours=self.timezone_offset)
+
         message = f"""
 🤖 <b>PAPER TRADING БОТ ЗАПУЩЕН</b>
 
 📊 <b>Стратегия:</b> Pattern Recognition (1.618)
-⏰ <b>Время запуска:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⏰ <b>Время запуска:</b> {now_local.strftime('%Y-%m-%d %H:%M:%S')} (UTC+{self.timezone_offset})
 
 ✅ <b>Режим:</b> Paper Trading (симуляция)
 📈 <b>Актив:</b> XAUUSD (Gold)
