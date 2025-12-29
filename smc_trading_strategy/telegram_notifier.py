@@ -51,16 +51,21 @@ class TelegramNotifier:
         direction = signal_data['direction']
         entry_price = signal_data['entry_price']
         stop_loss = signal_data['stop_loss']
-        take_profit = signal_data['take_profit']
+        tp1 = signal_data.get('tp1', signal_data.get('take_profit'))
+        tp2 = signal_data.get('tp2', tp1)
+        tp3 = signal_data.get('tp3', tp1)
         pattern = signal_data.get('pattern', 'N/A')
+        regime = signal_data.get('regime', 'N/A')
+        trailing = signal_data.get('trailing', 0)
         timestamp = signal_data.get('timestamp', datetime.now())
 
-        # Calculate R:R
+        # Calculate R:R (using TP3 as max reward)
         risk = abs(entry_price - stop_loss)
-        reward = abs(take_profit - entry_price)
-        rr_ratio = reward / risk if risk > 0 else 0
+        reward_tp3 = abs(tp3 - entry_price)
+        rr_ratio = reward_tp3 / risk if risk > 0 else 0
 
         emoji = "🟢" if direction == "LONG" else "🔴"
+        regime_emoji = "📈" if regime == "TREND" else "📊"
 
         message = f"""
 {emoji} <b>НОВЫЙ СИГНАЛ - PAPER TRADING</b>
@@ -69,12 +74,19 @@ class TelegramNotifier:
 ⏰ <b>Время:</b> {timestamp.strftime('%Y-%m-%d %H:%M:%S')}
 
 {emoji} <b>Направление:</b> {direction}
+{regime_emoji} <b>Режим:</b> {regime}
 💰 <b>Вход:</b> {entry_price:.2f}
 🛑 <b>Stop Loss:</b> {stop_loss:.2f}
-🎯 <b>Take Profit:</b> {take_profit:.2f}
+
+🎯 <b>Take Profits:</b>
+   TP1: {tp1:.2f} (50% позиции)
+   TP2: {tp2:.2f} (30% позиции)
+   TP3: {tp3:.2f} (20% позиции)
+
+🔄 <b>Trailing Stop:</b> {trailing}п (после TP1)
 
 📐 <b>Риск:</b> {risk:.2f} points
-💎 <b>Награда:</b> {reward:.2f} points
+💎 <b>Награда:</b> {reward_tp3:.2f} points (TP3)
 📊 <b>R:R:</b> 1:{rr_ratio:.2f}
 
 🔍 <b>Паттерн:</b> {pattern}

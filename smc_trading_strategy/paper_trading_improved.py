@@ -351,6 +351,8 @@ class ImprovedPaperTradingBot:
                 'tp1': tp1_price,
                 'tp2': tp2_price,
                 'tp3': tp3_price,
+                'regime': regime,
+                'trailing': trailing,
                 'pattern': position['pattern'],
                 'timestamp': timestamp
             }
