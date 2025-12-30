@@ -391,32 +391,48 @@ def main():
     print("\n📥 Загрузка данных...")
     
     try:
-        # Попытка загрузить реальные MT5 данные
-        from mt5_data_downloader import MT5DataDownloader
-        import MetaTrader5 as mt5
+        # Попытка загрузить из CSV файла
+        csv_file = '../XAUUSD_1H_MT5_20241227_20251227.csv'
+        print(f"   📂 Загрузка из файла: {csv_file}")
         
-        downloader = MT5DataDownloader(symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1)
+        df_h1 = pd.read_csv(csv_file)
+        df_h1['timestamp'] = pd.to_datetime(df_h1['datetime'])
+        df_h1 = df_h1.set_index('timestamp')
+        df_h1 = df_h1[['open', 'high', 'low', 'close', 'volume']]
         
-        if downloader.connect():
-            print("   ✅ MT5 подключен")
-            df_h1 = downloader.get_realtime_data(period_hours=2000)  # ~3 месяца
-            downloader.disconnect()
-            
-            if df_h1 is not None and len(df_h1) > 200:
-                print(f"   ✅ Загружено {len(df_h1)} H1 свечей XAUUSD")
-            else:
-                raise Exception("Недостаточно данных")
-        else:
-            raise Exception("MT5 не подключен")
+        print(f"   ✅ Загружено {len(df_h1)} H1 свечей XAUUSD")
+        print(f"   📅 Период: {df_h1.index[0]} до {df_h1.index[-1]}")
             
     except Exception as e:
-        print(f"   ⚠️  MT5 недоступен: {e}")
-        print("   📊 Генерация тестовых данных...")
+        print(f"   ⚠️  Не удалось загрузить CSV: {e}")
         
-        # Генерация тестовых данных
-        from data_loader import generate_sample_data
-        df_h1 = generate_sample_data(days=365, start_price=2650, volatility=0.015)
-        print(f"   ✅ Сгенерировано {len(df_h1)} тестовых свечей (~{len(df_h1)/24:.0f} дней)")
+        try:
+            # Попытка подключиться к MT5
+            from mt5_data_downloader import MT5DataDownloader
+            import MetaTrader5 as mt5
+            
+            downloader = MT5DataDownloader(symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1)
+            
+            if downloader.connect():
+                print("   ✅ MT5 подключен")
+                df_h1 = downloader.get_realtime_data(period_hours=2000)
+                downloader.disconnect()
+                
+                if df_h1 is not None and len(df_h1) > 200:
+                    print(f"   ✅ Загружено {len(df_h1)} H1 свечей из MT5")
+                else:
+                    raise Exception("Недостаточно данных")
+            else:
+                raise Exception("MT5 не подключен")
+                
+        except Exception as e2:
+            print(f"   ⚠️  MT5 недоступен: {e2}")
+            print("   📊 Генерация тестовых данных...")
+            
+            # Генерация тестовых данных
+            from data_loader import generate_sample_data
+            df_h1 = generate_sample_data(days=365, start_price=2650, volatility=0.015)
+            print(f"   ✅ Сгенерировано {len(df_h1)} тестовых свечей")
     
     # Инициализация стратегии
     print("\n🎯 Инициализация стратегии...")
