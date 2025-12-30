@@ -24,6 +24,28 @@ class TelegramNotifier:
         self.timezone_offset = timezone_offset
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
 
+    def _convert_to_local_time(self, timestamp):
+        """
+        Convert timestamp to local timezone
+        
+        Args:
+            timestamp: datetime or pandas Timestamp
+            
+        Returns:
+            datetime in local timezone
+        """
+        # Convert pandas Timestamp to datetime
+        if hasattr(timestamp, 'to_pydatetime'):
+            timestamp = timestamp.to_pydatetime()
+        
+        # Handle timezone-aware datetime - convert to naive UTC
+        if hasattr(timestamp, 'tzinfo') and timestamp.tzinfo is not None:
+            # Convert to UTC and make naive
+            timestamp = timestamp.replace(tzinfo=None)
+        
+        # Apply timezone offset
+        return timestamp + timedelta(hours=self.timezone_offset)
+
     def send_message(self, text, parse_mode='HTML'):
         """Send text message to Telegram"""
         try:
@@ -62,10 +84,7 @@ class TelegramNotifier:
         timestamp = signal_data.get('timestamp', datetime.now())
 
         # Convert to local timezone
-        if hasattr(timestamp, 'tz_localize'):
-            # Pandas Timestamp
-            timestamp = timestamp.to_pydatetime()
-        timestamp_local = timestamp + timedelta(hours=self.timezone_offset)
+        timestamp_local = self._convert_to_local_time(timestamp)
 
         # Calculate R:R (using TP3 as max reward)
         risk = abs(entry_price - stop_loss)
@@ -116,12 +135,14 @@ class TelegramNotifier:
         pnl_points = exit_data['pnl_points']
         duration = exit_data.get('duration_hours', 0)
         timestamp = exit_data.get('timestamp', datetime.now())
+        
+        # TP hit information
+        tp1_hit = exit_data.get('tp1_hit', False)
+        tp2_hit = exit_data.get('tp2_hit', False)
+        tp3_hit = exit_data.get('tp3_hit', False)
 
         # Convert to local timezone
-        if hasattr(timestamp, 'tz_localize'):
-            # Pandas Timestamp
-            timestamp = timestamp.to_pydatetime()
-        timestamp_local = timestamp + timedelta(hours=self.timezone_offset)
+        timestamp_local = self._convert_to_local_time(timestamp)
 
         # Determine emoji based on profit/loss
         if pnl_pct > 0:
@@ -131,12 +152,38 @@ class TelegramNotifier:
             result_emoji = "❌"
             result_text = "УБЫТОК"
 
-        # Exit type emoji
-        exit_emoji = {
+        # Exit type emoji and text
+        exit_emoji_map = {
             'TP': '🎯',
             'SL': '🛑',
-            'EOD': '⏱️'
-        }.get(exit_type, '🔔')
+            'TRAILING_SL': '🔄',
+            'TIMEOUT': '⏱️',
+            'ALL_TPS_HIT': '🎯🎯🎯',
+            'FULLY_CLOSED': '✅'
+        }
+        exit_emoji = exit_emoji_map.get(exit_type, '🔔')
+        
+        exit_text_map = {
+            'TP': 'Take Profit сработал!',
+            'SL': 'Stop Loss сработал!',
+            'TRAILING_SL': 'Trailing Stop сработал!',
+            'TIMEOUT': 'Закрыто по тайм-ауту',
+            'ALL_TPS_HIT': 'Все Take Profits достигнуты!',
+            'FULLY_CLOSED': 'Позиция полностью закрыта'
+        }
+        exit_text = exit_text_map.get(exit_type, exit_type)
+        
+        # Build TP status
+        tp_status = ""
+        if tp1_hit or tp2_hit or tp3_hit:
+            tp_hits = []
+            if tp1_hit:
+                tp_hits.append("TP1 ✅")
+            if tp2_hit:
+                tp_hits.append("TP2 ✅")
+            if tp3_hit:
+                tp_hits.append("TP3 ✅")
+            tp_status = f"\n🎯 <b>TPs:</b> {' | '.join(tp_hits)}"
 
         message = f"""
 {result_emoji} <b>{result_text} - ЗАКРЫТИЕ ПОЗИЦИИ</b>
@@ -149,7 +196,7 @@ class TelegramNotifier:
 💵 <b>Выход:</b> {exit_price:.2f}
 
 {exit_emoji} <b>Тип выхода:</b> {exit_type}
-{'🎯 Take Profit сработал!' if exit_type == 'TP' else '🛑 Stop Loss сработал!' if exit_type == 'SL' else '⏱️ Закрыто по тайм-ауту'}
+{exit_text}{tp_status}
 
 📈 <b>PnL:</b> {pnl_pct:+.2f}% ({pnl_points:+.2f} points)
 ⏱️ <b>Длительность:</b> {duration:.1f} часов
