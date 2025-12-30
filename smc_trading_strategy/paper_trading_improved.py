@@ -256,6 +256,8 @@ class ImprovedPaperTradingBot:
             # Check max positions limit
             if len(self.open_positions) >= self.max_positions:
                 print(f"⚠️  Max positions limit reached ({self.max_positions}), skipping signal")
+                if self.notifier:
+                    self.notifier.send_error(f"Max positions limit reached ({self.max_positions}). Cannot open new position.")
                 return
 
             # Detect market regime
@@ -282,8 +284,21 @@ class ImprovedPaperTradingBot:
     def open_position(self, signal, timestamp, regime):
         """Open new position with adaptive parameters based on regime"""
 
-        entry_price = signal['entry_price']
         direction = 'LONG' if signal['signal'] == 1 else 'SHORT'
+        
+        # Get current market price with spread
+        current_price = self.get_current_price()
+        if current_price is None:
+            print("❌ Could not get current price, using signal price")
+            entry_price = signal['entry_price']
+        else:
+            # Use realistic entry price (ASK for LONG, BID for SHORT)
+            if direction == 'LONG':
+                entry_price = current_price['ask']  # Buy at ASK
+                print(f"   📊 Entry price adjusted for spread: {signal['entry_price']:.2f} -> {entry_price:.2f} (Ask)")
+            else:
+                entry_price = current_price['bid']  # Sell at BID
+                print(f"   📊 Entry price adjusted for spread: {signal['entry_price']:.2f} -> {entry_price:.2f} (Bid)")
 
         # Choose parameters based on regime
         if regime == 'TREND':
@@ -383,13 +398,32 @@ class ImprovedPaperTradingBot:
         positions_to_close = []
 
         for i, pos in enumerate(self.open_positions):
-            if pos['position_remaining'] <= 0:
-                positions_to_close.append((i, pos['entry_price'], 'CLOSED', pos['total_pnl_pct']))
+            # Check if position is fully closed (use small epsilon for floating point comparison)
+            if pos['position_remaining'] <= 0.001:  # Essentially zero
+                # Already fully closed, remove it
+                positions_to_close.append((i, pos['entry_price'], 'FULLY_CLOSED', pos['total_pnl_pct']))
                 continue
 
             # Check timeout (use position's timeout_hours)
-            time_in_trade = (current_time - pos['entry_time']).total_seconds() / 3600
+            # Ensure both timestamps are comparable (convert pandas Timestamp to datetime)
+            entry_time = pos['entry_time']
+            if hasattr(entry_time, 'to_pydatetime'):
+                entry_time = entry_time.to_pydatetime()
+            
+            # Make both timezone-naive for comparison
+            if hasattr(entry_time, 'tzinfo') and entry_time.tzinfo is not None:
+                entry_time = entry_time.replace(tzinfo=None)
+            if hasattr(current_time, 'tzinfo') and current_time.tzinfo is not None:
+                current_time_naive = current_time.replace(tzinfo=None)
+            else:
+                current_time_naive = current_time
+            
+            time_in_trade = (current_time_naive - entry_time).total_seconds() / 3600
             timeout_hours = pos.get('timeout_hours', 48)  # Default to 48 if not set
+            
+            # Debug logging
+            if i == 0:  # Only log for first position to avoid spam
+                print(f"   ⏱️  Position {i+1}: {time_in_trade:.1f}h / {timeout_hours}h (Entry: {entry_time}, Now: {current_time_naive})")
 
             if time_in_trade >= timeout_hours:
                 # Force close at current price
@@ -428,13 +462,22 @@ class ImprovedPaperTradingBot:
                     positions_to_close.append((i, pos['stop_loss'], exit_type, pos['total_pnl_pct']))
                     continue
 
-                # Check TPs (обратный порядок)
-                if exit_price >= pos['tp3_price'] and not pos['tp3_hit']:
-                    pnl_pct = ((pos['tp3_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct3
+                # Check TPs in CORRECT order (TP1 -> TP2 -> TP3)
+                # This ensures all TPs are hit even during rapid price movements
+                if exit_price >= pos['tp1_price'] and not pos['tp1_hit']:
+                    pnl_pct = ((pos['tp1_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct1
                     pos['total_pnl_pct'] += pnl_pct
-                    pos['position_remaining'] -= self.close_pct3
-                    pos['tp3_hit'] = True
-                    print(f"   🎯 TP3 HIT @ {pos['tp3_price']:.2f} ({self.close_pct3*100:.0f}%)")
+                    pos['position_remaining'] -= self.close_pct1
+                    pos['tp1_hit'] = True
+                    # MOVE SL TO BREAKEVEN after TP1 (protect profit)
+                    breakeven_buffer = 5  # Small buffer above entry
+                    pos['stop_loss'] = pos['entry_price'] + breakeven_buffer
+                    print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} ({self.close_pct1*100:.0f}%)")
+                    print(f"   🛡️ Stop moved to breakeven+{breakeven_buffer}: {pos['stop_loss']:.2f}")
+                    # ACTIVATE TRAILING STOP after TP1
+                    pos['trailing_active'] = True
+                    trailing_distance = pos.get('trailing_distance', 15)
+                    print(f"   🔄 Trailing stop activated: {trailing_distance}п")
 
                 if exit_price >= pos['tp2_price'] and not pos['tp2_hit']:
                     pnl_pct = ((pos['tp2_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct2
@@ -443,17 +486,18 @@ class ImprovedPaperTradingBot:
                     pos['tp2_hit'] = True
                     print(f"   🎯 TP2 HIT @ {pos['tp2_price']:.2f} ({self.close_pct2*100:.0f}%)")
 
-                if exit_price >= pos['tp1_price'] and not pos['tp1_hit']:
-                    pnl_pct = ((pos['tp1_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct1
+                if exit_price >= pos['tp3_price'] and not pos['tp3_hit']:
+                    pnl_pct = ((pos['tp3_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct3
                     pos['total_pnl_pct'] += pnl_pct
-                    pos['position_remaining'] -= self.close_pct1
-                    pos['tp1_hit'] = True
-                    # ACTIVATE TRAILING STOP after TP1
-                    pos['trailing_active'] = True
-                    trailing_distance = pos.get('trailing_distance', 15)
-                    pos['stop_loss'] = current_bid - trailing_distance
-                    print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} ({self.close_pct1*100:.0f}%)")
-                    print(f"   🔄 Trailing stop activated: {trailing_distance}п")
+                    pos['position_remaining'] -= self.close_pct3
+                    pos['tp3_hit'] = True
+                    print(f"   🎯 TP3 HIT @ {pos['tp3_price']:.2f} ({self.close_pct3*100:.0f}%)")
+                    
+                    # Check if position is now fully closed
+                    if pos['position_remaining'] <= 0.001:
+                        print(f"   ✅ Position fully closed via TPs!")
+                        positions_to_close.append((i, pos['tp3_price'], 'ALL_TPS_HIT', pos['total_pnl_pct']))
+                        continue
 
             else:  # SHORT
                 # Use ask for exits
@@ -478,13 +522,22 @@ class ImprovedPaperTradingBot:
                     positions_to_close.append((i, pos['stop_loss'], exit_type, pos['total_pnl_pct']))
                     continue
 
-                # Check TPs
-                if exit_price <= pos['tp3_price'] and not pos['tp3_hit']:
-                    pnl_pct = ((pos['entry_price'] - pos['tp3_price']) / pos['entry_price']) * 100 * self.close_pct3
+                # Check TPs in CORRECT order (TP1 -> TP2 -> TP3)
+                # This ensures all TPs are hit even during rapid price movements
+                if exit_price <= pos['tp1_price'] and not pos['tp1_hit']:
+                    pnl_pct = ((pos['entry_price'] - pos['tp1_price']) / pos['entry_price']) * 100 * self.close_pct1
                     pos['total_pnl_pct'] += pnl_pct
-                    pos['position_remaining'] -= self.close_pct3
-                    pos['tp3_hit'] = True
-                    print(f"   🎯 TP3 HIT @ {pos['tp3_price']:.2f} ({self.close_pct3*100:.0f}%)")
+                    pos['position_remaining'] -= self.close_pct1
+                    pos['tp1_hit'] = True
+                    # MOVE SL TO BREAKEVEN after TP1 (protect profit)
+                    breakeven_buffer = 5  # Small buffer below entry for SHORT
+                    pos['stop_loss'] = pos['entry_price'] - breakeven_buffer
+                    print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} ({self.close_pct1*100:.0f}%)")
+                    print(f"   🛡️ Stop moved to breakeven-{breakeven_buffer}: {pos['stop_loss']:.2f}")
+                    # ACTIVATE TRAILING STOP after TP1
+                    pos['trailing_active'] = True
+                    trailing_distance = pos.get('trailing_distance', 15)
+                    print(f"   🔄 Trailing stop activated: {trailing_distance}п")
 
                 if exit_price <= pos['tp2_price'] and not pos['tp2_hit']:
                     pnl_pct = ((pos['entry_price'] - pos['tp2_price']) / pos['entry_price']) * 100 * self.close_pct2
@@ -493,17 +546,18 @@ class ImprovedPaperTradingBot:
                     pos['tp2_hit'] = True
                     print(f"   🎯 TP2 HIT @ {pos['tp2_price']:.2f} ({self.close_pct2*100:.0f}%)")
 
-                if exit_price <= pos['tp1_price'] and not pos['tp1_hit']:
-                    pnl_pct = ((pos['entry_price'] - pos['tp1_price']) / pos['entry_price']) * 100 * self.close_pct1
+                if exit_price <= pos['tp3_price'] and not pos['tp3_hit']:
+                    pnl_pct = ((pos['entry_price'] - pos['tp3_price']) / pos['entry_price']) * 100 * self.close_pct3
                     pos['total_pnl_pct'] += pnl_pct
-                    pos['position_remaining'] -= self.close_pct1
-                    pos['tp1_hit'] = True
-                    # ACTIVATE TRAILING STOP after TP1
-                    pos['trailing_active'] = True
-                    trailing_distance = pos.get('trailing_distance', 15)
-                    pos['stop_loss'] = current_ask + trailing_distance
-                    print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} ({self.close_pct1*100:.0f}%)")
-                    print(f"   🔄 Trailing stop activated: {trailing_distance}п")
+                    pos['position_remaining'] -= self.close_pct3
+                    pos['tp3_hit'] = True
+                    print(f"   🎯 TP3 HIT @ {pos['tp3_price']:.2f} ({self.close_pct3*100:.0f}%)")
+                    
+                    # Check if position is now fully closed
+                    if pos['position_remaining'] <= 0.001:
+                        print(f"   ✅ Position fully closed via TPs!")
+                        positions_to_close.append((i, pos['tp3_price'], 'ALL_TPS_HIT', pos['total_pnl_pct']))
+                        continue
 
         # Close positions
         for idx, exit_price, exit_type, total_pnl in reversed(positions_to_close):
@@ -523,7 +577,17 @@ class ImprovedPaperTradingBot:
                 pnl_pct = ((pos['entry_price'] - exit_price) / pos['entry_price']) * 100
 
         pnl_points = (pnl_pct / 100) * pos['entry_price']
-        duration_hours = (exit_time - pos['entry_time']).total_seconds() / 3600
+        
+        # Ensure both timestamps are comparable
+        entry_time = pos['entry_time']
+        if hasattr(entry_time, 'to_pydatetime'):
+            entry_time = entry_time.to_pydatetime()
+        if hasattr(entry_time, 'tzinfo') and entry_time.tzinfo is not None:
+            entry_time = entry_time.replace(tzinfo=None)
+        if hasattr(exit_time, 'tzinfo') and exit_time.tzinfo is not None:
+            exit_time = exit_time.replace(tzinfo=None)
+        
+        duration_hours = (exit_time - entry_time).total_seconds() / 3600
 
         closed_trade = {
             'entry_time': pos['entry_time'],
