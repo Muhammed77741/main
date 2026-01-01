@@ -94,6 +94,9 @@ class ImprovedPaperTradingBot:
         self.last_processed_signal_time = None  # Prevent duplicate signals
         self.closed_trades = []
 
+        # Statistics file
+        self.stats_file = f'live_bot_statistics_{symbol}.csv'
+
         print("✅ Improved Paper Trading Bot (MT5) initialized")
         print(f"   Symbol: {symbol}")
         print(f"   ⏰ Signal check: every {signal_check_interval}s ({signal_check_interval/60:.0f} min)")
@@ -101,6 +104,7 @@ class ImprovedPaperTradingBot:
         print(f"   🎯 TREND: TP {self.trend_tp1}/{self.trend_tp2}/{self.trend_tp3}п, Trailing {self.trend_trailing}п")
         print(f"   📊 RANGE: TP {self.range_tp1}/{self.range_tp2}/{self.range_tp3}п, Trailing {self.range_trailing}п")
         print(f"   🛡️ Max positions: {max_positions}")
+        print(f"   💾 Statistics file: {self.stats_file}")
 
     def connect_mt5(self, login=None, password=None, server=None):
         """Connect to MT5 terminal"""
@@ -244,13 +248,19 @@ class ImprovedPaperTradingBot:
                     print(f"📊 Signal at {last_signal_time} already processed, skipping duplicate")
                     return
 
-            # Check if signal is recent
+            # Check signal age (CRITICAL: ignore old signals even on first run!)
+            signal_age = (datetime.now() - last_signal_time.to_pydatetime()).total_seconds() / 3600
+
+            # Ignore signals older than 2 hours (even on first bot startup)
+            if signal_age > 2.0:
+                print(f"📊 Signal too old ({signal_age:.1f}h), ignoring. Only fresh signals (<2h) are processed.")
+                return
+
+            # Additional check for ongoing bot operation
             if self.last_signal_check is not None:
                 time_since_last = (datetime.now() - self.last_signal_check).total_seconds()
-                signal_age = (datetime.now() - last_signal_time.to_pydatetime()).total_seconds()
-
                 if signal_age > time_since_last + 3600:
-                    print(f"📊 Signal too old ({signal_age/3600:.1f}h), ignoring")
+                    print(f"📊 Signal age ({signal_age:.1f}h) exceeds expected window, ignoring")
                     return
 
             # Check max positions limit
@@ -436,12 +446,44 @@ class ImprovedPaperTradingBot:
                     pos['tp3_hit'] = True
                     print(f"   🎯 TP3 HIT @ {pos['tp3_price']:.2f} ({self.close_pct3*100:.0f}%)")
 
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP3',
+                            'tp_price': pos['tp3_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct3,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': current_time
+                        })
+
                 if exit_price >= pos['tp2_price'] and not pos['tp2_hit']:
                     pnl_pct = ((pos['tp2_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct2
                     pos['total_pnl_pct'] += pnl_pct
                     pos['position_remaining'] -= self.close_pct2
                     pos['tp2_hit'] = True
                     print(f"   🎯 TP2 HIT @ {pos['tp2_price']:.2f} ({self.close_pct2*100:.0f}%)")
+
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP2',
+                            'tp_price': pos['tp2_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct2,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': current_time
+                        })
 
                 if exit_price >= pos['tp1_price'] and not pos['tp1_hit']:
                     pnl_pct = ((pos['tp1_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct1
@@ -454,6 +496,24 @@ class ImprovedPaperTradingBot:
                     pos['stop_loss'] = current_bid - trailing_distance
                     print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} ({self.close_pct1*100:.0f}%)")
                     print(f"   🔄 Trailing stop activated: {trailing_distance}п")
+
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP1',
+                            'tp_price': pos['tp1_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct1,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'trailing_activated': True,
+                            'trailing_distance': trailing_distance,
+                            'timestamp': current_time
+                        })
 
             else:  # SHORT
                 # Use ask for exits
@@ -486,12 +546,44 @@ class ImprovedPaperTradingBot:
                     pos['tp3_hit'] = True
                     print(f"   🎯 TP3 HIT @ {pos['tp3_price']:.2f} ({self.close_pct3*100:.0f}%)")
 
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP3',
+                            'tp_price': pos['tp3_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct3,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': current_time
+                        })
+
                 if exit_price <= pos['tp2_price'] and not pos['tp2_hit']:
                     pnl_pct = ((pos['entry_price'] - pos['tp2_price']) / pos['entry_price']) * 100 * self.close_pct2
                     pos['total_pnl_pct'] += pnl_pct
                     pos['position_remaining'] -= self.close_pct2
                     pos['tp2_hit'] = True
                     print(f"   🎯 TP2 HIT @ {pos['tp2_price']:.2f} ({self.close_pct2*100:.0f}%)")
+
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP2',
+                            'tp_price': pos['tp2_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct2,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': current_time
+                        })
 
                 if exit_price <= pos['tp1_price'] and not pos['tp1_hit']:
                     pnl_pct = ((pos['entry_price'] - pos['tp1_price']) / pos['entry_price']) * 100 * self.close_pct1
@@ -504,6 +596,24 @@ class ImprovedPaperTradingBot:
                     pos['stop_loss'] = current_ask + trailing_distance
                     print(f"   🎯 TP1 HIT @ {pos['tp1_price']:.2f} ({self.close_pct1*100:.0f}%)")
                     print(f"   🔄 Trailing stop activated: {trailing_distance}п")
+
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP1',
+                            'tp_price': pos['tp1_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct1,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'trailing_activated': True,
+                            'trailing_distance': trailing_distance,
+                            'timestamp': current_time
+                        })
 
         # Close positions
         for idx, exit_price, exit_type, total_pnl in reversed(positions_to_close):
@@ -570,6 +680,36 @@ class ImprovedPaperTradingBot:
             self.notifier.send_exit_signal(exit_data)
 
         self.open_positions.pop(position_idx)
+
+        # Save statistics after closing position
+        self.save_statistics()
+
+    def save_statistics(self):
+        """Save trading statistics to CSV file"""
+        if len(self.closed_trades) == 0:
+            return
+
+        try:
+            import pandas as pd
+            import os
+
+            # Create DataFrame from closed trades
+            df_stats = pd.DataFrame(self.closed_trades)
+
+            # Save to CSV
+            df_stats.to_csv(self.stats_file, index=False)
+
+            # Calculate summary statistics
+            total_trades = len(df_stats)
+            wins = len(df_stats[df_stats['pnl_pct'] > 0])
+            win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+            total_pnl = df_stats['pnl_pct'].sum()
+
+            print(f"\n💾 Statistics saved to {self.stats_file}")
+            print(f"   Trades: {total_trades} | Wins: {wins} ({win_rate:.1f}%) | Total PnL: {total_pnl:+.2f}%")
+
+        except Exception as e:
+            print(f"❌ Error saving statistics: {e}")
 
     def run(self):
         """Run bot with dual-frequency checking"""
