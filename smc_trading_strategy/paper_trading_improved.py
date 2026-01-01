@@ -248,20 +248,19 @@ class ImprovedPaperTradingBot:
                     print(f"📊 Signal at {last_signal_time} already processed, skipping duplicate")
                     return
 
-            # Check signal age (CRITICAL: ignore old signals even on first run!)
-            signal_age = (datetime.now() - last_signal_time.to_pydatetime()).total_seconds() / 3600
+            # CRITICAL: Only accept signals on the LAST CLOSED CANDLE
+            # This prevents repainting - when old signals appear after new candles form
+            latest_candle_time = df_strategy.index[-1]
 
-            # Ignore signals older than 2 hours (even on first bot startup)
-            if signal_age > 2.0:
-                print(f"📊 Signal too old ({signal_age:.1f}h), ignoring. Only fresh signals (<2h) are processed.")
+            # Signal must be on the last candle (or max 1 candle behind for safety)
+            candles_behind = len(df_strategy) - 1 - df_strategy.index.get_loc(last_signal_time)
+
+            if candles_behind > 1:
+                print(f"📊 Signal is {candles_behind} candles old (time: {last_signal_time})")
+                print(f"   Latest candle: {latest_candle_time}")
+                print(f"   ⚠️ REPAINTING DETECTED! Only signals on last closed candle are accepted.")
+                print(f"   This prevents trading on signals that 'appear' on old candles.")
                 return
-
-            # Additional check for ongoing bot operation
-            if self.last_signal_check is not None:
-                time_since_last = (datetime.now() - self.last_signal_check).total_seconds()
-                if signal_age > time_since_last + 3600:
-                    print(f"📊 Signal age ({signal_age:.1f}h) exceeds expected window, ignoring")
-                    return
 
             # Check max positions limit
             if len(self.open_positions) >= self.max_positions:
