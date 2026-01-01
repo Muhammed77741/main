@@ -54,19 +54,30 @@ class ImprovedPaperTradingBot:
         self.symbol = symbol
         self.timeframe = timeframe
 
-        # TREND MODE parameters (from baseline)
-        self.trend_tp1 = 30
-        self.trend_tp2 = 55
-        self.trend_tp3 = 90
-        self.trend_trailing = 18
-        self.trend_timeout = 60
+        # LONG TREND MODE parameters (from baseline)
+        self.long_trend_tp1 = 30
+        self.long_trend_tp2 = 55
+        self.long_trend_tp3 = 90
+        self.long_trend_trailing = 18
+        self.long_trend_timeout = 60
 
-        # RANGE MODE parameters (from baseline)
-        self.range_tp1 = 20
-        self.range_tp2 = 35
-        self.range_tp3 = 50
-        self.range_trailing = 15
-        self.range_timeout = 48
+        # LONG RANGE MODE parameters (from baseline)
+        self.long_range_tp1 = 20
+        self.long_range_tp2 = 35
+        self.long_range_tp3 = 50
+        self.long_range_trailing = 15
+        self.long_range_timeout = 48
+
+        # SHORT TREND MODE parameters (OPTIMIZED - asymmetric!)
+        # Based on analysis: SHORT needs smaller TP, faster trailing, shorter timeout
+        self.short_trend_tp1 = 15  # Reduced from 30п
+        self.short_trend_tp2 = 25  # Reduced from 55п
+        self.short_trend_tp3 = 35  # Reduced from 90п
+        self.short_trend_trailing = 10  # Reduced from 18п
+        self.short_trend_timeout = 24  # Reduced from 60ч
+
+        # SHORT RANGE MODE - DISABLED (analysis showed -14% PnL in RANGE)
+        self.short_range_enabled = False
 
         # Partial close percentages
         self.close_pct1 = 0.5
@@ -97,13 +108,17 @@ class ImprovedPaperTradingBot:
         # Statistics file
         self.stats_file = f'live_bot_statistics_{symbol}.csv'
 
-        print("✅ Improved Paper Trading Bot (MT5) initialized")
+        print("✅ Improved Paper Trading Bot (MT5) initialized - ASYMMETRIC MODE")
         print(f"   Symbol: {symbol}")
         print(f"   ⏰ Signal check: every {signal_check_interval}s ({signal_check_interval/60:.0f} min)")
         print(f"   ⏰ Position check: every {position_check_interval}s ({position_check_interval/60:.0f} min)")
-        print(f"   🎯 TREND: TP {self.trend_tp1}/{self.trend_tp2}/{self.trend_tp3}п, Trailing {self.trend_trailing}п")
-        print(f"   📊 RANGE: TP {self.range_tp1}/{self.range_tp2}/{self.range_tp3}п, Trailing {self.range_trailing}п")
-        print(f"   🛡️ Max positions: {max_positions}")
+        print(f"\n   📈 LONG PARAMETERS:")
+        print(f"   TREND: TP {self.long_trend_tp1}/{self.long_trend_tp2}/{self.long_trend_tp3}п, Trailing {self.long_trend_trailing}п, Timeout {self.long_trend_timeout}ч")
+        print(f"   RANGE: TP {self.long_range_tp1}/{self.long_range_tp2}/{self.long_range_tp3}п, Trailing {self.long_range_trailing}п, Timeout {self.long_range_timeout}ч")
+        print(f"\n   📉 SHORT PARAMETERS (OPTIMIZED!):")
+        print(f"   TREND: TP {self.short_trend_tp1}/{self.short_trend_tp2}/{self.short_trend_tp3}п, Trailing {self.short_trend_trailing}п, Timeout {self.short_trend_timeout}ч")
+        print(f"   RANGE: {'DISABLED' if not self.short_range_enabled else 'ENABLED'} (analysis: -14% PnL)")
+        print(f"\n   🛡️ Max positions: {max_positions}")
         print(f"   💾 Statistics file: {self.stats_file}")
 
     def connect_mt5(self, login=None, password=None, server=None):
@@ -271,9 +286,17 @@ class ImprovedPaperTradingBot:
             signal_idx = len(df_strategy) - 1
             regime = self.detect_market_regime(df_strategy, signal_idx)
 
+            # FILTER: SHORT in RANGE (analysis showed -14% PnL)
+            direction = 'LONG' if last_signal['signal'] == 1 else 'SHORT'
+            if direction == 'SHORT' and regime == 'RANGE' and not self.short_range_enabled:
+                print(f"📊 SHORT signal in RANGE regime - FILTERED")
+                print(f"   Analysis: SHORT in RANGE has 46.6% WR and -14% PnL")
+                print(f"   Trading SHORT only in TREND regime")
+                return
+
             print(f"🎯 NEW SIGNAL DETECTED!")
             print(f"   Time: {last_signal_time}")
-            print(f"   Direction: {'LONG' if last_signal['signal'] == 1 else 'SHORT'}")
+            print(f"   Direction: {direction}")
             print(f"   Entry: {last_signal['entry_price']:.2f}")
             print(f"   Regime: {regime}")
 
@@ -289,24 +312,34 @@ class ImprovedPaperTradingBot:
             traceback.print_exc()
 
     def open_position(self, signal, timestamp, regime):
-        """Open new position with adaptive parameters based on regime"""
+        """Open new position with adaptive parameters based on regime and direction (ASYMMETRIC!)"""
 
         entry_price = signal['entry_price']
         direction = 'LONG' if signal['signal'] == 1 else 'SHORT'
 
-        # Choose parameters based on regime
-        if regime == 'TREND':
-            tp1 = self.trend_tp1
-            tp2 = self.trend_tp2
-            tp3 = self.trend_tp3
-            trailing = self.trend_trailing
-            timeout = self.trend_timeout
-        else:  # RANGE
-            tp1 = self.range_tp1
-            tp2 = self.range_tp2
-            tp3 = self.range_tp3
-            trailing = self.range_trailing
-            timeout = self.range_timeout
+        # Choose parameters based on DIRECTION and regime (ASYMMETRIC!)
+        if direction == 'LONG':
+            # LONG: use baseline parameters
+            if regime == 'TREND':
+                tp1 = self.long_trend_tp1
+                tp2 = self.long_trend_tp2
+                tp3 = self.long_trend_tp3
+                trailing = self.long_trend_trailing
+                timeout = self.long_trend_timeout
+            else:  # RANGE
+                tp1 = self.long_range_tp1
+                tp2 = self.long_range_tp2
+                tp3 = self.long_range_tp3
+                trailing = self.long_range_trailing
+                timeout = self.long_range_timeout
+        else:  # SHORT
+            # SHORT: use optimized parameters (TREND only, RANGE filtered earlier)
+            # Analysis: SHORT needs smaller TP, faster trailing, shorter timeout
+            tp1 = self.short_trend_tp1
+            tp2 = self.short_trend_tp2
+            tp3 = self.short_trend_tp3
+            trailing = self.short_trend_trailing
+            timeout = self.short_trend_timeout
 
         # Calculate TPs
         if direction == 'LONG':
@@ -714,12 +747,16 @@ class ImprovedPaperTradingBot:
         """Run bot with dual-frequency checking"""
 
         print("\n" + "="*80)
-        print("🤖 IMPROVED PAPER TRADING BOT (MT5) - DUAL FREQUENCY")
+        print("🤖 IMPROVED PAPER TRADING BOT (MT5) - ASYMMETRIC MODE")
         print("="*80)
         print(f"📊 Strategy: Pattern Recognition (1.618)")
         print(f"📈 Asset: {self.symbol}")
-        print(f"🎯 TREND: TP {self.trend_tp1}/{self.trend_tp2}/{self.trend_tp3}п, Trailing {self.trend_trailing}п")
-        print(f"📊 RANGE: TP {self.range_tp1}/{self.range_tp2}/{self.range_tp3}п, Trailing {self.range_trailing}п")
+        print(f"\n📈 LONG PARAMETERS:")
+        print(f"   TREND: TP {self.long_trend_tp1}/{self.long_trend_tp2}/{self.long_trend_tp3}п, Trailing {self.long_trend_trailing}п")
+        print(f"   RANGE: TP {self.long_range_tp1}/{self.long_range_tp2}/{self.long_range_tp3}п, Trailing {self.long_range_trailing}п")
+        print(f"\n📉 SHORT PARAMETERS (OPTIMIZED!):")
+        print(f"   TREND: TP {self.short_trend_tp1}/{self.short_trend_tp2}/{self.short_trend_tp3}п, Trailing {self.short_trend_trailing}п")
+        print(f"   RANGE: DISABLED")
         print(f"")
         print(f"⏰ DUAL FREQUENCY CHECKING:")
         print(f"   🔍 New signals: every {self.signal_check_interval}s ({self.signal_check_interval/60:.0f} min)")
