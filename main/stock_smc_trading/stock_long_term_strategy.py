@@ -6,14 +6,10 @@ Stock Long-Term SMC Strategy - For daily and weekly timeframes
 
 import pandas as pd
 import numpy as np
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from typing import Dict
 
 from smc_indicators import SMCIndicators
 from volume_analysis import VolumeAnalyzer
-from typing import Dict
 
 
 class StockLongTermStrategy:

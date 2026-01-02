@@ -10,37 +10,54 @@
 - **Документация:** [smc_trading_strategy/README.md](smc_trading_strategy/README.md)
 
 ### 📈 Stock Long-Term Strategy (NEW!)
-**Ветка:** `cursor/stock-trading-long-term-9d4a`
+**Ветка:** `cursor/stock-trading-long-term-9d4a`  
+**Папка:** `main/stock_smc_trading/` ⭐
 
 Долгосрочная торговля акциями на дневных и недельных таймфреймах.
-- **Папка:** `smc_trading_strategy/`
 - **Таймфреймы:** 1 день (1D) и 1 неделя (1W)
 - **Scoring System:** Гибкая система подсчета баллов
 - **Тестировано:** ✅ 37 сделок, 43% Win Rate, 0.97 Profit Factor
 - **Документация:** 
-  - [STOCK_LONGTERM_README.md](smc_trading_strategy/STOCK_LONGTERM_README.md) - Полная документация
-  - [STOCK_STRATEGY_RESULTS.md](smc_trading_strategy/STOCK_STRATEGY_RESULTS.md) - Результаты тестирования
-  - [STOCK_TRADING_SUMMARY.md](smc_trading_strategy/STOCK_TRADING_SUMMARY.md) - Краткая сводка
+  - [README.md](main/stock_smc_trading/README.md) - Главная документация
+  - [STOCK_QUICK_START.md](main/stock_smc_trading/STOCK_QUICK_START.md) - Быстрый старт
+  - [STOCK_LONGTERM_README.md](main/stock_smc_trading/STOCK_LONGTERM_README.md) - Полное руководство
+  - [STOCK_STRATEGY_RESULTS.md](main/stock_smc_trading/STOCK_STRATEGY_RESULTS.md) - Результаты
+  - [STOCK_TRADING_SUMMARY.md](main/stock_smc_trading/STOCK_TRADING_SUMMARY.md) - Сводка
 
 #### 🚀 Быстрый старт:
 ```bash
-cd smc_trading_strategy
+cd main/stock_smc_trading
 
-# Простой тест
+# Установка зависимостей
+pip install -r requirements.txt
+
+# Простой тест (5 минут)
 python3 test_stock_simple.py
 
-# Полный бэктест
+# Полный бэктест с графиками
 python3 run_stock_backtest.py
 ```
 
-#### 📁 Новые файлы:
-- `stock_long_term_strategy.py` (630 строк) - Основная стратегия
-- `stock_data_loader.py` (276 строк) - Генератор данных
-- `run_stock_backtest.py` (417 строк) - Бэктестинг
-- `test_stock_simple.py` (126 строк) - Простые тесты
-- Документация: 3 файла (30KB)
+#### 📁 Структура проекта:
+```
+main/stock_smc_trading/
+├── README.md                      # Главная документация
+├── requirements.txt               # Зависимости
+├── __init__.py                    # Package init
+│
+├── stock_long_term_strategy.py    # Основная стратегия (630 строк)
+├── stock_data_loader.py           # Генератор данных (276 строк)
+├── run_stock_backtest.py          # Полный бэктест (417 строк)
+├── test_stock_simple.py           # Простые тесты (126 строк)
+│
+├── smc_indicators.py              # SMC индикаторы
+├── volume_analysis.py             # Анализ объема
+├── backtester.py                  # Бэктестер
+│
+└── Документация (4 файла)
+```
 
-**Всего:** 1449 строк кода + документация
+**Всего:** 1449 строк кода + 30KB документации
 
 ## 🎯 Особенности Stock Strategy
 
@@ -100,9 +117,11 @@ pip install yfinance  # для реальных данных
 ## 📚 Документация
 
 ### Stock Trading:
-- [STOCK_LONGTERM_README.md](smc_trading_strategy/STOCK_LONGTERM_README.md) - Полное руководство
-- [STOCK_STRATEGY_RESULTS.md](smc_trading_strategy/STOCK_STRATEGY_RESULTS.md) - Анализ результатов
-- [STOCK_TRADING_SUMMARY.md](smc_trading_strategy/STOCK_TRADING_SUMMARY.md) - Краткая сводка
+- [README.md](main/stock_smc_trading/README.md) - Главная документация
+- [STOCK_QUICK_START.md](main/stock_smc_trading/STOCK_QUICK_START.md) - Быстрый старт
+- [STOCK_LONGTERM_README.md](main/stock_smc_trading/STOCK_LONGTERM_README.md) - Полное руководство
+- [STOCK_STRATEGY_RESULTS.md](main/stock_smc_trading/STOCK_STRATEGY_RESULTS.md) - Анализ результатов
+- [STOCK_TRADING_SUMMARY.md](main/stock_smc_trading/STOCK_TRADING_SUMMARY.md) - Краткая сводка
 
 ### Gold Trading:
 - [smc_trading_strategy/README.md](smc_trading_strategy/README.md) - Основная документация

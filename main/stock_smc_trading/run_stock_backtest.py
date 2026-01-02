@@ -3,14 +3,10 @@ Run Stock Long-Term Strategy Backtest
 Запуск бэктеста стратегии для акций (день/неделя)
 """
 
-import sys
-import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stock_long_term_strategy import StockLongTermStrategy
 from stock_data_loader import generate_stock_data

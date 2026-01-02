@@ -3,12 +3,8 @@ Simple test for Stock Long-Term Strategy
 Простой тест стратегии для акций
 """
 
-import sys
-import os
 import pandas as pd
 import numpy as np
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stock_long_term_strategy import StockLongTermStrategy
 from stock_data_loader import generate_stock_data
