@@ -42,6 +42,7 @@ class StockLongTermStrategy:
         min_volume_ratio: float = 1.0,  # Минимальное превышение объема
         min_risk_pct: float = 0.005,  # Минимум 0.5% риска
         max_risk_pct: float = 0.15,  # Максимум 15% риска
+        long_only: bool = True,  # Только LONG для акций (нет шорта)
     ):
         """
         Initialize Stock Long-Term Strategy (Based on Fibonacci 1.618)
@@ -69,6 +70,7 @@ class StockLongTermStrategy:
         self.min_volume_ratio = min_volume_ratio
         self.min_risk_pct = min_risk_pct
         self.max_risk_pct = max_risk_pct
+        self.long_only = long_only
         
         # Адаптация параметров под таймфрейм
         if timeframe == '4H':
@@ -108,6 +110,13 @@ class StockLongTermStrategy:
         
         # Generate signals
         df = self.generate_signals(df)
+        
+        # Фильтр: только LONG если long_only=True (для акций обычно нет шорта)
+        if self.long_only:
+            short_signals = (df['signal'] == -1).sum()
+            df.loc[df['signal'] == -1, 'signal'] = 0
+            if short_signals > 0:
+                print(f"   Long-only mode: Removed {short_signals} SHORT signals")
         
         # Apply Fibonacci TP (key innovation from 1.618 strategy)
         df = self._apply_fibonacci_tp(df)

@@ -36,6 +36,7 @@ class StockPatternRecognitionStrategy(StockLongTermStrategy):
         min_pattern_swings: int = 3,  # Minimum swings for pattern
         pattern_cooldown: int = 5,  # Days between pattern signals
         require_trend_confirmation: bool = True,  # Require SMA trend for patterns
+        long_only: bool = True,  # Только LONG для акций (нет шорта)
         **kwargs
     ):
         """
@@ -65,6 +66,7 @@ class StockPatternRecognitionStrategy(StockLongTermStrategy):
             fib_extension=fib_extension,
             use_aggressive_tp=use_aggressive_tp,
             swing_length=15 if timeframe == '1D' else 8,
+            long_only=long_only,
             **kwargs
         )
         
@@ -95,6 +97,7 @@ class StockPatternRecognitionStrategy(StockLongTermStrategy):
         print(f"   Swing Lookback: {self.swing_lookback}")
         print(f"   Pattern Cooldown: {self.pattern_cooldown} {timeframe}")
         print(f"   Trend Confirmation: {require_trend_confirmation}")
+        print(f"   Long Only: {long_only}")
     
     def run_strategy(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -199,14 +202,15 @@ class StockPatternRecognitionStrategy(StockLongTermStrategy):
                     self.last_pattern_signal = i
                     continue
             
-            # 2. BEARISH FLAG
-            pattern = self._detect_bear_flag(df, i, recent_highs, recent_lows)
-            if pattern:
-                df, added = self._add_pattern_signal(df, i, pattern, 'bear_flag')
-                if added:
-                    patterns_found += 1
-                    self.last_pattern_signal = i
-                    continue
+            # 2. BEARISH FLAG (skip if long_only)
+            if not self.long_only:
+                pattern = self._detect_bear_flag(df, i, recent_highs, recent_lows)
+                if pattern:
+                    df, added = self._add_pattern_signal(df, i, pattern, 'bear_flag')
+                    if added:
+                        patterns_found += 1
+                        self.last_pattern_signal = i
+                        continue
             
             # 3. BULLISH PENNANT
             pattern = self._detect_bull_pennant(df, i, recent_highs, recent_lows)
@@ -217,14 +221,15 @@ class StockPatternRecognitionStrategy(StockLongTermStrategy):
                     self.last_pattern_signal = i
                     continue
             
-            # 4. BEARISH PENNANT
-            pattern = self._detect_bear_pennant(df, i, recent_highs, recent_lows)
-            if pattern:
-                df, added = self._add_pattern_signal(df, i, pattern, 'bear_pennant')
-                if added:
-                    patterns_found += 1
-                    self.last_pattern_signal = i
-                    continue
+            # 4. BEARISH PENNANT (skip if long_only)
+            if not self.long_only:
+                pattern = self._detect_bear_pennant(df, i, recent_highs, recent_lows)
+                if pattern:
+                    df, added = self._add_pattern_signal(df, i, pattern, 'bear_pennant')
+                    if added:
+                        patterns_found += 1
+                        self.last_pattern_signal = i
+                        continue
             
             # 5. ASCENDING TRIANGLE (Bullish Continuation)
             pattern = self._detect_ascending_triangle(df, i, recent_highs, recent_lows)
@@ -235,14 +240,15 @@ class StockPatternRecognitionStrategy(StockLongTermStrategy):
                     self.last_pattern_signal = i
                     continue
             
-            # 6. DESCENDING TRIANGLE (Bearish Continuation)
-            pattern = self._detect_descending_triangle(df, i, recent_highs, recent_lows)
-            if pattern:
-                df, added = self._add_pattern_signal(df, i, pattern, 'desc_triangle')
-                if added:
-                    patterns_found += 1
-                    self.last_pattern_signal = i
-                    continue
+            # 6. DESCENDING TRIANGLE (Bearish Continuation) (skip if long_only)
+            if not self.long_only:
+                pattern = self._detect_descending_triangle(df, i, recent_highs, recent_lows)
+                if pattern:
+                    df, added = self._add_pattern_signal(df, i, pattern, 'desc_triangle')
+                    if added:
+                        patterns_found += 1
+                        self.last_pattern_signal = i
+                        continue
             
             # 7. SYMMETRICAL TRIANGLE
             pattern = self._detect_symmetrical_triangle(df, i, recent_highs, recent_lows)
@@ -262,14 +268,15 @@ class StockPatternRecognitionStrategy(StockLongTermStrategy):
                     self.last_pattern_signal = i
                     continue
             
-            # 9. RISING WEDGE (Bearish)
-            pattern = self._detect_rising_wedge(df, i, recent_highs, recent_lows)
-            if pattern:
-                df, added = self._add_pattern_signal(df, i, pattern, 'rising_wedge')
-                if added:
-                    patterns_found += 1
-                    self.last_pattern_signal = i
-                    continue
+            # 9. RISING WEDGE (Bearish) (skip if long_only)
+            if not self.long_only:
+                pattern = self._detect_rising_wedge(df, i, recent_highs, recent_lows)
+                if pattern:
+                    df, added = self._add_pattern_signal(df, i, pattern, 'rising_wedge')
+                    if added:
+                        patterns_found += 1
+                        self.last_pattern_signal = i
+                        continue
         
         print(f"   Detected {patterns_found} continuation patterns")
         
