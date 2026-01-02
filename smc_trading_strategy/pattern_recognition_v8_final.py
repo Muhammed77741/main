@@ -71,13 +71,34 @@ class PatternRecognitionV8Final:
         # Baseline signals
         print(f"\n1️⃣  BASELINE strategy...")
         baseline_df = self.baseline_strategy.run_strategy(df.copy())
+        
+        # Filter rows with signals
         baseline_signals = baseline_df[baseline_df['signal'] == 1].copy()
+        
+        if len(baseline_signals) == 0:
+            print(f"   ✅ Baseline: 0 signals")
+            return pd.DataFrame()
+        
+        # Add required fields
         baseline_signals['time'] = baseline_signals.index
-        baseline_signals['type'] = baseline_signals['signal_type'].str.upper()
-        baseline_signals = baseline_signals[[
-            'time', 'type', 'entry_price', 'stop_loss', 'take_profit', 'signal_reason'
-        ]].copy()
-        baseline_signals = baseline_signals.rename(columns={'signal_reason': 'pattern'})
+        
+        # Get type from signal_type column
+        if 'signal_type' in baseline_signals.columns:
+            baseline_signals['type'] = baseline_signals['signal_type'].str.upper()
+        else:
+            # Fallback: All baseline signals are LONG in V2
+            baseline_signals['type'] = 'LONG'
+        
+        # Select needed columns
+        cols_to_keep = ['time', 'type', 'entry_price', 'stop_loss', 'take_profit']
+        if 'signal_reason' in baseline_signals.columns:
+            cols_to_keep.append('signal_reason')
+            baseline_signals = baseline_signals[cols_to_keep].copy()
+            baseline_signals = baseline_signals.rename(columns={'signal_reason': 'pattern'})
+        else:
+            baseline_signals['pattern'] = 'Baseline_Signal'
+            baseline_signals = baseline_signals[cols_to_keep + ['pattern']].copy()
+        
         baseline_signals['source'] = 'BASELINE'
         baseline_signals['detector_pattern'] = baseline_signals['pattern']
         
@@ -114,7 +135,7 @@ class PatternRecognitionV8Final:
                 combined_df = pd.concat([baseline_signals, pip_df], ignore_index=True)
                 combined_df = combined_df.sort_values('time').reset_index(drop=True)
                 
-                combined_df['hour'] = combined_df['time'].dt.floor('H')
+                combined_df['hour'] = combined_df['time'].dt.floor('h')
                 before = len(combined_df)
                 combined_df = combined_df.drop_duplicates(subset=['hour'], keep='first')
                 combined_df = combined_df.drop(columns=['hour'])
