@@ -10,13 +10,32 @@ from datetime import datetime, timedelta
 import time
 import os
 import sys
-from dotenv import load_dotenv
-import MetaTrader5 as mt5
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    print("⚠️  dotenv not installed, using environment variables")
+    load_dotenv = lambda: None
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    print("⚠️  MetaTrader5 not installed - paper trading mode only")
+    # Mock MT5 for constants
+    class MT5Mock:
+        TIMEFRAME_H1 = 16385  # MT5 constant for 1H
+    mt5 = MT5Mock()
+    MT5_AVAILABLE = False
 
 sys.path.append('../smc_trading_strategy')
 from telegram_notifier import TelegramNotifier
-from mt5_data_downloader import MT5DataDownloader
-from pattern_recognition_strategy import PatternRecognitionStrategy
+try:
+    from mt5_data_downloader import MT5DataDownloader
+    MT5_DOWNLOADER_AVAILABLE = True
+except ImportError:
+    print("⚠️  MT5DataDownloader not available - use manual data feed")
+    MT5DataDownloader = None
+    MT5_DOWNLOADER_AVAILABLE = False
+from pattern_recognition_v8_final import PatternRecognitionV8Final
 
 
 class ImprovedPaperTradingBot:
@@ -48,7 +67,15 @@ class ImprovedPaperTradingBot:
             max_positions: Maximum concurrent positions (default: 5)
             timezone_offset: Timezone offset in hours from UTC (default: 5 for UTC+5)
         """
-        self.strategy = PatternRecognitionStrategy(fib_mode='standard')
+        # V8 FINAL Strategy with optimized settings
+        self.strategy = PatternRecognitionV8Final(
+            fib_mode='standard',
+            tp_multiplier=1.4,
+            enable_30pip_patterns=True,
+            high_confidence_only=True,
+            pip_breakeven_trigger=20,
+            pip_trailing_trigger=35
+        )
         self.signal_check_interval = signal_check_interval
         self.position_check_interval = position_check_interval
         self.symbol = symbol
@@ -88,7 +115,11 @@ class ImprovedPaperTradingBot:
         self.max_positions = max_positions
 
         # MT5 data downloader
-        self.mt5_downloader = MT5DataDownloader(symbol=symbol, timeframe=timeframe)
+        if MT5_DOWNLOADER_AVAILABLE and MT5DataDownloader is not None:
+            self.mt5_downloader = MT5DataDownloader(symbol=symbol, timeframe=timeframe)
+        else:
+            self.mt5_downloader = None
+            print("⚠️  Running in BACKTEST mode - MT5 not available")
 
         # Telegram notifier
         if telegram_token and telegram_chat_id:
@@ -244,10 +275,9 @@ class ImprovedPaperTradingBot:
 
         self.df = df
 
-        # Run strategy
+        # Run strategy (V8 returns DataFrame with signals)
         try:
-            df_strategy = self.strategy.run_strategy(df.copy())
-            df_signals = df_strategy[df_strategy['signal'] != 0]
+            df_signals = self.strategy.run_strategy(df.copy())
 
             if len(df_signals) == 0:
                 print("📊 No signals found")
@@ -255,7 +285,7 @@ class ImprovedPaperTradingBot:
 
             # Check last signal
             last_signal = df_signals.iloc[-1]
-            last_signal_time = df_signals.index[-1]
+            last_signal_time = last_signal['time']
 
             # Check if this signal was already processed (PREVENT DUPLICATES!)
             if self.last_processed_signal_time is not None:
@@ -265,10 +295,12 @@ class ImprovedPaperTradingBot:
 
             # CRITICAL: Only accept signals on the LAST CLOSED CANDLE
             # This prevents repainting - when old signals appear after new candles form
-            latest_candle_time = df_strategy.index[-1]
+            latest_candle_time = df.index[-1]
 
             # Signal must be on the last candle (or max 1 candle behind for safety)
-            candles_behind = len(df_strategy) - 1 - df_strategy.index.get_loc(last_signal_time)
+            # Calculate time difference
+            time_diff = (latest_candle_time - last_signal_time).total_seconds() / 3600  # hours
+            candles_behind = int(time_diff)
 
             if candles_behind > 1:
                 print(f"📊 Signal is {candles_behind} candles old (time: {last_signal_time})")
@@ -282,20 +314,22 @@ class ImprovedPaperTradingBot:
                 print(f"⚠️  Max positions limit reached ({self.max_positions}), skipping signal")
                 return
 
+            # Get direction from V8 signal
+            direction = last_signal.get('type', 'LONG')
+            source = last_signal.get('source', 'UNKNOWN')
+            pattern = last_signal.get('pattern', 'Unknown')
+            
             # Detect market regime
-            signal_idx = len(df_strategy) - 1
-            regime = self.detect_market_regime(df_strategy, signal_idx)
+            signal_idx = df.index.get_loc(last_signal_time)
+            regime = self.detect_market_regime(df, signal_idx)
 
-            # FILTER: SHORT in RANGE (analysis showed -14% PnL)
-            direction = 'LONG' if last_signal['signal'] == 1 else 'SHORT'
-            if direction == 'SHORT' and regime == 'RANGE' and not self.short_range_enabled:
-                print(f"📊 SHORT signal in RANGE regime - FILTERED")
-                print(f"   Analysis: SHORT in RANGE has 46.6% WR and -14% PnL")
-                print(f"   Trading SHORT only in TREND regime")
-                return
+            # Note: V8 is LONG ONLY, so no SHORT filtering needed
+            # (Analysis showed SHORT trades have poor performance)
 
             print(f"🎯 NEW SIGNAL DETECTED!")
             print(f"   Time: {last_signal_time}")
+            print(f"   Source: {source}")
+            print(f"   Pattern: {pattern}")
             print(f"   Direction: {direction}")
             print(f"   Entry: {last_signal['entry_price']:.2f}")
             print(f"   Regime: {regime}")
@@ -315,7 +349,8 @@ class ImprovedPaperTradingBot:
         """Open new position with adaptive parameters based on regime and direction (ASYMMETRIC!)"""
 
         entry_price = signal['entry_price']
-        direction = 'LONG' if signal['signal'] == 1 else 'SHORT'
+        direction = signal.get('type', 'LONG')  # V8 uses 'type' field
+        source = signal.get('source', 'BASELINE')  # Track signal source
 
         # Choose parameters based on DIRECTION and regime (ASYMMETRIC!)
         if direction == 'LONG':
