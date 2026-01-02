@@ -48,17 +48,17 @@ def run_single_stock_backtest(
         volatility=0.02  # 2% daily volatility for stocks
     )
     
-    # Run strategy
+    # Run strategy (based on Fibonacci 1.618)
     strategy = StockLongTermStrategy(
         timeframe=timeframe,
-        risk_reward_ratio=2.5 if timeframe == '1D' else 3.0,
+        fib_extension=fib_extension if use_fibonacci else 1.618,
+        use_aggressive_tp=(fib_extension == 2.618),
         risk_per_trade=0.02,
         swing_length=20 if timeframe == '1D' else 10,
         volume_lookback=5 if timeframe == '1D' else 3,
         min_candle_quality=40,
-        use_fibonacci_tp=use_fibonacci,
-        fib_extension=fib_extension,
-        min_volume_ratio=1.2
+        min_volume_ratio=1.2,
+        min_risk_pct=0.005  # 0.5% min risk
     )
     
     df_signals = strategy.run_strategy(df)

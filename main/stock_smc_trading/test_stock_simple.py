@@ -26,16 +26,17 @@ def simple_daily_test():
         volatility=0.015  # 1.5% volatility
     )
     
-    # Create strategy with relaxed parameters
+    # Create strategy with relaxed parameters (based on Fibonacci 1.618)
     strategy = StockLongTermStrategy(
         timeframe='1D',
-        risk_reward_ratio=2.0,  # Lower R:R
+        fib_extension=1.618,  # Fibonacci TP (from 1.618 strategy)
+        use_aggressive_tp=False,  # Use 1.618, not 2.618
         risk_per_trade=0.02,
         swing_length=10,  # Shorter swings
         volume_lookback=2,  # Less strict volume
         min_candle_quality=25,  # Lower quality threshold
-        use_fibonacci_tp=False,  # Use fixed R:R first
-        min_volume_ratio=0.8  # More lenient volume
+        min_volume_ratio=0.8,  # More lenient volume
+        min_risk_pct=0.003  # Minimum 0.3% risk (from 1.618)
     )
     
     # Generate signals
@@ -51,13 +52,14 @@ def simple_daily_test():
         # Try even more relaxed
         strategy = StockLongTermStrategy(
             timeframe='1D',
-            risk_reward_ratio=1.8,
+            fib_extension=1.618,
+            use_aggressive_tp=False,
             risk_per_trade=0.02,
             swing_length=5,
             volume_lookback=1,
             min_candle_quality=20,
-            use_fibonacci_tp=False,
-            min_volume_ratio=0.5
+            min_volume_ratio=0.5,
+            min_risk_pct=0.003
         )
         
         df_signals = strategy.run_strategy(df)
@@ -132,16 +134,17 @@ def simple_weekly_test():
         volatility=0.02
     )
     
-    # Create strategy with relaxed parameters
+    # Create strategy with relaxed parameters (based on Fibonacci 1.618)
     strategy = StockLongTermStrategy(
         timeframe='1W',
-        risk_reward_ratio=2.5,
+        fib_extension=1.618,
+        use_aggressive_tp=False,
         risk_per_trade=0.02,
         swing_length=5,  # Shorter for weekly
         volume_lookback=1,
         min_candle_quality=20,
-        use_fibonacci_tp=False,
-        min_volume_ratio=0.7
+        min_volume_ratio=0.7,
+        min_risk_pct=0.005  # 0.5% min risk for weekly
     )
     
     # Generate signals
