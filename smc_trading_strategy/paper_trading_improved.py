@@ -55,7 +55,7 @@ class ImprovedPaperTradingBot:
                  signal_check_interval=3600,    # 1 час для новых сигналов
                  position_check_interval=300,   # 5 минут для позиций
                  symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1,
-                 max_positions=5, timezone_offset=5):
+                 max_positions=5, timezone_offset=0):
         """
         Initialize improved paper trading bot
 
@@ -65,7 +65,8 @@ class ImprovedPaperTradingBot:
             symbol: MT5 symbol
             timeframe: MT5 timeframe
             max_positions: Maximum concurrent positions (default: 5)
-            timezone_offset: Timezone offset in hours from UTC (default: 5 for UTC+5)
+            timezone_offset: Timezone offset in hours from UTC (default: 0 = UTC)
+                            Set to your local timezone if needed (e.g., 3 for UTC+3, -5 for UTC-5)
         """
         # V8 FINAL Strategy with optimized settings
         self.strategy = PatternRecognitionV8Final(
@@ -113,6 +114,7 @@ class ImprovedPaperTradingBot:
 
         # Risk management
         self.max_positions = max_positions
+        self.timezone_offset = timezone_offset
 
         # MT5 data downloader
         if MT5_DOWNLOADER_AVAILABLE and MT5DataDownloader is not None:
@@ -141,6 +143,7 @@ class ImprovedPaperTradingBot:
 
         print("✅ Improved Paper Trading Bot (MT5) initialized - ASYMMETRIC MODE")
         print(f"   Symbol: {symbol}")
+        print(f"   🕐 Timezone: UTC{'+'+str(timezone_offset) if timezone_offset > 0 else (str(timezone_offset) if timezone_offset < 0 else '')} (all times in UTC{'+'+str(timezone_offset) if timezone_offset > 0 else (str(timezone_offset) if timezone_offset < 0 else '')})")
         print(f"   ⏰ Signal check: every {signal_check_interval}s ({signal_check_interval/60:.0f} min)")
         print(f"   ⏰ Position check: every {position_check_interval}s ({position_check_interval/60:.0f} min)")
         print(f"\n   📈 LONG PARAMETERS:")
@@ -263,7 +266,9 @@ class ImprovedPaperTradingBot:
         """Check for new trading signals (ТЯЖЕЛАЯ операция - делаем редко)"""
 
         print(f"\n{'='*80}")
-        print(f"🔍 SIGNAL CHECK at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # Show time in UTC (same as data)
+        current_utc = datetime.utcnow()
+        print(f"🔍 SIGNAL CHECK at {current_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC")
         print(f"{'='*80}")
 
         # Download latest data
@@ -810,14 +815,14 @@ class ImprovedPaperTradingBot:
                 self.notifier.send_startup_message()
 
         # Initialize timing
-        last_signal_check = datetime.now() - timedelta(seconds=self.signal_check_interval)
-        last_position_check = datetime.now()
+        last_signal_check = datetime.utcnow() - timedelta(seconds=self.signal_check_interval)
+        last_position_check = datetime.utcnow()
 
         try:
             iteration = 0
             while True:
                 iteration += 1
-                current_time = datetime.now()
+                current_time = datetime.utcnow()  # Use UTC to match data timestamps
 
                 # Check if it's time for signal check
                 time_since_signal_check = (current_time - last_signal_check).total_seconds()
