@@ -70,9 +70,21 @@ class StockPatternRecognitionStrategy(StockLongTermStrategy):
         
         self.fib_mode = fib_mode
         self.pattern_tolerance = pattern_tolerance
-        self.swing_lookback = swing_lookback if timeframe == '1D' else int(swing_lookback * 0.6)
+        # Adjust swing lookback per timeframe
+        if timeframe == '4H':
+            self.swing_lookback = int(swing_lookback * 0.5)  # Shorter for 4H
+        elif timeframe == '1W':
+            self.swing_lookback = int(swing_lookback * 0.6)  # Shorter for weekly
+        else:
+            self.swing_lookback = swing_lookback
         self.min_pattern_swings = min_pattern_swings
-        self.pattern_cooldown = pattern_cooldown if timeframe == '1D' else max(1, pattern_cooldown // 3)
+        # Adjust cooldown per timeframe
+        if timeframe == '4H':
+            self.pattern_cooldown = 2  # Shorter cooldown for 4H
+        elif timeframe == '1W':
+            self.pattern_cooldown = max(1, pattern_cooldown // 3)
+        else:
+            self.pattern_cooldown = pattern_cooldown
         self.require_trend_confirmation = require_trend_confirmation
         
         self.last_pattern_signal = -1000

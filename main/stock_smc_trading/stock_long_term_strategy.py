@@ -32,7 +32,7 @@ class StockLongTermStrategy:
 
     def __init__(
         self,
-        timeframe: str = '1D',  # '1D' для дневного, '1W' для недельного
+        timeframe: str = '1D',  # '4H', '1D' для дневного, '1W' для недельного
         fib_extension: float = 1.618,  # Fibonacci уровень для TP
         use_aggressive_tp: bool = False,  # Use 2.618 for aggressive TP
         risk_per_trade: float = 0.02,  # 2% риска на сделку
@@ -71,10 +71,18 @@ class StockLongTermStrategy:
         self.max_risk_pct = max_risk_pct
         
         # Адаптация параметров под таймфрейм
-        if timeframe == '1W':
+        if timeframe == '4H':
+            self.swing_length = 8  # Короче для 4H (похоже на Gold 1H)
+            self.volume_lookback = 2
+            self.min_candle_quality = 30
+            self.cooldown_candles = 2
+        elif timeframe == '1W':
             self.swing_length = 8  # Меньше свечей для недельного
             self.volume_lookback = 2
             self.min_candle_quality = 25  # Ниже для недельного
+            self.cooldown_candles = 1
+        else:  # 1D
+            self.cooldown_candles = 3
         
         # Initialize components
         self.smc = SMCIndicators(swing_length=swing_length)

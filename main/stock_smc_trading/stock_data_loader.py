@@ -72,6 +72,47 @@ class StockDataLoader:
         
         return df
     
+    def generate_4h_data(
+        self,
+        days: int = 500,
+        start_date: Optional[datetime] = None
+    ) -> pd.DataFrame:
+        """
+        Generate 4-hour stock data (similar to intraday but for stocks)
+        
+        Args:
+            days: Number of days to generate
+            start_date: Start date
+            
+        Returns:
+            DataFrame with OHLCV data
+        """
+        if start_date is None:
+            start_date = datetime.now() - timedelta(days=days)
+        
+        # 6 candles per day (4H: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00)
+        total_candles = days * 6
+        
+        # Generate date range (4H intervals)
+        dates = pd.date_range(start=start_date, periods=total_candles, freq='4H')
+        
+        # Adjust volatility for 4H (between daily and hourly)
+        original_vol = self.volatility
+        original_trend = self.trend_strength
+        
+        self.volatility = self.volatility * 0.5  # 4H = ~0.5 * daily volatility
+        self.trend_strength = self.trend_strength * 0.5
+        
+        # Generate price data
+        df = self._generate_ohlcv(len(dates))
+        df.index = dates
+        
+        # Restore original parameters
+        self.volatility = original_vol
+        self.trend_strength = original_trend
+        
+        return df
+    
     def generate_weekly_data(
         self,
         weeks: int = 104,  # 2 years
@@ -230,7 +271,7 @@ def generate_stock_data(
     
     Args:
         ticker: Stock ticker
-        timeframe: '1D' or '1W'
+        timeframe: '4H', '1D' or '1W'
         periods: Number of periods
         start_date: Start date
         initial_price: Starting price
@@ -245,12 +286,14 @@ def generate_stock_data(
         volatility=volatility
     )
     
-    if timeframe == '1D':
+    if timeframe == '4H':
+        df = loader.generate_4h_data(days=periods, start_date=start_date)
+    elif timeframe == '1D':
         df = loader.generate_daily_data(days=periods, start_date=start_date)
     elif timeframe == '1W':
         df = loader.generate_weekly_data(weeks=periods, start_date=start_date)
     else:
-        raise ValueError(f"Invalid timeframe: {timeframe}. Use '1D' or '1W'")
+        raise ValueError(f"Invalid timeframe: {timeframe}. Use '4H', '1D' or '1W'")
     
     print(f"\n📊 Generated {ticker} data:")
     print(f"   Timeframe: {timeframe}")
