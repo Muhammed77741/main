@@ -51,3 +51,11 @@ htmlcov/
 .env
 .env.local
 smc_trading_strategy/.env
+
+# Trading bot state files
+trading_state.json
+smc_trading_strategy/trading_state.json
+live_bot_statistics_*.csv
+
+# GitHub Actions artifacts (managed by workflow)
+smc_trading_strategy/*.log

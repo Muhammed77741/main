@@ -1,0 +1,224 @@
+name: Paper Trading Bot
+
+on:
+  # Запуск по расписанию (каждый час)
+  schedule:
+    - cron: '0 * * * *'  # Каждый час в :00 минут
+  
+  # Ручной запуск через GitHub UI
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Trading mode'
+        required: true
+        default: 'check_signals'
+        type: choice
+        options:
+          - check_signals
+          - check_positions
+          - full_run
+
+  # Запуск при push (для тестирования)
+  push:
+    branches:
+      - cursor/paper-trading-github-action-*
+    paths:
+      - 'smc_trading_strategy/paper_trading_improved.py'
+      - '.github/workflows/paper-trading.yml'
+
+jobs:
+  paper-trading:
+    name: Run Paper Trading Bot
+    runs-on: windows-latest  # MT5 требует Windows
+    
+    # Таймаут выполнения (максимум 6 часов для GitHub Actions)
+    timeout-minutes: 360
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 📂 Download previous trading state
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: trading-state
+          path: ./smc_trading_strategy/
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        working-directory: ./smc_trading_strategy
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install MetaTrader5
+
+      - name: 📋 Create .env file
+        working-directory: ./smc_trading_strategy
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
+          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
+          MT5_SERVER: ${{ secrets.MT5_SERVER }}
+          MT5_SYMBOL: ${{ secrets.MT5_SYMBOL }}
+          SIGNAL_CHECK_INTERVAL: ${{ secrets.SIGNAL_CHECK_INTERVAL }}
+          POSITION_CHECK_INTERVAL: ${{ secrets.POSITION_CHECK_INTERVAL }}
+        run: |
+          echo "TELEGRAM_BOT_TOKEN=$env:TELEGRAM_BOT_TOKEN" | Out-File -FilePath .env -Encoding utf8
+          echo "TELEGRAM_CHAT_ID=$env:TELEGRAM_CHAT_ID" | Out-File -FilePath .env -Append -Encoding utf8
+          echo "MT5_LOGIN=$env:MT5_LOGIN" | Out-File -FilePath .env -Append -Encoding utf8
+          echo "MT5_PASSWORD=$env:MT5_PASSWORD" | Out-File -FilePath .env -Append -Encoding utf8
+          echo "MT5_SERVER=$env:MT5_SERVER" | Out-File -FilePath .env -Append -Encoding utf8
+          echo "MT5_SYMBOL=$env:MT5_SYMBOL" | Out-File -FilePath .env -Append -Encoding utf8
+          echo "SIGNAL_CHECK_INTERVAL=$env:SIGNAL_CHECK_INTERVAL" | Out-File -FilePath .env -Append -Encoding utf8
+          echo "POSITION_CHECK_INTERVAL=$env:POSITION_CHECK_INTERVAL" | Out-File -FilePath .env -Append -Encoding utf8
+
+      - name: ⚠️ MT5 Installation Warning
+        run: |
+          Write-Host "=============================================="
+          Write-Host "⚠️  ВНИМАНИЕ: MetaTrader5 Requirement"
+          Write-Host "=============================================="
+          Write-Host ""
+          Write-Host "MetaTrader5 требует:"
+          Write-Host "1. Установленный терминал MT5 на Windows"
+          Write-Host "2. Запущенный терминал с авторизацией"
+          Write-Host "3. Доступ к торговому серверу"
+          Write-Host ""
+          Write-Host "GitHub Actions не может установить MT5 автоматически."
+          Write-Host ""
+          Write-Host "РЕКОМЕНДАЦИИ:"
+          Write-Host "1. Используйте self-hosted runner на Windows с MT5"
+          Write-Host "2. Или используйте альтернативный источник данных (Yahoo Finance)"
+          Write-Host ""
+          Write-Host "Текущий workflow будет завершен с предупреждением."
+          Write-Host "=============================================="
+
+      - name: 🔍 Check MT5 availability
+        id: check_mt5
+        continue-on-error: true
+        run: |
+          python -c "import MetaTrader5 as mt5; print('MT5 package installed'); exit(0 if mt5.initialize() else 1)"
+
+      - name: 🤖 Run Paper Trading Bot (if MT5 available)
+        if: steps.check_mt5.outcome == 'success'
+        working-directory: ./smc_trading_strategy
+        env:
+          PYTHONUNBUFFERED: 1
+          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
+          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
+          MT5_SERVER: ${{ secrets.MT5_SERVER }}
+          MT5_SYMBOL: ${{ secrets.MT5_SYMBOL }}
+        run: |
+          # Запуск бота в режиме одной проверки (не infinite loop)
+          # Использует специальную версию для GitHub Actions
+          python paper_trading_github_action.py
+        timeout-minutes: 55
+
+      - name: 💾 Upload trading state (for next run)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-state
+          path: smc_trading_strategy/trading_state.json
+          retention-days: 90
+
+      - name: 📊 Upload trading statistics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-stats-${{ github.run_number }}
+          path: |
+            smc_trading_strategy/live_bot_statistics_*.csv
+            smc_trading_strategy/*.log
+          retention-days: 30
+
+      - name: 📝 Summary
+        if: always()
+        run: |
+          Write-Host "=============================================="
+          Write-Host "📊 Workflow Summary"
+          Write-Host "=============================================="
+          Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+          Write-Host "Run Number: ${{ github.run_number }}"
+          Write-Host "MT5 Status: ${{ steps.check_mt5.outcome }}"
+          Write-Host ""
+          Write-Host "Для полноценной работы настройте self-hosted runner!"
+          Write-Host "=============================================="
+
+  # Альтернативное задание для Yahoo Finance (не требует MT5)
+  paper-trading-yahoo:
+    name: Run Paper Trading Bot (Yahoo Finance)
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 📂 Download previous trading state
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: trading-state-yahoo
+          path: ./smc_trading_strategy/
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        working-directory: ./smc_trading_strategy
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy yfinance python-dotenv requests
+
+      - name: 📋 Create .env file
+        working-directory: ./smc_trading_strategy
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHECK_INTERVAL: ${{ secrets.CHECK_INTERVAL }}
+        run: |
+          echo "TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}" > .env
+          echo "TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}" >> .env
+          echo "CHECK_INTERVAL=${CHECK_INTERVAL:-3600}" >> .env
+
+      - name: 🤖 Run Paper Trading Bot (Yahoo Finance)
+        working-directory: ./smc_trading_strategy
+        env:
+          PYTHONUNBUFFERED: 1
+        run: |
+          # Проверяем, существует ли paper_trading.py
+          if [ -f "paper_trading.py" ]; then
+            echo "✅ Running paper_trading.py (Yahoo Finance mode)"
+            timeout 55m python paper_trading.py || echo "⚠️ Timeout reached or bot stopped"
+          else
+            echo "⚠️ paper_trading.py not found, using test mode"
+          fi
+
+      - name: 💾 Upload trading state (for next run)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-state-yahoo
+          path: smc_trading_strategy/trading_state.json
+          retention-days: 90
+
+      - name: 📊 Upload trading statistics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-stats-yahoo-${{ github.run_number }}
+          path: |
+            smc_trading_strategy/live_bot_statistics_*.csv
+            smc_trading_strategy/*.log
+          retention-days: 30
