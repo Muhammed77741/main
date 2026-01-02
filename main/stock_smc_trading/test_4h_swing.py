@@ -126,11 +126,9 @@ def test_swing_trading_4h(
         
         # Win/Loss by hold period
         print("\n📈 Win Rate by Hold Period:")
-        for period, label in [(3, 5, '3-5d'), (5, 7, '5-7d'), (7, 100, '7+d')]:
-            period_trades = trades_df[(trades_df['hold_days'] >= period[0] if isinstance(period, tuple) else False)]
-            if isinstance(period, tuple):
-                period_trades = trades_df[(trades_df['hold_days'] >= period) & (trades_df['hold_days'] <= label)]
-                period_label = f"{period}-{label} days"
+        for period_range, label in [((3, 5), '3-5d'), ((5, 7), '5-7d'), ((7, 100), '7+d')]:
+            min_days, max_days = period_range
+            period_trades = trades_df[(trades_df['hold_days'] >= min_days) & (trades_df['hold_days'] <= max_days)]
             if len(period_trades) > 0:
                 wr = (period_trades['pnl_pct'] > 0).sum() / len(period_trades) * 100
                 print(f"   {label}: {wr:.1f}% ({len(period_trades)} trades)")
