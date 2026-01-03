@@ -1,0 +1,67 @@
+name: Daily Stock Screener
+
+on:
+  schedule:
+    # Run every day at 9:00 UTC (adjust to your timezone)
+    - cron: '0 9 * * *'
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  run-screener:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        ref: claude/simplify-stock-screener-WzlXB
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        cd main/stock_smc_trading
+        pip install -r requirements.txt
+
+    - name: Run real data screener
+      run: |
+        cd main/stock_smc_trading
+        python3 real_data_screener.py
+      continue-on-error: true
+
+    - name: Run demo screener (fallback)
+      if: failure()
+      run: |
+        cd main/stock_smc_trading
+        python3 demo_screener.py
+
+    - name: Upload results as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: screener-results-${{ github.run_number }}
+        path: |
+          main/stock_smc_trading/*_screener_results.csv
+          main/stock_smc_trading/*.csv
+        retention-days: 30
+
+    - name: Commit and push results (optional)
+      run: |
+        cd main/stock_smc_trading
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add -f *_screener_results.csv || true
+        git commit -m "📊 Update screener results - $(date +'%Y-%m-%d %H:%M:%S')" || true
+      continue-on-error: true
+
+    - name: Push changes
+      uses: ad-m/github-push-action@master
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        branch: claude/simplify-stock-screener-WzlXB
+      continue-on-error: true
