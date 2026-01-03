@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pattern_recognition_strategy import PatternRecognitionStrategy
 
 
-def load_mt5_data(file_path='../XAUUSD_1H_MT5_20241227_20251227.csv'):
+def load_mt5_data(file_path='../XAUUSD_custom_20240101_20260103.csv'):
     """Load MT5 XAUUSD data"""
     df = pd.read_csv(file_path)
     df['timestamp'] = pd.to_datetime(df['datetime'])
