@@ -46,3 +46,8 @@ htmlcov/
 !smc_trading_strategy/*_trades.csv
 *.png
 !smc_trading_strategy/*_comparison.png
+
+# Environment variables (SECRETS - never commit!)
+.env
+.env.local
+smc_trading_strategy/.env

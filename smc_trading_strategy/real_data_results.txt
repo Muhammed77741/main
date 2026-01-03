@@ -1,0 +1,28 @@
+======================================================================
+REAL DATA BACKTEST RESULTS
+======================================================================
+
+Data Period: 2025-11-13 02:00:00 to 2025-12-26 00:00:00
+Total Candles: 691
+Days: 42
+
+
+1. Pattern Recognition (2.618)
+   Total PnL: +15.03%
+   Win Rate: 71.1%
+   Total Trades: 38
+   Avg Win: 0.79%
+   Avg Loss: -0.57%
+   Max Drawdown: 3.72%
+   Sharpe Ratio: 0.46
+   Profitable Months: 2/2
+
+2. Pattern Recognition (1.618)
+   Total PnL: +14.52%
+   Win Rate: 71.1%
+   Total Trades: 38
+   Avg Win: 0.77%
+   Avg Loss: -0.57%
+   Max Drawdown: 3.72%
+   Sharpe Ratio: 0.46
+   Profitable Months: 2/2
