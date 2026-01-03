@@ -422,6 +422,36 @@ ERROR: Failed building wheel for multitasking
 **Решение:**
 Используйте demo_screener.py (работает без yfinance)
 
+### SSL Certificate Error (Ошибка сертификата)
+```
+Failed to perform, curl: (77) error setting certificate verify locations:
+CAfile: C:\Users\Мирас\AppData\...\certifi\cacert.pem
+```
+
+Это частая проблема на Windows, особенно если в имени пользователя есть русские буквы.
+
+**Решение 1: Обновить код (автофикс встроен)**
+```bash
+git pull origin claude/simplify-stock-screener-WzlXB
+```
+
+Новая версия `real_data_screener.py` автоматически обходит SSL проблемы!
+
+**Решение 2: Переустановить certifi**
+```bash
+venv\Scripts\activate
+pip uninstall certifi
+pip install certifi --force-reinstall
+```
+
+**Решение 3: Использовать demo_screener.py**
+```bash
+python demo_screener.py
+```
+Работает без интернета, нет SSL проблем!
+
+**Подробнее:** См. `SSL_FIX_WINDOWS.md`
+
 ### Русские буквы в пути
 Если в пути к файлу есть русские буквы, могут быть проблемы.
 

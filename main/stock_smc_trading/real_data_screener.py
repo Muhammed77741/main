@@ -14,6 +14,19 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional
+import ssl
+import os
+
+# Fix SSL certificate verification issues on Windows
+try:
+    import certifi
+    os.environ['SSL_CERT_FILE'] = certifi.where()
+except ImportError:
+    pass
+
+# Disable SSL verification as fallback (for Windows SSL issues)
+import urllib.request
+ssl._create_default_https_context = ssl._create_unverified_context
 
 try:
     import yfinance as yf
@@ -43,7 +56,14 @@ class RealFundamentalData:
 
         try:
             stock = yf.Ticker(ticker)
-            info = stock.info
+
+            # Try to get info with SSL error handling
+            try:
+                info = stock.info
+            except Exception as e:
+                if 'SSL' in str(e) or 'certificate' in str(e):
+                    print(f"   ⚠️  SSL error fetching {ticker} fundamentals")
+                return None
 
             # Sometimes yfinance returns empty dict
             if not info or len(info) < 5:
@@ -122,15 +142,24 @@ class RealDataScreener:
 
         try:
             stock = yf.Ticker(ticker)
-            df = stock.history(period=f"{days}d", interval='1d')
+            # Try to download with error handling for SSL and other issues
+            try:
+                df = stock.history(period=f"{days}d", interval='1d')
+            except TypeError:
+                # Fallback for older yfinance versions without show_errors parameter
+                df = stock.history(period=f"{days}d")
 
-            if df.empty:
+            if df is None or df.empty:
                 return None
 
             df.columns = df.columns.str.lower()
             return df
         except Exception as e:
-            print(f"   ⚠️  Error downloading {ticker}: {str(e)[:50]}")
+            error_msg = str(e)
+            if 'SSL' in error_msg or 'certificate' in error_msg:
+                print(f"   ⚠️  SSL error downloading {ticker}: {error_msg[:80]}")
+            else:
+                print(f"   ⚠️  Error downloading {ticker}: {error_msg[:80]}")
             return None
 
     def calculate_technical_score(self, df: pd.DataFrame, spy_df: pd.DataFrame) -> Tuple[float, Dict]:
