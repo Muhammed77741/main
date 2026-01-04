@@ -253,13 +253,17 @@ class SimplifiedSMCStrategy:
         current_time = df.index[idx]
 
         if direction == 1:  # Long
-            # Stop below recent swing low (use NEAREST, not MINIMUM!)
+            # Stop below recent swing low
             # CRITICAL FIX: Filter by TIME, not by position!
             all_swing_lows = df[df['swing_low'] == True]
             recent_swings = all_swing_lows[all_swing_lows.index < current_time].tail(20)
 
-            if len(recent_swings) > 0:
-                # Use last (nearest) swing low
+            if len(recent_swings) >= 2:
+                # OPTIMIZATION V4: Use 2nd swing instead of nearest
+                # This reduces false SL hits (was major problem in V3: -53% from SL)
+                stop = recent_swings['low'].iloc[-2]
+            elif len(recent_swings) == 1:
+                # Only 1 swing available - use it
                 stop = recent_swings['low'].iloc[-1]
             else:
                 # Fallback: lowest low in last 10 candles
@@ -269,13 +273,17 @@ class SimplifiedSMCStrategy:
             return stop * 0.998
 
         else:  # Short
-            # Stop above recent swing high (use NEAREST, not MAXIMUM!)
+            # Stop above recent swing high
             # CRITICAL FIX: Filter by TIME, not by position!
             all_swing_highs = df[df['swing_high'] == True]
             recent_swings = all_swing_highs[all_swing_highs.index < current_time].tail(20)
 
-            if len(recent_swings) > 0:
-                # Use last (nearest) swing high
+            if len(recent_swings) >= 2:
+                # OPTIMIZATION V4: Use 2nd swing instead of nearest
+                # This reduces false SL hits (was major problem in V3: -53% from SL)
+                stop = recent_swings['high'].iloc[-2]
+            elif len(recent_swings) == 1:
+                # Only 1 swing available - use it
                 stop = recent_swings['high'].iloc[-1]
             else:
                 # Fallback: highest high in last 10 candles
