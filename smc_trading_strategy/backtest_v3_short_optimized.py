@@ -12,7 +12,7 @@ import numpy as np
 from datetime import datetime
 import argparse
 
-from pattern_recognition_strategy import PatternRecognitionStrategy
+from simplified_smc_strategy import SimplifiedSMCStrategy
 
 
 class ShortOptimizedBacktestV3:
@@ -519,8 +519,8 @@ def main():
         df['is_ny'] = df.index.hour.isin(range(13, 20))
         df['is_active'] = df['is_london'] | df['is_ny']
 
-    # Create strategy
-    strategy = PatternRecognitionStrategy(fib_mode='standard')
+    # Create strategy (using SimplifiedSMCStrategy with FIXED stop loss calculation)
+    strategy = SimplifiedSMCStrategy()
 
     # Run SHORT-optimized backtest
     backtest = ShortOptimizedBacktestV3()

@@ -250,11 +250,17 @@ class SimplifiedSMCStrategy:
         Returns:
             Stop loss price
         """
+        current_time = df.index[idx]
+
         if direction == 1:  # Long
-            # Stop below recent swing low
-            recent_swings = df[df['swing_low']].iloc[max(0, idx-20):idx]
+            # Stop below recent swing low (use NEAREST, not MINIMUM!)
+            # CRITICAL FIX: Filter by TIME, not by position!
+            all_swing_lows = df[df['swing_low'] == True]
+            recent_swings = all_swing_lows[all_swing_lows.index < current_time].tail(20)
+
             if len(recent_swings) > 0:
-                stop = recent_swings['low'].min()
+                # Use last (nearest) swing low
+                stop = recent_swings['low'].iloc[-1]
             else:
                 # Fallback: lowest low in last 10 candles
                 stop = df['low'].iloc[max(0, idx-10):idx].min()
@@ -263,10 +269,14 @@ class SimplifiedSMCStrategy:
             return stop * 0.998
 
         else:  # Short
-            # Stop above recent swing high
-            recent_swings = df[df['swing_high']].iloc[max(0, idx-20):idx]
+            # Stop above recent swing high (use NEAREST, not MAXIMUM!)
+            # CRITICAL FIX: Filter by TIME, not by position!
+            all_swing_highs = df[df['swing_high'] == True]
+            recent_swings = all_swing_highs[all_swing_highs.index < current_time].tail(20)
+
             if len(recent_swings) > 0:
-                stop = recent_swings['high'].max()
+                # Use last (nearest) swing high
+                stop = recent_swings['high'].iloc[-1]
             else:
                 # Fallback: highest high in last 10 candles
                 stop = df['high'].iloc[max(0, idx-10):idx].max()
