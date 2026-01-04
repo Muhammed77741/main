@@ -558,10 +558,24 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
             # SL above resistance/neckline
             if 'resistance' in pattern:
                 sl = pattern['resistance'] * 1.001
+                DEBUG_RESISTANCE = pattern['resistance']
             elif 'neckline' in pattern:
                 sl = pattern['neckline'] * 1.001
+                DEBUG_RESISTANCE = pattern['neckline']
             else:
                 sl = pattern['head'] * 1.001
+                DEBUG_RESISTANCE = pattern['head']
+
+            # DEBUG: Print what's happening
+            if abs(sl - entry) / entry > 0.05:  # SL > 5%
+                print(f"\n⚠️ АНОМАЛЬНЫЙ SL ОБНАРУЖЕН!")
+                print(f"   Дата: {df.index[idx]}")
+                print(f"   Entry: {entry:.2f}")
+                print(f"   SL source: {DEBUG_RESISTANCE:.2f}")
+                print(f"   SL calculated: {sl:.2f}")
+                print(f"   SL distance: {abs(sl - entry):.2f} ({abs(sl-entry)/entry*100:.2f}%)")
+                print(f"   Pattern type: {pattern_name}")
+                print(f"   Pattern data: {pattern}")
 
             # Fibonacci TP
             risk = sl - entry
