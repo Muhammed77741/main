@@ -1,10 +1,30 @@
 """
-SHORT-Optimized Adaptive Backtest V3
-На основе анализа SHORT сделок:
-1. SHORT ТОЛЬКО в TREND (не в RANGE!)
-2. Меньшие TP для SHORT (15/25/35п вместо 20/35/50п)
-3. Более быстрый trailing для SHORT (10п вместо 15п)
-4. Более короткий timeout для SHORT (24ч вместо 48ч)
+V6: Fixed SL + Increased Timeout
+
+ИЗМЕНЕНИЯ vs V5:
+1. ✅ УВЕЛИЧЕН TIMEOUT (+33%):
+   - LONG TREND: 60ч → 80ч (решает проблему -40% от TIMEOUT)
+   - LONG RANGE: 48ч → 64ч
+   - SHORT TREND: 24ч → 32ч
+
+2. ✅ ФИКСИРОВАННЫЙ SL (вместо swing-based):
+   - LONG: SL = entry - 0.8% (18-20 пунктов при цене 2400)
+   - SHORT: SL = entry + 0.8%
+   - Более предсказуемый риск!
+
+3. ⏸️ Оставлено из V5:
+   - TP (30/55/90, 20/35/50)
+   - Trailing (18п, 15п)
+   - Partial close (50%/30%/20%)
+
+ПРОБЛЕМА V5:
+- TIMEOUT: 150 сделок = -40.58% ❌ (главная проблема!)
+- Avg timeout PnL: -0.27%
+
+ОЖИДАЕМЫЙ РЕЗУЛЬТАТ V6:
+- Меньше TIMEOUT выходов (дать сделкам больше времени)
+- Фиксированный SL = более стабильный риск
+- Прогноз: +55-60% PnL (vs +45.81% в V5)
 """
 
 import pandas as pd
@@ -15,37 +35,39 @@ import argparse
 from simplified_smc_strategy import SimplifiedSMCStrategy
 
 
-class ShortOptimizedBacktestV3:
-    """Backtest with asymmetric parameters for SHORT trades"""
+class FixedSLBacktestV6:
+    """V6: Fixed SL + Increased Timeout"""
 
     def __init__(self, spread_points=2.0, commission_points=0.5, swap_per_day=-0.3):
         self.spread = spread_points
         self.commission = commission_points
         self.swap_per_day = swap_per_day
 
-        # LONG parameters (unchanged from baseline)
+        # LONG parameters - INCREASED TIMEOUT (+33%)
         self.long_trend_tp1 = 30
         self.long_trend_tp2 = 55
         self.long_trend_tp3 = 90
         self.long_trend_trailing = 18
-        self.long_trend_timeout = 60
+        self.long_trend_timeout = 80  # Was 60 (+33%)
 
         self.long_range_tp1 = 20
         self.long_range_tp2 = 35
         self.long_range_tp3 = 50
         self.long_range_trailing = 15
-        self.long_range_timeout = 48
+        self.long_range_timeout = 64  # Was 48 (+33%)
 
-        # SHORT parameters (OPTIMIZED!)
-        # SHORT TREND only - more conservative
-        self.short_trend_tp1 = 15  # Reduced from 30п
-        self.short_trend_tp2 = 25  # Reduced from 55п
-        self.short_trend_tp3 = 35  # Reduced from 90п
-        self.short_trend_trailing = 10  # Reduced from 18п
-        self.short_trend_timeout = 24  # Reduced from 60ч
+        # SHORT parameters - INCREASED TIMEOUT
+        self.short_trend_tp1 = 15
+        self.short_trend_tp2 = 25
+        self.short_trend_tp3 = 35
+        self.short_trend_trailing = 10
+        self.short_trend_timeout = 32  # Was 24 (+33%)
 
-        # SHORT RANGE - DISABLED (too many losses)
+        # SHORT RANGE - DISABLED
         self.short_range_enabled = False
+
+        # FIXED STOP LOSS (new!)
+        self.fixed_sl_pct = 0.8  # 0.8% fixed SL (~18-20 points at 2400 price)
 
         # Daily limits
         self.max_trades_per_day = 10
@@ -118,18 +140,22 @@ class ShortOptimizedBacktestV3:
         """Run SHORT-optimized backtest"""
 
         print(f"\n{'='*80}")
-        print(f"📊 SHORT-OPTIMIZED ADAPTIVE BACKTEST V3")
+        print(f"📊 V6: FIXED SL + INCREASED TIMEOUT")
         print(f"{'='*80}")
         print(f"   Data: {len(df)} candles")
         print(f"   Period: {df.index[0]} to {df.index[-1]}")
 
-        print(f"\n   🎯 LONG PARAMETERS (unchanged):")
-        print(f"   TREND: TP {self.long_trend_tp1}/{self.long_trend_tp2}/{self.long_trend_tp3}п, Trailing {self.long_trend_trailing}п, Timeout {self.long_trend_timeout}ч")
-        print(f"   RANGE: TP {self.long_range_tp1}/{self.long_range_tp2}/{self.long_range_tp3}п, Trailing {self.long_range_trailing}п, Timeout {self.long_range_timeout}ч")
+        print(f"\n   🎯 LONG PARAMETERS (INCREASED TIMEOUT +33%):")
+        print(f"   TREND: TP {self.long_trend_tp1}/{self.long_trend_tp2}/{self.long_trend_tp3}п, Trailing {self.long_trend_trailing}п, Timeout {self.long_trend_timeout}ч (was 60)")
+        print(f"   RANGE: TP {self.long_range_tp1}/{self.long_range_tp2}/{self.long_range_tp3}п, Trailing {self.long_range_trailing}п, Timeout {self.long_range_timeout}ч (was 48)")
 
-        print(f"\n   📉 SHORT PARAMETERS (OPTIMIZED!):")
-        print(f"   TREND: TP {self.short_trend_tp1}/{self.short_trend_tp2}/{self.short_trend_tp3}п, Trailing {self.short_trend_trailing}п, Timeout {self.short_trend_timeout}ч")
+        print(f"\n   📉 SHORT PARAMETERS (INCREASED TIMEOUT):")
+        print(f"   TREND: TP {self.short_trend_tp1}/{self.short_trend_tp2}/{self.short_trend_tp3}п, Trailing {self.short_trend_trailing}п, Timeout {self.short_trend_timeout}ч (was 24)")
         print(f"   RANGE: {'DISABLED' if not self.short_range_enabled else 'ENABLED'}")
+
+        print(f"\n   🛑 FIXED STOP LOSS (NEW!):")
+        print(f"   LONG: SL = entry - {self.fixed_sl_pct}% (~{self.fixed_sl_pct * 24:.0f}п @ 2400 price)")
+        print(f"   SHORT: SL = entry + {self.fixed_sl_pct}%")
 
         print(f"\n   💰 COSTS:")
         print(f"   Spread: {self.spread}п")
@@ -193,19 +219,18 @@ class ShortOptimizedBacktestV3:
                     continue
 
                 # Open position
-                signal_sl = candle.get('stop_loss', close)
-
+                # FIXED SL (V6 change: use percentage instead of swing-based)
                 if direction == 'LONG':
                     entry_price = close + self.spread / 2
-                    sl_distance = close - signal_sl
-                    sl_price = entry_price - sl_distance
+                    # Fixed SL: entry - 0.8%
+                    sl_price = entry_price * (1 - self.fixed_sl_pct / 100)
                     tp1_price = entry_price + tp1
                     tp2_price = entry_price + tp2
                     tp3_price = entry_price + tp3
                 else:
                     entry_price = close - self.spread / 2
-                    sl_distance = signal_sl - close
-                    sl_price = entry_price + sl_distance
+                    # Fixed SL: entry + 0.8%
+                    sl_price = entry_price * (1 + self.fixed_sl_pct / 100)
                     tp1_price = entry_price - tp1
                     tp2_price = entry_price - tp2
                     tp3_price = entry_price - tp3
@@ -504,7 +529,7 @@ class ShortOptimizedBacktestV3:
 
 def main():
     """Main entry point"""
-    parser = argparse.ArgumentParser(description='SHORT-Optimized Backtest V3')
+    parser = argparse.ArgumentParser(description='Hybrid Backtest V5 (best of V3+V4)')
     parser.add_argument('--file', type=str, required=True, help='CSV file')
     args = parser.parse_args()
 
@@ -523,12 +548,12 @@ def main():
     strategy = SimplifiedSMCStrategy()
 
     # Run SHORT-optimized backtest
-    backtest = ShortOptimizedBacktestV3()
+    backtest = FixedSLBacktestV6()
     trades_df = backtest.backtest(df, strategy)
 
     if trades_df is not None:
-        trades_df.to_csv('backtest_v3_short_optimized_results.csv', index=False)
-        print(f"\n💾 Results saved to backtest_v3_short_optimized_results.csv")
+        trades_df.to_csv('backtest_v6_fixed_sl_results.csv', index=False)
+        print(f"\n💾 Results saved to backtest_v6_fixed_sl_results.csv")
 
 
 if __name__ == "__main__":

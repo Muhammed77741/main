@@ -1,10 +1,28 @@
 """
-SHORT-Optimized Adaptive Backtest V3
-На основе анализа SHORT сделок:
-1. SHORT ТОЛЬКО в TREND (не в RANGE!)
-2. Меньшие TP для SHORT (15/25/35п вместо 20/35/50п)
-3. Более быстрый trailing для SHORT (10п вместо 15п)
-4. Более короткий timeout для SHORT (24ч вместо 48ч)
+V7: Optimal Timeout - Лучшее из V5 и V6
+
+КОМБИНАЦИЯ:
+✅ Из V5: Расширенный SL (2-й swing) + проверенные TP/trailing
+✅ Из V6: Увеличенные timeout (80ч/64ч) → решает проблему -40% от TIMEOUT
+
+ПРОБЛЕМА V5:
+- TIMEOUT: 150 сделок = -40.58% PnL ❌ (главная проблема!)
+- SL: 22 сделки = -26.97% PnL
+
+ПРОБЛЕМА V6:
+- Фиксированный SL 0.8% = 123 SL hits (-101% PnL) ❌❌❌
+- Увеличенный timeout = 47 timeout (+14.14% PnL) ✅
+
+РЕШЕНИЕ V7:
+1. ✅ Из V6: Увеличенные timeout (+33%): 60→80ч, 48→64ч
+2. ✅ Из V5: Swing-based SL (2-й swing), НЕ фиксированный!
+3. ✅ Из V5: Проверенные TP, trailing, partial close
+
+ОЖИДАЕМЫЙ РЕЗУЛЬТАТ:
+- TIMEOUT: ~50 сделок, +15% PnL (как V6)
+- SL: ~25 сделок, -30% PnL (как V5, не 123!)
+- TRAILING: ~160 сделок, +100% PnL
+- ПРОГНОЗ: +55-60% PnL (лучше V5 на +10-15%)
 """
 
 import pandas as pd
@@ -15,34 +33,33 @@ import argparse
 from simplified_smc_strategy import SimplifiedSMCStrategy
 
 
-class ShortOptimizedBacktestV3:
-    """Backtest with asymmetric parameters for SHORT trades"""
+class TimeoutBacktestV7:
+    """V7: V5 parameters + V6 increased timeout"""
 
     def __init__(self, spread_points=2.0, commission_points=0.5, swap_per_day=-0.3):
         self.spread = spread_points
         self.commission = commission_points
         self.swap_per_day = swap_per_day
 
-        # LONG parameters (unchanged from baseline)
+        # LONG parameters - INCREASED TIMEOUT from V6 (+33%)
         self.long_trend_tp1 = 30
         self.long_trend_tp2 = 55
         self.long_trend_tp3 = 90
         self.long_trend_trailing = 18
-        self.long_trend_timeout = 60
+        self.long_trend_timeout = 80  # Was 60 in V5 (+33%)
 
         self.long_range_tp1 = 20
         self.long_range_tp2 = 35
         self.long_range_tp3 = 50
         self.long_range_trailing = 15
-        self.long_range_timeout = 48
+        self.long_range_timeout = 64  # Was 48 in V5 (+33%)
 
-        # SHORT parameters (OPTIMIZED!)
-        # SHORT TREND only - more conservative
-        self.short_trend_tp1 = 15  # Reduced from 30п
-        self.short_trend_tp2 = 25  # Reduced from 55п
-        self.short_trend_tp3 = 35  # Reduced from 90п
-        self.short_trend_trailing = 10  # Reduced from 18п
-        self.short_trend_timeout = 24  # Reduced from 60ч
+        # SHORT parameters - INCREASED TIMEOUT (+33%)
+        self.short_trend_tp1 = 15
+        self.short_trend_tp2 = 25
+        self.short_trend_tp3 = 35
+        self.short_trend_trailing = 10
+        self.short_trend_timeout = 32  # Was 24 in V5 (+33%)
 
         # SHORT RANGE - DISABLED (too many losses)
         self.short_range_enabled = False
@@ -118,17 +135,17 @@ class ShortOptimizedBacktestV3:
         """Run SHORT-optimized backtest"""
 
         print(f"\n{'='*80}")
-        print(f"📊 SHORT-OPTIMIZED ADAPTIVE BACKTEST V3")
+        print(f"📊 V7: OPTIMAL TIMEOUT (V5 + Increased Timeout)")
         print(f"{'='*80}")
         print(f"   Data: {len(df)} candles")
         print(f"   Period: {df.index[0]} to {df.index[-1]}")
 
-        print(f"\n   🎯 LONG PARAMETERS (unchanged):")
-        print(f"   TREND: TP {self.long_trend_tp1}/{self.long_trend_tp2}/{self.long_trend_tp3}п, Trailing {self.long_trend_trailing}п, Timeout {self.long_trend_timeout}ч")
-        print(f"   RANGE: TP {self.long_range_tp1}/{self.long_range_tp2}/{self.long_range_tp3}п, Trailing {self.long_range_trailing}п, Timeout {self.long_range_timeout}ч")
+        print(f"\n   🎯 LONG PARAMETERS (INCREASED TIMEOUT +33%):")
+        print(f"   TREND: TP {self.long_trend_tp1}/{self.long_trend_tp2}/{self.long_trend_tp3}п, Trailing {self.long_trend_trailing}п, Timeout {self.long_trend_timeout}ч (was 60)")
+        print(f"   RANGE: TP {self.long_range_tp1}/{self.long_range_tp2}/{self.long_range_tp3}п, Trailing {self.long_range_trailing}п, Timeout {self.long_range_timeout}ч (was 48)")
 
-        print(f"\n   📉 SHORT PARAMETERS (OPTIMIZED!):")
-        print(f"   TREND: TP {self.short_trend_tp1}/{self.short_trend_tp2}/{self.short_trend_tp3}п, Trailing {self.short_trend_trailing}п, Timeout {self.short_trend_timeout}ч")
+        print(f"\n   📉 SHORT PARAMETERS (INCREASED TIMEOUT):")
+        print(f"   TREND: TP {self.short_trend_tp1}/{self.short_trend_tp2}/{self.short_trend_tp3}п, Trailing {self.short_trend_trailing}п, Timeout {self.short_trend_timeout}ч (was 24)")
         print(f"   RANGE: {'DISABLED' if not self.short_range_enabled else 'ENABLED'}")
 
         print(f"\n   💰 COSTS:")
@@ -504,7 +521,7 @@ class ShortOptimizedBacktestV3:
 
 def main():
     """Main entry point"""
-    parser = argparse.ArgumentParser(description='SHORT-Optimized Backtest V3')
+    parser = argparse.ArgumentParser(description='V7 Backtest: Optimal Timeout (V5 + increased timeout)')
     parser.add_argument('--file', type=str, required=True, help='CSV file')
     args = parser.parse_args()
 
@@ -519,16 +536,16 @@ def main():
         df['is_ny'] = df.index.hour.isin(range(13, 20))
         df['is_active'] = df['is_london'] | df['is_ny']
 
-    # Create strategy (using SimplifiedSMCStrategy with FIXED stop loss calculation)
+    # Create strategy (using SimplifiedSMCStrategy with widened SL)
     strategy = SimplifiedSMCStrategy()
 
-    # Run SHORT-optimized backtest
-    backtest = ShortOptimizedBacktestV3()
+    # Run V7 backtest
+    backtest = TimeoutBacktestV7()
     trades_df = backtest.backtest(df, strategy)
 
     if trades_df is not None:
-        trades_df.to_csv('backtest_v3_short_optimized_results.csv', index=False)
-        print(f"\n💾 Results saved to backtest_v3_short_optimized_results.csv")
+        trades_df.to_csv('backtest_v7_timeout_results.csv', index=False)
+        print(f"\n💾 Results saved to backtest_v7_timeout_results.csv")
 
 
 if __name__ == "__main__":

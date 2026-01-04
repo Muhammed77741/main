@@ -1,10 +1,21 @@
 """
-SHORT-Optimized Adaptive Backtest V3
-На основе анализа SHORT сделок:
-1. SHORT ТОЛЬКО в TREND (не в RANGE!)
-2. Меньшие TP для SHORT (15/25/35п вместо 20/35/50п)
-3. Более быстрый trailing для SHORT (10п вместо 15п)
-4. Более короткий timeout для SHORT (24ч вместо 48ч)
+HYBRID Backtest V5 - Лучшее из V3 и V4
+
+ГИБРИДНЫЙ ПОДХОД:
+✅ Из V4: Расширенный SL (2-й swing вместо ближайшего) → сохранено +32% от меньших SL потерь
+❌ Из V3: Оригинальные TP (30/55/90 и 20/35/50) → TRAILING приносил +101% в V3 vs +63% в V4
+❌ Из V3: Оригинальные timeout (60ч/48ч) → меньше TIMEOUT выходов
+❌ Из V3: Оригинальные SHORT параметры (15/25/35п)
+✅ Из V3: Частичные закрытия 50%/30%/20% (проверенные)
+
+ОЖИДАЕМЫЙ РЕЗУЛЬТАТ:
+V3 база: +42.60% PnL
++ Улучшение от расширенного SL: +32% (меньше ложных SL)
+= ПРОГНОЗ: +70-75% PnL
+
+ИЗМЕНЕНИЯ vs V3:
+- ТОЛЬКО расширенный SL (используется 2-й swing в simplified_smc_strategy.py)
+- Всё остальное идентично V3
 """
 
 import pandas as pd
@@ -15,8 +26,8 @@ import argparse
 from simplified_smc_strategy import SimplifiedSMCStrategy
 
 
-class ShortOptimizedBacktestV3:
-    """Backtest with asymmetric parameters for SHORT trades"""
+class HybridBacktestV5:
+    """Hybrid V5: V3 parameters + V4 widened SL"""
 
     def __init__(self, spread_points=2.0, commission_points=0.5, swap_per_day=-0.3):
         self.spread = spread_points
@@ -118,7 +129,7 @@ class ShortOptimizedBacktestV3:
         """Run SHORT-optimized backtest"""
 
         print(f"\n{'='*80}")
-        print(f"📊 SHORT-OPTIMIZED ADAPTIVE BACKTEST V3")
+        print(f"📊 HYBRID BACKTEST V5 (V3 + Widened SL)")
         print(f"{'='*80}")
         print(f"   Data: {len(df)} candles")
         print(f"   Period: {df.index[0]} to {df.index[-1]}")
@@ -504,7 +515,7 @@ class ShortOptimizedBacktestV3:
 
 def main():
     """Main entry point"""
-    parser = argparse.ArgumentParser(description='SHORT-Optimized Backtest V3')
+    parser = argparse.ArgumentParser(description='Hybrid Backtest V5 (best of V3+V4)')
     parser.add_argument('--file', type=str, required=True, help='CSV file')
     args = parser.parse_args()
 
@@ -523,12 +534,12 @@ def main():
     strategy = SimplifiedSMCStrategy()
 
     # Run SHORT-optimized backtest
-    backtest = ShortOptimizedBacktestV3()
+    backtest = HybridBacktestV5()
     trades_df = backtest.backtest(df, strategy)
 
     if trades_df is not None:
-        trades_df.to_csv('backtest_v3_short_optimized_results.csv', index=False)
-        print(f"\n💾 Results saved to backtest_v3_short_optimized_results.csv")
+        trades_df.to_csv('backtest_v5_hybrid_results.csv', index=False)
+        print(f"\n💾 Results saved to backtest_v5_hybrid_results.csv")
 
 
 if __name__ == "__main__":

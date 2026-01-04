@@ -1,10 +1,30 @@
 """
-SHORT-Optimized Adaptive Backtest V3
-На основе анализа SHORT сделок:
-1. SHORT ТОЛЬКО в TREND (не в RANGE!)
-2. Меньшие TP для SHORT (15/25/35п вместо 20/35/50п)
-3. Более быстрый trailing для SHORT (10п вместо 15п)
-4. Более короткий timeout для SHORT (24ч вместо 48ч)
+V8: Improved Partial Close - V5 + оптимизированное закрытие
+
+ИЗМЕНЕНИЯ vs V5:
+✅ Partial close: 50%/30%/20% → 30%/30%/40%
+   - Меньше фиксируем на TP1 (50%→30%)
+   - Больше оставляем на TP2/TP3 (20%→40%)
+   - Цель: Больше прибыли от больших движений
+
+ПРОБЛЕМА V5:
+- Только 2.9% сделок достигают TP3
+- Слишком много фиксируем на TP1 (50%)
+- Все trailing происходят ПОСЛЕ TP1
+
+РЕШЕНИЕ V8:
+- Оставляем 40% позиции на TP3 (было 20%)
+- Больше шансов поймать большие движения
+- TRAILING будет работать с большей позицией после TP2
+
+БАЗОВЫЕ ПАРАМЕТРЫ (из V5):
+- TP, trailing, timeout - БЕЗ ИЗМЕНЕНИЙ
+- Расширенный SL (2-й swing) - БЕЗ ИЗМЕНЕНИЙ
+- SHORT параметры - БЕЗ ИЗМЕНЕНИЙ
+
+ОЖИДАЕМЫЙ РЕЗУЛЬТАТ:
+- V5: +45.81% PnL
+- Прогноз V8: +50-55% PnL (+5-10% улучшение)
 """
 
 import pandas as pd
@@ -15,8 +35,8 @@ import argparse
 from simplified_smc_strategy import SimplifiedSMCStrategy
 
 
-class ShortOptimizedBacktestV3:
-    """Backtest with asymmetric parameters for SHORT trades"""
+class PartialCloseBacktestV8:
+    """V8: V5 parameters + improved partial close (30%/30%/40%)"""
 
     def __init__(self, spread_points=2.0, commission_points=0.5, swap_per_day=-0.3):
         self.spread = spread_points
@@ -114,22 +134,27 @@ class ShortOptimizedBacktestV3:
 
         return 'TREND' if is_trend else 'RANGE'
 
-    def backtest(self, df, strategy, close_pct1=0.5, close_pct2=0.3, close_pct3=0.2):
-        """Run SHORT-optimized backtest"""
+    def backtest(self, df, strategy, close_pct1=0.3, close_pct2=0.3, close_pct3=0.4):
+        """Run V8 backtest with improved partial close"""
 
         print(f"\n{'='*80}")
-        print(f"📊 SHORT-OPTIMIZED ADAPTIVE BACKTEST V3")
+        print(f"📊 V8: IMPROVED PARTIAL CLOSE (V5 + Optimized Exits)")
         print(f"{'='*80}")
         print(f"   Data: {len(df)} candles")
         print(f"   Period: {df.index[0]} to {df.index[-1]}")
 
-        print(f"\n   🎯 LONG PARAMETERS (unchanged):")
+        print(f"\n   🎯 LONG PARAMETERS (unchanged from V5):")
         print(f"   TREND: TP {self.long_trend_tp1}/{self.long_trend_tp2}/{self.long_trend_tp3}п, Trailing {self.long_trend_trailing}п, Timeout {self.long_trend_timeout}ч")
         print(f"   RANGE: TP {self.long_range_tp1}/{self.long_range_tp2}/{self.long_range_tp3}п, Trailing {self.long_range_trailing}п, Timeout {self.long_range_timeout}ч")
 
-        print(f"\n   📉 SHORT PARAMETERS (OPTIMIZED!):")
+        print(f"\n   📉 SHORT PARAMETERS (unchanged from V5):")
         print(f"   TREND: TP {self.short_trend_tp1}/{self.short_trend_tp2}/{self.short_trend_tp3}п, Trailing {self.short_trend_trailing}п, Timeout {self.short_trend_timeout}ч")
         print(f"   RANGE: {'DISABLED' if not self.short_range_enabled else 'ENABLED'}")
+
+        print(f"\n   ✨ PARTIAL CLOSE (NEW!):")
+        print(f"   V5: 50% на TP1, 30% на TP2, 20% на TP3")
+        print(f"   V8: {int(close_pct1*100)}% на TP1, {int(close_pct2*100)}% на TP2, {int(close_pct3*100)}% на TP3")
+        print(f"   Цель: Больше прибыли от больших движений")
 
         print(f"\n   💰 COSTS:")
         print(f"   Spread: {self.spread}п")
@@ -504,7 +529,7 @@ class ShortOptimizedBacktestV3:
 
 def main():
     """Main entry point"""
-    parser = argparse.ArgumentParser(description='SHORT-Optimized Backtest V3')
+    parser = argparse.ArgumentParser(description='V8 Backtest: Improved Partial Close (30%/30%/40%)')
     parser.add_argument('--file', type=str, required=True, help='CSV file')
     args = parser.parse_args()
 
@@ -519,16 +544,16 @@ def main():
         df['is_ny'] = df.index.hour.isin(range(13, 20))
         df['is_active'] = df['is_london'] | df['is_ny']
 
-    # Create strategy (using SimplifiedSMCStrategy with FIXED stop loss calculation)
+    # Create strategy (using SimplifiedSMCStrategy with widened SL)
     strategy = SimplifiedSMCStrategy()
 
-    # Run SHORT-optimized backtest
-    backtest = ShortOptimizedBacktestV3()
+    # Run V8 backtest with improved partial close
+    backtest = PartialCloseBacktestV8()
     trades_df = backtest.backtest(df, strategy)
 
     if trades_df is not None:
-        trades_df.to_csv('backtest_v3_short_optimized_results.csv', index=False)
-        print(f"\n💾 Results saved to backtest_v3_short_optimized_results.csv")
+        trades_df.to_csv('backtest_v8_partial_results.csv', index=False)
+        print(f"\n💾 Results saved to backtest_v8_partial_results.csv")
 
 
 if __name__ == "__main__":
