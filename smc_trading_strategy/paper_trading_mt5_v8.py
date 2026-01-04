@@ -28,16 +28,17 @@ class LiveTradingBotV8:
     """
 
     def __init__(self, telegram_token=None, telegram_chat_id=None, check_interval=3600,
-                 symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1):
+                 symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1, timezone_offset=5):
         """
         Initialize live trading bot with V8 configuration
-        
+
         Args:
             telegram_token: Telegram bot token
             telegram_chat_id: Telegram chat ID
             check_interval: How often to check for signals (seconds), default 1 hour
             symbol: MT5 symbol (default: 'XAUUSD')
             timeframe: MT5 timeframe (default: mt5.TIMEFRAME_H1)
+            timezone_offset: Timezone offset in hours from UTC (default: 5 for UTC+5)
         """
         self.strategy = SimplifiedSMCStrategy()
         self.check_interval = check_interval
@@ -78,7 +79,7 @@ class LiveTradingBotV8:
 
         # Telegram notifier
         if telegram_token and telegram_chat_id:
-            self.notifier = TelegramNotifier(telegram_token, telegram_chat_id)
+            self.notifier = TelegramNotifier(telegram_token, telegram_chat_id, timezone_offset=timezone_offset)
         else:
             self.notifier = None
             print("⚠️  Telegram notifications disabled")
@@ -383,6 +384,22 @@ class LiveTradingBotV8:
                     pos['tp3_hit'] = True
                     print(f"   🎯 TP3 @ {pos['tp3_price']:.2f} (closed {self.close_pct3*100:.0f}%)")
 
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP3',
+                            'tp_price': pos['tp3_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct3,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': latest_time
+                        })
+
                 # Check TP2
                 if latest_high >= pos['tp2_price'] and not pos['tp2_hit']:
                     pnl_pct = ((pos['tp2_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct2
@@ -391,6 +408,22 @@ class LiveTradingBotV8:
                     pos['tp2_hit'] = True
                     print(f"   🎯 TP2 @ {pos['tp2_price']:.2f} (closed {self.close_pct2*100:.0f}%)")
 
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP2',
+                            'tp_price': pos['tp2_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct2,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': latest_time
+                        })
+
                 # Check TP1
                 if latest_high >= pos['tp1_price'] and not pos['tp1_hit']:
                     pnl_pct = ((pos['tp1_price'] - pos['entry_price']) / pos['entry_price']) * 100 * self.close_pct1
@@ -398,6 +431,22 @@ class LiveTradingBotV8:
                     pos['position_remaining'] -= self.close_pct1
                     pos['tp1_hit'] = True
                     print(f"   🎯 TP1 @ {pos['tp1_price']:.2f} (closed {self.close_pct1*100:.0f}%)")
+
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP1',
+                            'tp_price': pos['tp1_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct1,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': latest_time
+                        })
 
                     # Activate trailing stop
                     pos['trailing_active'] = True
@@ -429,23 +478,74 @@ class LiveTradingBotV8:
                     pos['total_pnl_pct'] += pnl_pct
                     pos['position_remaining'] -= self.close_pct3
                     pos['tp3_hit'] = True
-                    print(f"   🎯 TP3 @ {pos['tp3_price']:.2f}")
+                    print(f"   🎯 TP3 @ {pos['tp3_price']:.2f} (closed {self.close_pct3*100:.0f}%)")
+
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP3',
+                            'tp_price': pos['tp3_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct3,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': latest_time
+                        })
 
                 if latest_low <= pos['tp2_price'] and not pos['tp2_hit']:
                     pnl_pct = ((pos['entry_price'] - pos['tp2_price']) / pos['entry_price']) * 100 * self.close_pct2
                     pos['total_pnl_pct'] += pnl_pct
                     pos['position_remaining'] -= self.close_pct2
                     pos['tp2_hit'] = True
-                    print(f"   🎯 TP2 @ {pos['tp2_price']:.2f}")
+                    print(f"   🎯 TP2 @ {pos['tp2_price']:.2f} (closed {self.close_pct2*100:.0f}%)")
+
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP2',
+                            'tp_price': pos['tp2_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct2,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': latest_time
+                        })
 
                 if latest_low <= pos['tp1_price'] and not pos['tp1_hit']:
                     pnl_pct = ((pos['entry_price'] - pos['tp1_price']) / pos['entry_price']) * 100 * self.close_pct1
                     pos['total_pnl_pct'] += pnl_pct
                     pos['position_remaining'] -= self.close_pct1
                     pos['tp1_hit'] = True
+                    print(f"   🎯 TP1 @ {pos['tp1_price']:.2f} (closed {self.close_pct1*100:.0f}%)")
+
+                    # Send Telegram notification
+                    if self.notifier:
+                        pnl_points = (pnl_pct / 100) * pos['entry_price']
+                        self.notifier.send_partial_close({
+                            'direction': pos['direction'],
+                            'tp_level': 'TP1',
+                            'tp_price': pos['tp1_price'],
+                            'entry_price': pos['entry_price'],
+                            'close_pct': self.close_pct1,
+                            'pnl_pct': pnl_pct,
+                            'pnl_points': pnl_points,
+                            'position_remaining': pos['position_remaining'],
+                            'regime': pos.get('regime', 'N/A'),
+                            'timestamp': latest_time
+                        })
+
+                    # Activate trailing stop
                     pos['trailing_active'] = True
                     pos['trailing_sl'] = latest_close + pos['trailing_distance']
-                    print(f"   🎯 TP1 @ {pos['tp1_price']:.2f}")
+                    print(f"   📊 Trailing activated @ {pos['trailing_sl']:.2f}")
 
                 if pos['trailing_active']:
                     new_trailing_sl = latest_close + pos['trailing_distance']
@@ -490,7 +590,12 @@ class LiveTradingBotV8:
         """Main loop"""
         print(f"\n🚀 Starting Live Trading Bot V8...")
         print(f"   Check interval: {self.check_interval}s ({self.check_interval/3600:.1f}h)")
-        
+
+        # Test Telegram connection and send startup message
+        if self.notifier:
+            if self.notifier.test_connection():
+                self.notifier.send_startup_message()
+
         while True:
             try:
                 # Check for new signals
