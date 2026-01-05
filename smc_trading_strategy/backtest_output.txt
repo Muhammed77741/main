@@ -1,0 +1,112 @@
+================================================================================
+ICT PRICE ACTION STRATEGY - ENHANCED BACKTEST
+================================================================================
+
+Loading data from: ../XAUUSD_1H_MT5_20241227_20251227.csv
+Loaded 9371 candles from 2024-06-04 00:00:00 to 2026-01-02 22:00:00
+
+Initializing Enhanced ICT Price Action Strategy...
+
+Generating ICT signals...
+
+Running enhanced backtest with partial closes...
+Total signals: 1490
+
+================================================================================
+ICT PRICE ACTION STRATEGY - ENHANCED BACKTEST RESULTS
+================================================================================
+
+                              OVERALL PERFORMANCE                               
+--------------------------------------------------------------------------------
+  Total Trades:      291
+  Winning Trades:    87
+  Losing Trades:     204
+  Win Rate:          29.90%
+
+  Initial Capital:   $10,000.00
+  Final Balance:     $10,316.94
+  Total Return:      $316.94
+  Return %:          3.17%
+
+  Max Drawdown:      -219.94%
+  Profit Factor:     0.84
+
+  Gross Profit:      $72,346.00
+  Gross Loss:        $86,357.61
+  Average Win:       $831.56
+  Average Loss:      $-423.32
+
+                             BREAKDOWN BY DIRECTION                             
+--------------------------------------------------------------------------------
+
+  SHORT:
+    Trades: 96 | Wins: 4 | Losses: 92
+    Win Rate: 4.17% | Total PnL: $-23252.75
+
+  LONG:
+    Trades: 195 | Wins: 83 | Losses: 112
+    Win Rate: 42.56% | Total PnL: $9241.15
+
+                               BREAKDOWN BY MODE                                
+--------------------------------------------------------------------------------
+
+  RANGE:
+    Trades: 291 | Wins: 87 | Losses: 204
+    Win Rate: 29.90% | Total PnL: $-14011.60
+
+                             BREAKDOWN BY KILLZONE                              
+--------------------------------------------------------------------------------
+
+  none:
+    Trades: 278 | Wins: 82 | Losses: 196
+    Win Rate: 29.50% | Total PnL: $-15116.18
+
+  asian:
+    Trades: 12 | Wins: 5 | Losses: 7
+    Win Rate: 41.67% | Total PnL: $1246.46
+
+  new_york:
+    Trades: 1 | Wins: 0 | Losses: 1
+    Win Rate: 0.00% | Total PnL: $-141.88
+
+                             BREAKDOWN BY EXIT TYPE                             
+--------------------------------------------------------------------------------
+
+  SL:
+    Trades: 108 | Wins: 1 | Losses: 107
+    Win Rate: 0.93% | Total PnL: $-45379.09
+
+  TIMEOUT:
+    Trades: 182 | Wins: 85 | Losses: 97
+    Win Rate: 46.70% | Total PnL: $31351.31
+
+  TRAILING:
+    Trades: 1 | Wins: 1 | Losses: 0
+    Win Rate: 100.00% | Total PnL: $16.18
+
+                            ICT PATTERNS PERFORMANCE                            
+--------------------------------------------------------------------------------
+
+  PO3:
+    Count: 272 | Wins: 78 | Win Rate: 28.68%
+    Total PnL: $-17478.63
+
+  LiqSweep:
+    Count: 34 | Wins: 11 | Win Rate: 32.35%
+    Total PnL: $1755.36
+
+  OTE:
+    Count: 2 | Wins: 2 | Win Rate: 100.00%
+    Total PnL: $1312.82
+
+================================================================================
+
+Trade details saved to: ict_strategy_trades.csv
+
+Plot saved to: ict_strategy_backtest_results.png
+
+✅ Enhanced backtest completed successfully!
+
+Files generated:
+  - ict_strategy_trades.csv
+  - ict_strategy_backtest_results.png

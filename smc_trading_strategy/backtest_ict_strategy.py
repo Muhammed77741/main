@@ -132,16 +132,16 @@ class EnhancedICTBacktester:
         # Adaptive parameters
         self.params = {
             'TREND': {
-                'tp_levels': [40, 70, 120],  # TP1, TP2, TP3 in points
-                'tp_percentages': [0.5, 0.3, 0.2],  # 50%, 30%, 20%
-                'trailing_points': 20,
-                'timeout_hours': 60
-            },
-            'RANGE': {
-                'tp_levels': [25, 45, 70],  # TP1, TP2, TP3 in points
+                'tp_levels': [30, 55, 90],  # TP1, TP2, TP3 in points (more conservative)
                 'tp_percentages': [0.5, 0.3, 0.2],  # 50%, 30%, 20%
                 'trailing_points': 15,
-                'timeout_hours': 48
+                'timeout_hours': 72
+            },
+            'RANGE': {
+                'tp_levels': [20, 35, 55],  # TP1, TP2, TP3 in points (more conservative)
+                'tp_percentages': [0.5, 0.3, 0.2],  # 50%, 30%, 20%
+                'trailing_points': 12,
+                'timeout_hours': 60
             }
         }
         
@@ -450,11 +450,17 @@ class EnhancedICTBacktester:
         total_return = final_balance - self.initial_capital
         total_return_pct = (total_return / self.initial_capital) * 100
         
-        # Calculate max drawdown
+        # Calculate max drawdown (fixed calculation)
         equity_series = pd.Series(self.equity_curve)
-        rolling_max = equity_series.expanding().max()
-        drawdown = (equity_series - rolling_max) / rolling_max * 100
-        max_drawdown = drawdown.min()
+        running_max = equity_series.cummax()
+        drawdown_series = (equity_series - running_max) / running_max * 100
+        max_drawdown = drawdown_series.min()
+        
+        # Ensure max drawdown is reasonable
+        if max_drawdown < -100:
+            # Recalculate with absolute values
+            drawdown_absolute = equity_series - running_max
+            max_drawdown = (drawdown_absolute.min() / self.initial_capital) * 100
         
         # Profit factor
         gross_profit = winning_trades['total_pnl'].sum() if len(winning_trades) > 0 else 0

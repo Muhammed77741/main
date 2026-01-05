@@ -642,18 +642,18 @@ class ICTPriceActionStrategy:
         entry_price = signal_row['close']
         
         if signal == 1:  # Long
-            # Stop loss: below recent swing low
-            lookback = df.iloc[max(0, signal_idx-self.swing_length):signal_idx]
-            stop_loss = lookback['low'].min() * 0.998  # 0.2% buffer
+            # Stop loss: below recent swing low with more buffer
+            lookback = df.iloc[max(0, signal_idx-self.swing_length*2):signal_idx]
+            stop_loss = lookback['low'].min() * 0.995  # 0.5% buffer (wider)
             
             # Take profit: risk/reward ratio
             risk = entry_price - stop_loss
             take_profit = entry_price + (risk * self.risk_reward_ratio)
             
         else:  # Short
-            # Stop loss: above recent swing high
-            lookback = df.iloc[max(0, signal_idx-self.swing_length):signal_idx]
-            stop_loss = lookback['high'].max() * 1.002  # 0.2% buffer
+            # Stop loss: above recent swing high with more buffer
+            lookback = df.iloc[max(0, signal_idx-self.swing_length*2):signal_idx]
+            stop_loss = lookback['high'].max() * 1.005  # 0.5% buffer (wider)
             
             # Take profit: risk/reward ratio
             risk = stop_loss - entry_price
