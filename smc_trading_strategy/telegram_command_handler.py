@@ -220,8 +220,8 @@ class TelegramCommandHandler:
                 message += f"💵 Entry: {pos.price_open:.2f}\n"
                 message += f"📈 Current: {pos.price_current:.2f}\n"
                 message += f"💰 Profit: ${pos.profit:.2f} ({profit_pct:+.2f}%)\n"
-                message += f"🛑 SL: {pos.sl:.2f if pos.sl else 'None'}\n"
-                message += f"🎯 TP: {pos.tp:.2f if pos.tp else 'None'}\n"
+                message += f"🛑 SL: {pos.sl:.2f}\n" if pos.sl else "🛑 SL: None\n"
+                message += f"🎯 TP: {pos.tp:.2f}\n" if pos.tp else "🎯 TP: None\n"
                 message += "─────────────\n"
 
             await update.message.reply_text(message, parse_mode='Markdown')

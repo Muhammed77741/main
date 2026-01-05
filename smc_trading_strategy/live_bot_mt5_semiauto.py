@@ -483,11 +483,7 @@ class LiveBotMT5SemiAuto:
 
         # Send to Telegram
         if self.notifier:
-            self.notifier.send_message(
-                chat_id=self.notifier.chat_id,
-                text=message,
-                parse_mode='Markdown'
-            )
+            self.notifier.send_message(message)
 
         print(f"📱 Signal sent to Telegram. Waiting for confirmation...")
         print(f"   Signal ID: {signal_id}")

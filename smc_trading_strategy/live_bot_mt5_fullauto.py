@@ -482,11 +482,7 @@ class LiveBotMT5FullAuto:
             message += f"🎫 Ticket: {result.order}\n\n"
             message += f"✨ Bot will manage TP/SL automatically"
 
-            self.notifier.send_message(
-                chat_id=self.notifier.chat_id,
-                text=message,
-                parse_mode='Markdown'
-            )
+            self.notifier.send_message(message)
 
     def run(self):
         """Main loop - check for signals periodically"""
