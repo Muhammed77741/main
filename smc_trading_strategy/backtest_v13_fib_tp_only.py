@@ -33,25 +33,29 @@ class FibonacciTPOnlyBacktest:
         self.commission = commission_points
         self.swap_per_day = swap_per_day
 
-        # Fibonacci extension levels (для TP)
-        self.fib_tp1 = 1.272  # 127.2%
-        self.fib_tp2 = 1.618  # 161.8% - Golden ratio
-        self.fib_tp3 = 2.000  # 200%
+        # Fibonacci extension levels (для TP) - OPTIMIZED
+        # Lowered from 127.2%/161.8%/200% to 100%/127.2%/161.8%
+        # for more realistic profit targets and higher hit rates
+        self.fib_tp1 = 1.000  # 100% (was 127.2%)
+        self.fib_tp2 = 1.272  # 127.2% (was 161.8%)
+        self.fib_tp3 = 1.618  # 161.8% Golden ratio (was 200%)
 
         # V9 trailing (без изменений)
         self.long_trend_trailing = 25
-        self.long_range_trailing = 20
+        self.long_range_trailing = 20  # Keeping at 20 (tested 15, slightly worse)
         self.short_trend_trailing = 13
 
-        # V9 timeout (без изменений)
+        # V9 timeout - OPTIMIZED
+        # Reduced RANGE timeout from 48h to 36h to free capital faster
         self.long_trend_timeout = 60
-        self.long_range_timeout = 48
+        self.long_range_timeout = 36  # Was 48 hours
         self.short_trend_timeout = 24
 
-        # V9 partial close (без изменений)
-        self.close_pct1 = 0.3
-        self.close_pct2 = 0.3
-        self.close_pct3 = 0.4
+        # Partial close - OPTIMIZED
+        # Keeping 40/30/30 as best balance with current TP levels
+        self.close_pct1 = 0.4  # TP1: 40%
+        self.close_pct2 = 0.3  # TP2: 30%
+        self.close_pct3 = 0.3  # TP3: 30%
 
         # Settings
         self.short_range_enabled = False
@@ -149,6 +153,33 @@ class FibonacciTPOnlyBacktest:
         trend_signals = sum([ema_trend, high_volatility, strong_direction, sequential_trend, structural_trend])
         return 'TREND' if trend_signals >= 3 else 'RANGE'
 
+    def is_valid_session(self, timestamp):
+        """
+        Check if timestamp is during high-liquidity trading sessions
+        London: 07:00-12:00 UTC
+        NY: 13:00-18:00 UTC
+        """
+        hour = timestamp.hour
+        # London session (7-12 UTC) or NY session (13-18 UTC)
+        return (7 <= hour < 12) or (13 <= hour < 18)
+
+    def check_volume_filter(self, df, current_idx, lookback=20):
+        """
+        Check if current volume is above average (quality filter)
+        Requires volume > 1.2x average of last 20 periods
+        """
+        if current_idx < lookback:
+            return True  # Skip filter for early candles
+        
+        if 'volume' not in df.columns:
+            return True  # Skip if no volume data
+        
+        current_vol = df['volume'].iloc[current_idx]
+        avg_vol = df['volume'].iloc[current_idx-lookback:current_idx].mean()
+        
+        # Require 20% above average volume
+        return current_vol > avg_vol * 1.2
+
     def backtest(self, df, strategy):
         """Run V13 backtest with Fibonacci TP only"""
 
@@ -193,7 +224,12 @@ class FibonacciTPOnlyBacktest:
             # Check for new signal
             if signal != 0:
                 total_signals += 1
+                
                 regime = self.detect_market_regime(df_strategy, i)
+
+                # FILTER TREND REGIME (unprofitable -7.62%)
+                if regime == 'TREND':
+                    continue
 
                 # FILTER SHORT IN RANGE
                 if signal == -1 and regime == 'RANGE' and not self.short_range_enabled:

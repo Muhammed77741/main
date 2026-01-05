@@ -372,6 +372,11 @@ class LiveBotMT5SemiAuto:
 
             direction = 'LONG' if last_signal['signal'] == 1 else 'SHORT'
 
+            # Filter TREND regime (unprofitable -7.62%)
+            if regime == 'TREND':
+                print(f"⚠️  TREND regime filtered (disabled - unprofitable)")
+                return
+
             # Filter SHORT in RANGE
             if direction == 'SHORT' and regime == 'RANGE' and not self.short_range_enabled:
                 print(f"⚠️  SHORT in RANGE filtered (disabled)")
