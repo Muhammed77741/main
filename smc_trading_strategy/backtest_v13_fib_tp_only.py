@@ -48,10 +48,10 @@ class FibonacciTPOnlyBacktest:
         self.long_range_timeout = 48
         self.short_trend_timeout = 24
 
-        # V9 partial close (без изменений)
-        self.close_pct1 = 0.3
-        self.close_pct2 = 0.3
-        self.close_pct3 = 0.4
+        # Partial close (modified per user request)
+        self.close_pct1 = 0.4  # TP1: 40%
+        self.close_pct2 = 0.3  # TP2: 30%
+        self.close_pct3 = 0.3  # TP3: 30% (remaining)
 
         # Settings
         self.short_range_enabled = False
