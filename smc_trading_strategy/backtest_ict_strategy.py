@@ -55,6 +55,8 @@ class ICTBacktester:
         initial_capital: float = 10000,
         commission: float = 0.001,  # 0.1% per trade
         slippage: float = 0.0005,  # 0.05% slippage
+        use_partial_close: bool = True,  # NEW: Use 3 TP levels
+        use_trailing_stop: bool = True  # NEW: Trailing stop after TP1
     ):
         """
         Initialize backtester
@@ -63,12 +65,21 @@ class ICTBacktester:
             initial_capital: Starting capital
             commission: Commission per trade (as decimal)
             slippage: Slippage per trade (as decimal)
+            use_partial_close: Use 3 TP levels with partial closes
+            use_trailing_stop: Enable trailing stop after TP1
         """
         self.initial_capital = initial_capital
         self.commission = commission
         self.slippage = slippage
         self.trades = []
         self.equity_curve = []
+        self.use_partial_close = use_partial_close
+        self.use_trailing_stop = use_trailing_stop
+        
+        # Partial close percentages
+        self.tp1_pct = 0.4  # Close 40% at TP1
+        self.tp2_pct = 0.3  # Close 30% at TP2
+        self.tp3_pct = 0.3  # Close 30% at TP3
         
     def run_backtest(self, df: pd.DataFrame, strategy: ICTPriceActionStrategy) -> dict:
         """
@@ -100,38 +111,106 @@ class ICTBacktester:
             
             # Check if we have an open position
             if position is not None:
-                # Check for exit conditions
-                if position['direction'] == 1:  # Long position
-                    # Check stop loss
-                    if current_bar['low'] <= position['stop_loss']:
-                        exit_price = position['stop_loss']
-                        exit_reason = 'SL'
-                        self._close_position(position, exit_price, current_time, exit_reason, account_balance)
-                        account_balance = self._update_balance(position, exit_price, account_balance)
-                        position = None
-                    # Check take profit
-                    elif current_bar['high'] >= position['take_profit']:
-                        exit_price = position['take_profit']
-                        exit_reason = 'TP'
-                        self._close_position(position, exit_price, current_time, exit_reason, account_balance)
-                        account_balance = self._update_balance(position, exit_price, account_balance)
-                        position = None
+                direction = position['direction']
                 
-                elif position['direction'] == -1:  # Short position
-                    # Check stop loss
-                    if current_bar['high'] >= position['stop_loss']:
-                        exit_price = position['stop_loss']
-                        exit_reason = 'SL'
-                        self._close_position(position, exit_price, current_time, exit_reason, account_balance)
-                        account_balance = self._update_balance(position, exit_price, account_balance)
-                        position = None
-                    # Check take profit
-                    elif current_bar['low'] <= position['take_profit']:
-                        exit_price = position['take_profit']
-                        exit_reason = 'TP'
-                        self._close_position(position, exit_price, current_time, exit_reason, account_balance)
-                        account_balance = self._update_balance(position, exit_price, account_balance)
-                        position = None
+                # Check for partial TP levels
+                if self.use_partial_close:
+                    # TP1 check
+                    if not position['tp1_hit']:
+                        if (direction == 1 and current_bar['high'] >= position['tp1']) or \
+                           (direction == -1 and current_bar['low'] <= position['tp1']):
+                            # Close 40% at TP1
+                            close_size = position['position_size'] * self.tp1_pct
+                            pnl = self._calculate_partial_pnl(position, position['tp1'], close_size)
+                            account_balance += pnl
+                            
+                            position['remaining_size'] -= close_size
+                            position['tp1_hit'] = True
+                            position['partial_closes'].append({
+                                'time': current_time,
+                                'level': 'TP1',
+                                'price': position['tp1'],
+                                'size': close_size,
+                                'pnl': pnl
+                            })
+                            
+                            # Activate trailing stop after TP1
+                            if self.use_trailing_stop:
+                                position['trailing_active'] = True
+                    
+                    # TP2 check
+                    if position['tp1_hit'] and not position['tp2_hit']:
+                        if (direction == 1 and current_bar['high'] >= position['tp2']) or \
+                           (direction == -1 and current_bar['low'] <= position['tp2']):
+                            # Close 30% at TP2
+                            close_size = position['position_size'] * self.tp2_pct
+                            pnl = self._calculate_partial_pnl(position, position['tp2'], close_size)
+                            account_balance += pnl
+                            
+                            position['remaining_size'] -= close_size
+                            position['tp2_hit'] = True
+                            position['partial_closes'].append({
+                                'time': current_time,
+                                'level': 'TP2',
+                                'price': position['tp2'],
+                                'size': close_size,
+                                'pnl': pnl
+                            })
+                    
+                    # TP3 check - close remaining position
+                    if position['tp2_hit'] and not position['tp3_hit']:
+                        if (direction == 1 and current_bar['high'] >= position['tp3']) or \
+                           (direction == -1 and current_bar['low'] <= position['tp3']):
+                            # Close remaining 30% at TP3
+                            exit_price = position['tp3']
+                            exit_reason = 'TP3'
+                            self._close_position(position, exit_price, current_time, exit_reason, account_balance)
+                            account_balance = self._update_balance(position, exit_price, account_balance)
+                            position = None
+                            continue
+                    
+                    # Update trailing stop if active
+                    if position['trailing_active'] and position is not None:
+                        if direction == 1:
+                            new_trailing = current_bar['high'] - position['trailing_distance']
+                            position['stop_loss'] = max(position['stop_loss'], new_trailing)
+                        else:
+                            new_trailing = current_bar['low'] + position['trailing_distance']
+                            position['stop_loss'] = min(position['stop_loss'], new_trailing)
+                
+                # Check stop loss (on remaining position)
+                if position is not None:
+                    if direction == 1:  # Long position
+                        if current_bar['low'] <= position['stop_loss']:
+                            exit_price = position['stop_loss']
+                            exit_reason = 'SL'
+                            self._close_position(position, exit_price, current_time, exit_reason, account_balance)
+                            account_balance = self._update_balance(position, exit_price, account_balance)
+                            position = None
+                    elif direction == -1:  # Short position
+                        if current_bar['high'] >= position['stop_loss']:
+                            exit_price = position['stop_loss']
+                            exit_reason = 'SL'
+                            self._close_position(position, exit_price, current_time, exit_reason, account_balance)
+                            account_balance = self._update_balance(position, exit_price, account_balance)
+                            position = None
+                
+                # If not using partial close, check regular TP
+                if not self.use_partial_close and position is not None:
+                    if direction == 1:
+                        if current_bar['high'] >= position['take_profit']:
+                            exit_price = position['take_profit']
+                            exit_reason = 'TP'
+                            self._close_position(position, exit_price, current_time, exit_reason, account_balance)
+                            account_balance = self._update_balance(position, exit_price, account_balance)
+                            position = None
+                    elif direction == -1:
+                        if current_bar['low'] <= position['take_profit']:
+                            exit_price = position['take_profit']
+                            exit_reason = 'TP'
+                            self._close_position(position, exit_price, current_time, exit_reason, account_balance)
+                            account_balance = self._update_balance(position, exit_price, account_balance)
+                            position = None
             
             # Check for new signals (only if no position)
             if position is None and current_bar['signal'] != 0:
@@ -146,15 +225,42 @@ class ICTBacktester:
                     else:
                         entry_price *= (1 - self.slippage)
                     
+                    # Calculate TP levels for partial close
+                    risk = abs(entry_price - entry_params['stop_loss'])
+                    
                     position = {
                         'entry_time': current_time,
                         'entry_price': entry_price,
                         'stop_loss': entry_params['stop_loss'],
                         'take_profit': entry_params['take_profit'],
                         'position_size': entry_params['position_size'],
+                        'remaining_size': entry_params['position_size'],
                         'direction': entry_params['signal'],
-                        'entry_reason': entry_params['entry_reason']
+                        'entry_reason': entry_params['entry_reason'],
+                        'signal_confidence': entry_params.get('signal_confidence', 'high'),
+                        'risk_reward_ratio': entry_params.get('risk_reward_ratio', 2.5),
+                        'tp1_hit': False,
+                        'tp2_hit': False,
+                        'tp3_hit': False,
+                        'trailing_active': False,
+                        'trailing_distance': 20,  # 20 points trailing distance
+                        'partial_closes': []
                     }
+                    
+                    # Calculate TP levels
+                    if self.use_partial_close:
+                        if position['direction'] == 1:  # LONG
+                            position['tp1'] = entry_price + (risk * 1.0)  # 1:1
+                            position['tp2'] = entry_price + (risk * 2.0)  # 1:2
+                            position['tp3'] = entry_price + (risk * 3.0)  # 1:3
+                        else:  # SHORT
+                            position['tp1'] = entry_price - (risk * 1.0)
+                            position['tp2'] = entry_price - (risk * 2.0)
+                            position['tp3'] = entry_price - (risk * 3.0)
+                    else:
+                        position['tp1'] = entry_params['take_profit']
+                        position['tp2'] = entry_params['take_profit']
+                        position['tp3'] = entry_params['take_profit']
             
             # Update equity curve
             if position is not None:
@@ -179,17 +285,37 @@ class ICTBacktester:
         
         return results
     
+    def _calculate_partial_pnl(self, position, exit_price, close_size):
+        """Calculate P&L for a partial close"""
+        if position['direction'] == 1:
+            pnl = (exit_price - position['entry_price']) * close_size
+        else:
+            pnl = (position['entry_price'] - exit_price) * close_size
+        
+        # Apply commission
+        commission_cost = exit_price * close_size * self.commission
+        pnl -= commission_cost
+        
+        return pnl
+    
     def _close_position(self, position, exit_price, exit_time, exit_reason, account_balance):
         """Close a position and record the trade"""
+        # Use remaining size for final close (if partial closes happened)
+        close_size = position.get('remaining_size', position['position_size'])
+        
         if position['direction'] == 1:
-            pnl = (exit_price - position['entry_price']) * position['position_size']
+            pnl = (exit_price - position['entry_price']) * close_size
         else:
-            pnl = (position['entry_price'] - exit_price) * position['position_size']
+            pnl = (position['entry_price'] - exit_price) * close_size
         
         # Apply commission
         commission_cost = (position['entry_price'] * position['position_size'] * self.commission +
-                          exit_price * position['position_size'] * self.commission)
+                          exit_price * close_size * self.commission)
         pnl -= commission_cost
+        
+        # Add partial close PnLs
+        total_partial_pnl = sum([pc['pnl'] for pc in position.get('partial_closes', [])])
+        total_pnl = pnl + total_partial_pnl
         
         trade_record = {
             'entry_time': position['entry_time'],
@@ -200,26 +326,33 @@ class ICTBacktester:
             'stop_loss': position['stop_loss'],
             'take_profit': position['take_profit'],
             'position_size': position['position_size'],
-            'pnl': pnl,
-            'pnl_pct': (pnl / (position['entry_price'] * position['position_size'])) * 100,
+            'pnl': total_pnl,
+            'pnl_pct': (total_pnl / (position['entry_price'] * position['position_size'])) * 100,
             'exit_reason': exit_reason,
-            'entry_reason': position['entry_reason']
+            'entry_reason': position['entry_reason'],
+            'signal_confidence': position.get('signal_confidence', 'high'),
+            'risk_reward_ratio': position.get('risk_reward_ratio', 2.5),
+            'partial_closes': len(position.get('partial_closes', []))
         }
         
         self.trades.append(trade_record)
     
     def _update_balance(self, position, exit_price, account_balance):
         """Update account balance after closing position"""
+        # Use remaining size for final close
+        close_size = position.get('remaining_size', position['position_size'])
+        
         if position['direction'] == 1:
-            pnl = (exit_price - position['entry_price']) * position['position_size']
+            pnl = (exit_price - position['entry_price']) * close_size
         else:
-            pnl = (position['entry_price'] - exit_price) * position['position_size']
+            pnl = (position['entry_price'] - exit_price) * close_size
         
         # Apply commission
         commission_cost = (position['entry_price'] * position['position_size'] * self.commission +
-                          exit_price * position['position_size'] * self.commission)
+                          exit_price * close_size * self.commission)
         pnl -= commission_cost
         
+        # Note: partial close PnLs already added to account_balance during execution
         return account_balance + pnl
     
     def _calculate_statistics(self, final_balance):
@@ -269,7 +402,22 @@ class ICTBacktester:
         avg_win = winning_trades['pnl'].mean() if len(winning_trades) > 0 else 0
         avg_loss = losing_trades['pnl'].mean() if len(losing_trades) > 0 else 0
         
-        return {
+        # Confidence level statistics (if available)
+        confidence_stats = {}
+        if 'signal_confidence' in trades_df.columns:
+            for conf_level in ['high', 'medium', 'low']:
+                conf_trades = trades_df[trades_df['signal_confidence'] == conf_level]
+                if len(conf_trades) > 0:
+                    conf_wins = (conf_trades['pnl'] > 0).sum()
+                    confidence_stats[f'{conf_level}_conf_trades'] = len(conf_trades)
+                    confidence_stats[f'{conf_level}_conf_wr'] = (conf_wins / len(conf_trades) * 100)
+                    confidence_stats[f'{conf_level}_conf_avg_pnl'] = conf_trades['pnl'].mean()
+                else:
+                    confidence_stats[f'{conf_level}_conf_trades'] = 0
+                    confidence_stats[f'{conf_level}_conf_wr'] = 0
+                    confidence_stats[f'{conf_level}_conf_avg_pnl'] = 0
+        
+        results = {
             'total_trades': total_trades,
             'winning_trades': num_winning,
             'losing_trades': num_losing,
@@ -285,6 +433,11 @@ class ICTBacktester:
             'gross_profit': gross_profit,
             'gross_loss': gross_loss
         }
+        
+        # Add confidence stats
+        results.update(confidence_stats)
+        
+        return results
     
     def plot_results(self, df: pd.DataFrame, results: dict, save_path: str = None):
         """
@@ -372,6 +525,20 @@ class ICTBacktester:
         print(f"  Gross Loss:        ${results['gross_loss']:,.2f}")
         print(f"  Average Win:       ${results['avg_win']:,.2f}")
         print(f"  Average Loss:      ${results['avg_loss']:,.2f}")
+        
+        # Print confidence level statistics if available
+        if 'high_conf_trades' in results:
+            print(f"\nSignal Confidence Breakdown:")
+            print(f"  High Confidence:   {results['high_conf_trades']} trades, "
+                  f"{results['high_conf_wr']:.1f}% WR, "
+                  f"${results['high_conf_avg_pnl']:.2f} avg")
+            print(f"  Medium Confidence: {results['medium_conf_trades']} trades, "
+                  f"{results['medium_conf_wr']:.1f}% WR, "
+                  f"${results['medium_conf_avg_pnl']:.2f} avg")
+            print(f"  Low Confidence:    {results['low_conf_trades']} trades, "
+                  f"{results['low_conf_wr']:.1f}% WR, "
+                  f"${results['low_conf_avg_pnl']:.2f} avg")
+        
         print("="*60)
     
     def save_trades(self, filepath: str):
@@ -389,32 +556,48 @@ def main():
     CSV_FILE = '../XAUUSD_1H_MT5.csv'
     INITIAL_CAPITAL = 10000
     RISK_PER_TRADE = 0.02  # 2%
-    RISK_REWARD_RATIO = 2.0  # 1:2
+    RISK_REWARD_RATIO = 2.5  # Baseline for adaptive (will adjust 2.0-3.0)
     
     print("="*60)
-    print("ICT PRICE ACTION STRATEGY BACKTEST")
+    print("ICT PRICE ACTION STRATEGY BACKTEST (IMPROVED)")
     print("="*60)
     
     # Load data
     print(f"\nLoading data from: {CSV_FILE}")
     df = load_data(CSV_FILE)
     
-    # Initialize strategy
-    print("\nInitializing ICT Price Action Strategy...")
+    # Initialize strategy with NEW improvements
+    print("\nInitializing IMPROVED ICT Price Action Strategy...")
+    print("  ✓ Flexible entry conditions (Tier 1/2/3)")
+    print("  ✓ Expanded kill zones (15h/day)")
+    print("  ✓ ATR-based adaptive R:R (2.0-3.0)")
+    print("  ✓ Premium/Discount zone filter")
+    print("  ✓ Volume confirmation")
+    
     strategy = ICTPriceActionStrategy(
         risk_reward_ratio=RISK_REWARD_RATIO,
         risk_per_trade=RISK_PER_TRADE,
         swing_length=10,
         fvg_threshold=0.001,  # 0.1% minimum gap
         liquidity_lookback=20,
-        use_kill_zones=True  # Use London/NY kill zones
+        use_kill_zones=True,  # Expanded kill zones
+        use_adaptive_rr=True,  # NEW: ATR-based R:R
+        use_premium_discount=True,  # NEW: Premium/discount filter
+        use_volume_confirmation=True,  # NEW: Volume filter
+        use_flexible_entry=True  # NEW: Tier-based entries
     )
     
-    # Initialize backtester
+    # Initialize backtester with NEW features
+    print("\nInitializing backtester with:")
+    print("  ✓ 3 TP levels (40%/30%/30% partial close)")
+    print("  ✓ Trailing stop after TP1")
+    
     backtester = ICTBacktester(
         initial_capital=INITIAL_CAPITAL,
         commission=0.001,  # 0.1%
-        slippage=0.0005   # 0.05%
+        slippage=0.0005,  # 0.05%
+        use_partial_close=True,  # NEW: 3 TP levels
+        use_trailing_stop=True  # NEW: Trailing stop
     )
     
     # Run backtest
@@ -423,14 +606,14 @@ def main():
     # Print results
     backtester.print_results(results)
     
-    # Save results
-    backtester.save_trades('ict_strategy_trades.csv')
-    backtester.plot_results(df, results, 'ict_strategy_backtest_results.png')
+    # Save results with new filename
+    backtester.save_trades('ict_strategy_improved_trades.csv')
+    backtester.plot_results(df, results, 'ict_strategy_improved_backtest_results.png')
     
-    print("\n✅ Backtest completed successfully!")
+    print("\n✅ IMPROVED Backtest completed successfully!")
     print("\nFiles generated:")
-    print("  - ict_strategy_trades.csv")
-    print("  - ict_strategy_backtest_results.png")
+    print("  - ict_strategy_improved_trades.csv")
+    print("  - ict_strategy_improved_backtest_results.png")
 
 
 if __name__ == '__main__':
