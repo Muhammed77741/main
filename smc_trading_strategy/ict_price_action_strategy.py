@@ -5,7 +5,7 @@ Based on key ICT concepts:
 - Order Blocks (institutional entry zones)
 - Fair Value Gaps (imbalance zones)
 - Market Structure Shifts (BOS/ChoCh)
-- Kill Zones (London/New York sessions)
+- Kill Zones (London/New York sessions - UTC times)
 - Power of 3 (Accumulation, Manipulation, Distribution)
 """
 
@@ -24,7 +24,7 @@ class ICTPriceActionStrategy:
     2. Order Blocks - institutional entry zones after liquidity grab
     3. Fair Value Gaps (FVG) - price inefficiencies to be filled
     4. Market Structure - Higher Highs/Lows (bullish) or Lower Highs/Lows (bearish)
-    5. Kill Zones - optimal trading times (London: 02:00-05:00, NY: 07:00-10:00 ET)
+    5. Kill Zones - optimal trading times (London: 02:00-05:00 UTC, NY: 13:00-16:00 UTC)
     """
     
     def __init__(
@@ -227,7 +227,7 @@ class ICTPriceActionStrategy:
         
         Kill Zones (UTC time):
         - London Kill Zone: 02:00 - 05:00 UTC
-        - New York Kill Zone: 13:00 - 16:00 UTC (07:00 - 10:00 ET)
+        - New York Kill Zone: 13:00 - 16:00 UTC (08:00 - 11:00 EST / 09:00 - 12:00 EDT)
         
         Args:
             timestamp: Datetime to check
