@@ -589,14 +589,14 @@ class LiveBotMT5SemiAuto:
             try:
                 with self.open_positions_lock:
                     if len(self.open_positions) == 0:
-                        time.sleep(60)
+                        time.sleep(10)  # Check every 10s when no positions
                         continue
 
                     # Check each position
                     for position in self.open_positions[:]:  # Copy list to avoid modification issues
                         self.check_position(position)
 
-                time.sleep(60)  # Check every minute
+                time.sleep(5)  # Check every 5 seconds when positions open
 
             except Exception as e:
                 print(f"❌ Error in position monitor: {e}")
@@ -647,24 +647,12 @@ class LiveBotMT5SemiAuto:
                 self.open_positions.remove(position)
             return
 
-        # Check TP hits
+        # Check TP hits (check TP1 first, then TP2, then TP3)
         direction = position['direction']
 
         if direction == 'LONG':
-            # Check TP3
-            if not position['tp3_hit'] and current_price >= position['tp3_price']:
-                print(f"🎯 TP3 HIT! Closing remaining {self.close_pct3*100:.0f}%")
-                self.execute_partial_close(position, self.close_pct3, 'TP3')
-                position['tp3_hit'] = True
-
-            # Check TP2
-            elif not position['tp2_hit'] and current_price >= position['tp2_price']:
-                print(f"🎯 TP2 HIT! Closing {self.close_pct2*100:.0f}%")
-                self.execute_partial_close(position, self.close_pct2, 'TP2')
-                position['tp2_hit'] = True
-
-            # Check TP1
-            elif not position['tp1_hit'] and current_price >= position['tp1_price']:
+            # Check TP1 first (closest to entry)
+            if not position['tp1_hit'] and current_price >= position['tp1_price']:
                 print(f"🎯 TP1 HIT! Closing {self.close_pct1*100:.0f}%")
                 self.execute_partial_close(position, self.close_pct1, 'TP1')
                 position['tp1_hit'] = True
@@ -675,21 +663,21 @@ class LiveBotMT5SemiAuto:
                 self.modify_position(ticket, sl=new_sl)
                 position['stop_loss'] = new_sl
 
-        else:  # SHORT
-            # Check TP3
-            if not position['tp3_hit'] and current_price <= position['tp3_price']:
-                print(f"🎯 TP3 HIT! Closing remaining {self.close_pct3*100:.0f}%")
-                self.execute_partial_close(position, self.close_pct3, 'TP3')
-                position['tp3_hit'] = True
-
-            # Check TP2
-            elif not position['tp2_hit'] and current_price <= position['tp2_price']:
+            # Check TP2 independently (not elif!)
+            if not position['tp2_hit'] and current_price >= position['tp2_price']:
                 print(f"🎯 TP2 HIT! Closing {self.close_pct2*100:.0f}%")
                 self.execute_partial_close(position, self.close_pct2, 'TP2')
                 position['tp2_hit'] = True
 
-            # Check TP1
-            elif not position['tp1_hit'] and current_price <= position['tp1_price']:
+            # Check TP3 independently (not elif!)
+            if not position['tp3_hit'] and current_price >= position['tp3_price']:
+                print(f"🎯 TP3 HIT! Closing remaining {self.close_pct3*100:.0f}%")
+                self.execute_partial_close(position, self.close_pct3, 'TP3')
+                position['tp3_hit'] = True
+
+        else:  # SHORT
+            # Check TP1 first (closest to entry)
+            if not position['tp1_hit'] and current_price <= position['tp1_price']:
                 print(f"🎯 TP1 HIT! Closing {self.close_pct1*100:.0f}%")
                 self.execute_partial_close(position, self.close_pct1, 'TP1')
                 position['tp1_hit'] = True
@@ -699,6 +687,18 @@ class LiveBotMT5SemiAuto:
                 print(f"📊 Moving SL to trailing: {new_sl:.2f}")
                 self.modify_position(ticket, sl=new_sl)
                 position['stop_loss'] = new_sl
+
+            # Check TP2 independently (not elif!)
+            if not position['tp2_hit'] and current_price <= position['tp2_price']:
+                print(f"🎯 TP2 HIT! Closing {self.close_pct2*100:.0f}%")
+                self.execute_partial_close(position, self.close_pct2, 'TP2')
+                position['tp2_hit'] = True
+
+            # Check TP3 independently (not elif!)
+            if not position['tp3_hit'] and current_price <= position['tp3_price']:
+                print(f"🎯 TP3 HIT! Closing remaining {self.close_pct3*100:.0f}%")
+                self.execute_partial_close(position, self.close_pct3, 'TP3')
+                position['tp3_hit'] = True
 
         # Update trailing stop (if TP1 already hit)
         if position['tp1_hit']:
