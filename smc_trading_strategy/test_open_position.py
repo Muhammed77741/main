@@ -282,9 +282,11 @@ class MT5PositionTester:
             print(f"   ├─ Volume: {pos.volume}")
             print(f"   ├─ Entry: {pos.price_open:.2f}")
             print(f"   ├─ Current: {pos.price_current:.2f}")
-            print(f"   ├─ SL: {pos.sl:.2f if pos.sl else 'None'}")
-            print(f"   ├─ TP: {pos.tp:.2f if pos.tp else 'None'}")
-            print(f"   ├─ Profit: {pos.profit:.2f} {mt5.account_info().currency if mt5.account_info() else 'USD'}")
+            print(f"   ├─ SL: {pos.sl:.2f}" if pos.sl else "   ├─ SL: None")
+            print(f"   ├─ TP: {pos.tp:.2f}" if pos.tp else "   ├─ TP: None")
+            account = mt5.account_info()
+            currency = account.currency if account else 'USD'
+            print(f"   ├─ Profit: {pos.profit:.2f} {currency}")
             print(f"   └─ Time: {datetime.fromtimestamp(pos.time)}\n")
 
     def shutdown(self):

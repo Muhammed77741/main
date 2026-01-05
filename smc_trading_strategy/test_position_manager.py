@@ -239,8 +239,8 @@ class PositionManagerTester:
         print(f"   Volume: {pos.volume:.2f} lots")
         print(f"   Entry: {pos.price_open:.2f}")
         print(f"   Current: {pos.price_current:.2f}")
-        print(f"   SL: {pos.sl:.2f if pos.sl else 'None'}")
-        print(f"   TP: {pos.tp:.2f if pos.tp else 'None'}")
+        print(f"   SL: {pos.sl:.2f}" if pos.sl else "   SL: None")
+        print(f"   TP: {pos.tp:.2f}" if pos.tp else "   TP: None")
         print(f"   Profit: ${pos.profit:.2f}")
         print(f"   Comment: {pos.comment}")
         print(f"   Open time: {datetime.fromtimestamp(pos.time)}")
@@ -271,7 +271,7 @@ class PositionManagerTester:
                 print(f"   {direction} {pos.volume:.2f} @ {pos.price_open:.2f}")
                 print(f"   Current: {current_price:.2f}")
                 print(f"   Profit: ${pos.profit:.2f} ({profit_pct:+.2f}%)")
-                print(f"   SL: {pos.sl:.2f if pos.sl else 'None'}")
+                print(f"   SL: {pos.sl:.2f}" if pos.sl else "   SL: None")
 
                 last_price = current_price
 
