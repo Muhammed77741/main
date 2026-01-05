@@ -106,6 +106,7 @@ class EnhancedICTBacktester:
         swap_per_day: float = -0.3,  # -0.3 points per day
         max_positions: int = 5,
         point_value: float = 1.0,  # 1 point = $1 for XAUUSD
+        position_size_divisor: float = 100000,  # Position sizing constant
     ):
         """
         Initialize enhanced backtester
@@ -117,6 +118,7 @@ class EnhancedICTBacktester:
             swap_per_day: Swap cost per day in points
             max_positions: Maximum concurrent positions
             point_value: Dollar value per point
+            position_size_divisor: Divisor for position size calculation
         """
         self.initial_capital = initial_capital
         self.spread_points = spread_points
@@ -124,6 +126,7 @@ class EnhancedICTBacktester:
         self.swap_per_day = swap_per_day
         self.max_positions = max_positions
         self.point_value = point_value
+        self.position_size_divisor = position_size_divisor
         
         self.trades = []
         self.equity_curve = []
@@ -229,7 +232,7 @@ class EnhancedICTBacktester:
             entry_price -= self.spread_points
         
         # Calculate position size (simplified: 0.01 lot per $1000)
-        position_size = max(0.01, self.initial_capital / 100000)
+        position_size = max(0.01, self.initial_capital / self.position_size_divisor)
         
         # Calculate TP levels based on mode
         tp_levels = []
