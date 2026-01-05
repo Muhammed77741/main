@@ -195,6 +195,10 @@ class FibonacciTPOnlyBacktest:
                 total_signals += 1
                 regime = self.detect_market_regime(df_strategy, i)
 
+                # FILTER TREND REGIME (unprofitable -7.62%)
+                if regime == 'TREND':
+                    continue
+
                 # FILTER SHORT IN RANGE
                 if signal == -1 and regime == 'RANGE' and not self.short_range_enabled:
                     continue
