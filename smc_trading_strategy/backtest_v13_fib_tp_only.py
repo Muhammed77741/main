@@ -42,7 +42,7 @@ class FibonacciTPOnlyBacktest:
 
         # V9 trailing (без изменений)
         self.long_trend_trailing = 25
-        self.long_range_trailing = 20
+        self.long_range_trailing = 20  # Keeping at 20 (tested 15, slightly worse)
         self.short_trend_trailing = 13
 
         # V9 timeout - OPTIMIZED
