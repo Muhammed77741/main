@@ -142,7 +142,8 @@ def print_backtest_summary(trades_df, data_file):
     print(f"   Max Loss: {max_loss:+.2f}%")
     
     if avg_loss != 0:
-        profit_factor = (avg_win * wins) / (-avg_loss * losses)
+        # avg_loss is already negative, so use abs() for proper profit factor
+        profit_factor = (avg_win * wins) / (abs(avg_loss) * losses)
         print(f"   Profit Factor: {profit_factor:.2f}")
     
     print(f"\n⏱️  DURATION METRICS")
@@ -151,9 +152,9 @@ def print_backtest_summary(trades_df, data_file):
     print(f"   Max Duration: {trades_df['duration_hours'].max():.1f} hours")
     
     # TP Analysis
-    tp1_hits = len(trades_df[trades_df['tp1_hit']])
-    tp2_hits = len(trades_df[trades_df['tp2_hit']])
-    tp3_hits = len(trades_df[trades_df['tp3_hit']])
+    tp1_hits = trades_df['tp1_hit'].sum()
+    tp2_hits = trades_df['tp2_hit'].sum()
+    tp3_hits = trades_df['tp3_hit'].sum()
     
     print(f"\n🎯 TP HIT RATES")
     print(f"   TP1 (Fib 127.2%): {tp1_hits}/{total_trades} ({tp1_hits/total_trades*100:.1f}%)")
