@@ -63,6 +63,69 @@ This is an implementation of the **ICT (Inner Circle Trader) Price Action Strate
 - **Stop Loss**: Below recent swing low (long) / Above recent swing high (short) with 0.2% buffer
 - **Take Profit**: 2x the risk distance from entry
 
+## Version 2 Improvements (CRITICAL FIXES)
+
+### Changes Made:
+1. ✅ **Flexible Entry Conditions**: Multi-level confidence scoring
+   - Core requirement: Liq Sweep + (OB or FVG) + MSS (unchanged from V1)
+   - High confidence: All 4 indicators present (Sweep + OB + FVG + MSS)
+   - Medium confidence: 3 indicators present
+   - Confidence tracking added for future optimization
+   
+2. ✅ **Extended Kill Zones**: 6h → 15h trading time
+   - Asian: 00:00-03:00 GMT (3h) - NEW
+   - London: 07:00-12:00 GMT (5h) - extended from 02:00-05:00
+   - New York: 13:00-20:00 GMT (7h) - extended from 13:00-16:00
+   - Result: 2.5x more trading opportunities
+
+3. ✅ **Adaptive R:R by ATR**: Dynamic targets based on volatility
+   - High volatility (>1.5x avg): 1:2.5
+   - Normal volatility: 1:2.0
+   - Low volatility: 1:1.8
+   - More realistic than fixed 1:2 ratio
+
+4. ✅ **Position Sizing Safety**: Prevent over-leveraging
+   - Maximum position value capped at 50% of account
+   - Prevents catastrophic losses from tight stop losses
+   
+5. ⚠️ **Premium/Discount Filter**: Not implemented in final version
+   - Testing showed it reduced win rate without improving returns
+   - Code present but not active - can be enabled for testing
+
+### Actual Results (Version 2):
+
+**Test Period**: June 2024 - January 2026 (9,371 hourly candles, same as V1)
+
+| Metric | V1 (Original) | V2 (Improved) | Change |
+|--------|---------------|---------------|---------|
+| **Total Trades** | 11 | 28 | +155% ✅ |
+| **Win Rate** | 45.45% | 32.14% | -29% ⚠️ |
+| **Total Return** | +1.33% | -1.85% | -3.18% ⚠️ |
+| **Max Drawdown** | -11.77% | -4.37% | +63% better ✅ |
+| **Profit Factor** | 1.08 | 0.83 | -23% ⚠️ |
+| **Avg Win** | $344.52 | $102.79 | -70% |
+| **Avg Loss** | -$264.86 | -$58.44 | +78% better ✅ |
+| **Sharpe Ratio** | 0.03 | -0.07 | Worse |
+
+### Analysis:
+
+**Improvements:**
+- ✅ **2.5x more trades**: Extended kill zones working as intended
+- ✅ **Lower drawdown**: Better risk management with position size caps
+- ✅ **Smaller losses**: Adaptive R:R and safer position sizing
+
+**Issues:**
+- ⚠️ **Lower win rate**: Entry conditions need refinement
+- ⚠️ **Slightly negative**: Not profitable but close to break-even
+- ⚠️ **Lower profit factor**: Wins smaller than V1
+
+### Recommendations for V3:
+1. Add filter to improve entry quality (e.g., trend alignment)
+2. Consider partial profit taking to improve win rate
+3. Test premium/discount zones with different parameters
+4. Optimize ATR period and R:R thresholds
+5. Add volume confirmation or other confluence factors
+
 ## Backtest Results (XAUUSD 1H Data)
 
 **Test Period**: June 2024 - January 2026 (9,371 hourly candles)
