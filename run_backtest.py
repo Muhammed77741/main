@@ -113,7 +113,7 @@ def print_backtest_summary(trades_df, data_file):
         return
     
     total_trades = len(trades_df)
-    wins = len(trades_df[trades_df['pnl_pct'] > 0])
+    wins = (trades_df['pnl_pct'] > 0).sum()
     losses = total_trades - wins
     win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
     
@@ -173,7 +173,7 @@ def print_backtest_summary(trades_df, data_file):
     for direction in ['LONG', 'SHORT']:
         dir_trades = trades_df[trades_df['direction'] == direction]
         if len(dir_trades) > 0:
-            dir_wins = len(dir_trades[dir_trades['pnl_pct'] > 0])
+            dir_wins = (dir_trades['pnl_pct'] > 0).sum()
             dir_wr = (dir_wins / len(dir_trades) * 100)
             dir_pnl = dir_trades['pnl_pct'].sum()
             print(f"   {direction}: {len(dir_trades)} trades, {dir_wr:.1f}% WR, {dir_pnl:+.2f}% PnL")
@@ -184,7 +184,7 @@ def print_backtest_summary(trades_df, data_file):
         for regime in ['TREND', 'RANGE']:
             reg_trades = trades_df[trades_df['regime'] == regime]
             if len(reg_trades) > 0:
-                reg_wins = len(reg_trades[reg_trades['pnl_pct'] > 0])
+                reg_wins = (reg_trades['pnl_pct'] > 0).sum()
                 reg_wr = (reg_wins / len(reg_trades) * 100)
                 reg_pnl = reg_trades['pnl_pct'].sum()
                 print(f"   {regime}: {len(reg_trades)} trades, {reg_wr:.1f}% WR, {reg_pnl:+.2f}% PnL")
@@ -196,13 +196,13 @@ def print_backtest_summary(trades_df, data_file):
         v9_trades = trades_df[trades_df['tp_source'] == 'V9']
         
         if len(fib_trades) > 0:
-            fib_wins = len(fib_trades[fib_trades['pnl_pct'] > 0])
+            fib_wins = (fib_trades['pnl_pct'] > 0).sum()
             fib_wr = (fib_wins / len(fib_trades) * 100)
             fib_pnl = fib_trades['pnl_pct'].sum()
             print(f"   Fibonacci TP: {len(fib_trades)} trades ({fib_wr:.1f}% WR, {fib_pnl:+.2f}% PnL)")
         
         if len(v9_trades) > 0:
-            v9_wins = len(v9_trades[v9_trades['pnl_pct'] > 0])
+            v9_wins = (v9_trades['pnl_pct'] > 0).sum()
             v9_wr = (v9_wins / len(v9_trades) * 100)
             v9_pnl = v9_trades['pnl_pct'].sum()
             print(f"   V9 Fallback: {len(v9_trades)} trades ({v9_wr:.1f}% WR, {v9_pnl:+.2f}% PnL)")
