@@ -54,6 +54,65 @@ class ICTPriceActionStrategy:
         self.liquidity_lookback = liquidity_lookback
         self.use_kill_zones = use_kill_zones
         
+    def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """Calculate Average True Range for volatility"""
+        high = df['high']
+        low = df['low']
+        close_prev = df['close'].shift(1)
+        
+        tr1 = high - low
+        tr2 = abs(high - close_prev)
+        tr3 = abs(low - close_prev)
+        
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(period).mean()
+        
+        return atr
+
+    def get_adaptive_rr(self, df: pd.DataFrame, idx: int) -> float:
+        """Get adaptive R:R based on ATR volatility"""
+        atr = self.calculate_atr(df)
+        
+        if idx < 50:
+            return 2.0  # default conservative
+        
+        current_atr = atr.iloc[idx]
+        avg_atr = atr.iloc[idx-50:idx].mean()
+        
+        if pd.isna(current_atr) or pd.isna(avg_atr) or avg_atr == 0:
+            return 2.0
+        
+        ratio = current_atr / avg_atr
+        
+        # Adjust R:R based on volatility - but keep it reasonable
+        if ratio > 1.5:
+            return 2.5  # Higher volatility = slightly bigger targets
+        elif ratio > 1.0:
+            return 2.0  # Normal volatility
+        else:
+            return 1.8  # Lower volatility = tighter targets
+    
+    def is_premium_discount_valid(self, df: pd.DataFrame, idx: int, signal: int) -> bool:
+        """
+        Check if signal is in valid zone
+        LONG only in discount (lower 50%)
+        SHORT only in premium (upper 50%)
+        """
+        if idx < 20:
+            return True
+        
+        window = df.iloc[idx-20:idx+1]
+        high_20 = window['high'].max()
+        low_20 = window['low'].min()
+        mid = (high_20 + low_20) / 2
+        
+        current_price = df.iloc[idx]['close']
+        
+        if signal == 1:  # LONG
+            return current_price < mid  # discount zone
+        else:  # SHORT
+            return current_price > mid  # premium zone
+        
     def detect_liquidity_sweeps(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Detect liquidity sweeps - when price takes out previous swing high/low
@@ -226,8 +285,9 @@ class ICTPriceActionStrategy:
         Check if timestamp is within ICT Kill Zones (optimal trading times)
         
         Kill Zones (UTC time):
-        - London Kill Zone: 02:00 - 05:00 UTC
-        - New York Kill Zone: 13:00 - 16:00 UTC (08:00 - 11:00 EST / 09:00 - 12:00 EDT)
+        - Asian Kill Zone: 00:00 - 03:00 UTC
+        - London Kill Zone: 07:00 - 12:00 UTC
+        - New York Kill Zone: 13:00 - 20:00 UTC
         
         Args:
             timestamp: Datetime to check
@@ -240,12 +300,16 @@ class ICTPriceActionStrategy:
         
         hour = timestamp.hour
         
-        # London Kill Zone: 02:00 - 05:00 UTC
-        if 2 <= hour < 5:
+        # Asian Kill Zone: 00:00 - 03:00 UTC (3h)
+        if 0 <= hour < 3:
+            return True, "asian"
+        
+        # London Kill Zone: 07:00 - 12:00 UTC (5h)
+        if 7 <= hour < 12:
             return True, "london"
         
-        # New York Kill Zone: 13:00 - 16:00 UTC
-        if 13 <= hour < 16:
+        # New York Kill Zone: 13:00 - 20:00 UTC (7h)
+        if 13 <= hour < 20:
             return True, "new_york"
         
         return False, "none"
@@ -275,6 +339,7 @@ class ICTPriceActionStrategy:
         
         # Initialize signal columns
         df['signal'] = 0  # 1 = long, -1 = short, 0 = no signal
+        df['signal_confidence'] = ''  # high, medium, low
         df['entry_reason'] = ''
         
         for i in range(self.liquidity_lookback + 5, len(df)):
@@ -290,15 +355,25 @@ class ICTPriceActionStrategy:
             lookback_window = df.iloc[max(0, i-5):i]
             
             # BULLISH SETUP
-            # Liquidity sweep + (Order Block or FVG) + Bullish MSS
+            # Entry requires: Liquidity sweep + (Order Block or FVG) + Bullish MSS
             bullish_sweep = lookback_window['bullish_liquidity_sweep'].any()
             bullish_ob = lookback_window['bullish_ob'].any()
             bullish_fvg = lookback_window['bullish_fvg'].any()
             bullish_mss = lookback_window['bullish_mss'].any()
             
+            # Main entry condition: Sweep + (OB or FVG) + MSS
             if bullish_sweep and (bullish_ob or bullish_fvg) and bullish_mss:
                 if df.loc[df.index[i], 'signal'] == 0:  # No conflicting signal
                     df.loc[df.index[i], 'signal'] = 1
+                    
+                    # Determine confidence based on how many conditions are met
+                    if bullish_sweep and bullish_ob and bullish_fvg and bullish_mss:
+                        df.loc[df.index[i], 'signal_confidence'] = 'high'  # all 4
+                    elif bullish_sweep and bullish_ob and bullish_mss:
+                        df.loc[df.index[i], 'signal_confidence'] = 'high'  # 3 key ones
+                    else:
+                        df.loc[df.index[i], 'signal_confidence'] = 'medium'
+                    
                     reasons = []
                     if bullish_sweep:
                         reasons.append('LiqSweep')
@@ -311,15 +386,25 @@ class ICTPriceActionStrategy:
                     df.loc[df.index[i], 'entry_reason'] = '+'.join(reasons) + f'+{zone}'
             
             # BEARISH SETUP
-            # Liquidity sweep + (Order Block or FVG) + Bearish MSS
+            # Entry requires: Liquidity sweep + (Order Block or FVG) + Bearish MSS
             bearish_sweep = lookback_window['bearish_liquidity_sweep'].any()
             bearish_ob = lookback_window['bearish_ob'].any()
             bearish_fvg = lookback_window['bearish_fvg'].any()
             bearish_mss = lookback_window['bearish_mss'].any()
             
+            # Main entry condition: Sweep + (OB or FVG) + MSS
             if bearish_sweep and (bearish_ob or bearish_fvg) and bearish_mss:
                 if df.loc[df.index[i], 'signal'] == 0:  # No conflicting signal
                     df.loc[df.index[i], 'signal'] = -1
+                    
+                    # Determine confidence based on how many conditions are met
+                    if bearish_sweep and bearish_ob and bearish_fvg and bearish_mss:
+                        df.loc[df.index[i], 'signal_confidence'] = 'high'  # all 4
+                    elif bearish_sweep and bearish_ob and bearish_mss:
+                        df.loc[df.index[i], 'signal_confidence'] = 'high'  # 3 key ones
+                    else:
+                        df.loc[df.index[i], 'signal_confidence'] = 'medium'
+                    
                     reasons = []
                     if bearish_sweep:
                         reasons.append('LiqSweep')
@@ -357,6 +442,15 @@ class ICTPriceActionStrategy:
             return 0
         
         position_size = risk_amount / risk_per_unit
+        
+        # Cap position size to prevent over-leveraging
+        # Maximum position value = 50% of account balance (reasonable limit)
+        max_position_value = account_balance * 0.5
+        max_position_size = max_position_value / entry_price
+        
+        # Use the smaller of calculated size or max size
+        position_size = min(position_size, max_position_size)
+        
         return position_size
     
     def get_entry_parameters(
@@ -384,23 +478,26 @@ class ICTPriceActionStrategy:
         
         entry_price = signal_row['close']
         
+        # Get adaptive risk/reward ratio based on volatility
+        adaptive_rr = self.get_adaptive_rr(df, signal_idx)
+        
         if signal == 1:  # Long
             # Stop loss: below recent swing low
             lookback = df.iloc[max(0, signal_idx-self.swing_length):signal_idx]
             stop_loss = lookback['low'].min() * 0.998  # 0.2% buffer
             
-            # Take profit: risk/reward ratio
+            # Take profit: adaptive risk/reward ratio
             risk = entry_price - stop_loss
-            take_profit = entry_price + (risk * self.risk_reward_ratio)
+            take_profit = entry_price + (risk * adaptive_rr)
             
         else:  # Short
             # Stop loss: above recent swing high
             lookback = df.iloc[max(0, signal_idx-self.swing_length):signal_idx]
             stop_loss = lookback['high'].max() * 1.002  # 0.2% buffer
             
-            # Take profit: risk/reward ratio
+            # Take profit: adaptive risk/reward ratio
             risk = stop_loss - entry_price
-            take_profit = entry_price - (risk * self.risk_reward_ratio)
+            take_profit = entry_price - (risk * adaptive_rr)
         
         position_size = self.calculate_position_size(account_balance, entry_price, stop_loss)
         
