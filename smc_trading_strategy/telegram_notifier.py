@@ -27,6 +27,15 @@ class TelegramNotifier:
     def send_message(self, text, parse_mode='HTML'):
         """Send text message to Telegram"""
         try:
+            # Validate inputs
+            if not self.bot_token or not self.chat_id:
+                print(f"❌ Telegram error: Missing bot_token or chat_id")
+                return False
+
+            if not text or len(text.strip()) == 0:
+                print(f"❌ Telegram error: Empty message text")
+                return False
+
             url = f"{self.base_url}/sendMessage"
             data = {
                 'chat_id': self.chat_id,
@@ -38,44 +47,70 @@ class TelegramNotifier:
             response = requests.post(url, data=data, timeout=10)
 
             if response.status_code == 200:
-                return True
+                response_data = response.json()
+                if response_data.get('ok', False):
+                    return True
+                else:
+                    error_desc = response_data.get('description', 'Unknown error')
+                    print(f"❌ Telegram error: {error_desc}")
+                    return False
             else:
-                print(f"❌ Telegram error: {response.status_code} - {response.text}")
+                print(f"❌ Telegram error: HTTP {response.status_code} - {response.text[:200]}")
                 return False
 
+        except requests.exceptions.Timeout:
+            print(f"❌ Failed to send Telegram message: Connection timeout")
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Failed to send Telegram message: Network error - {e}")
+            return False
         except Exception as e:
             print(f"❌ Failed to send Telegram message: {e}")
             return False
 
     def send_entry_signal(self, signal_data):
         """Send entry signal notification"""
+        try:
+            # Validate required fields
+            if not signal_data:
+                print(f"❌ send_entry_signal: signal_data is empty")
+                return False
 
-        direction = signal_data['direction']
-        entry_price = signal_data['entry_price']
-        stop_loss = signal_data['stop_loss']
-        tp1 = signal_data.get('tp1', signal_data.get('take_profit'))
-        tp2 = signal_data.get('tp2', tp1)
-        tp3 = signal_data.get('tp3', tp1)
-        pattern = signal_data.get('pattern', 'N/A')
-        regime = signal_data.get('regime', 'N/A')
-        trailing = signal_data.get('trailing', 0)
-        timestamp = signal_data.get('timestamp', datetime.now())
+            direction = signal_data.get('direction')
+            entry_price = signal_data.get('entry_price')
+            stop_loss = signal_data.get('stop_loss')
 
-        # Convert to local timezone
-        if hasattr(timestamp, 'tz_localize'):
-            # Pandas Timestamp
-            timestamp = timestamp.to_pydatetime()
-        timestamp_local = timestamp + timedelta(hours=self.timezone_offset)
+            if not all([direction, entry_price, stop_loss]):
+                print(f"❌ send_entry_signal: Missing required fields (direction, entry_price, or stop_loss)")
+                return False
 
-        # Calculate R:R (using TP3 as max reward)
-        risk = abs(entry_price - stop_loss)
-        reward_tp3 = abs(tp3 - entry_price)
-        rr_ratio = reward_tp3 / risk if risk > 0 else 0
+            tp1 = signal_data.get('tp1', signal_data.get('take_profit'))
+            tp2 = signal_data.get('tp2', tp1)
+            tp3 = signal_data.get('tp3', tp1)
+            pattern = signal_data.get('pattern', 'N/A')
+            regime = signal_data.get('regime', 'N/A')
+            trailing = signal_data.get('trailing', 0)
+            timestamp = signal_data.get('timestamp', datetime.now())
+        except Exception as e:
+            print(f"❌ send_entry_signal: Error processing signal_data - {e}")
+            return False
 
-        emoji = "🟢" if direction == "LONG" else "🔴"
-        regime_emoji = "📈" if regime == "TREND" else "📊"
+        try:
+            # Convert to local timezone
+            if hasattr(timestamp, 'tz_localize'):
+                # Pandas Timestamp
+                timestamp = timestamp.to_pydatetime()
+            timestamp_local = timestamp + timedelta(hours=self.timezone_offset)
 
-        message = f"""
+            # Calculate R:R (using TP3 as max reward)
+            risk = abs(entry_price - stop_loss)
+            reward_tp3 = abs(tp3 - entry_price)
+            rr_ratio = reward_tp3 / risk if risk > 0 else 0
+
+            emoji = "🟢" if direction == "LONG" else "🔴"
+            regime_emoji = "📈" if regime == "TREND" else "📊"
+
+            message = f"""
 {emoji} <b>НОВЫЙ СИГНАЛ - PAPER TRADING</b>
 
 📊 <b>Стратегия:</b> Pattern Recognition (1.618)
@@ -103,42 +138,60 @@ class TelegramNotifier:
 💵 <b>Риск на сделку:</b> ~${risk * 0.01:.2f}
 """
 
-        return self.send_message(message)
+            return self.send_message(message)
+        except Exception as e:
+            print(f"❌ send_entry_signal: Error creating message - {e}")
+            return False
 
     def send_exit_signal(self, exit_data):
         """Send exit signal notification"""
+        try:
+            # Validate required fields
+            if not exit_data:
+                print(f"❌ send_exit_signal: exit_data is empty")
+                return False
 
-        direction = exit_data['direction']
-        entry_price = exit_data['entry_price']
-        exit_price = exit_data['exit_price']
-        exit_type = exit_data['exit_type']
-        pnl_pct = exit_data['pnl_pct']
-        pnl_points = exit_data['pnl_points']
-        duration = exit_data.get('duration_hours', 0)
-        timestamp = exit_data.get('timestamp', datetime.now())
+            direction = exit_data.get('direction')
+            entry_price = exit_data.get('entry_price')
+            exit_price = exit_data.get('exit_price')
+            exit_type = exit_data.get('exit_type')
+            pnl_pct = exit_data.get('pnl_pct')
+            pnl_points = exit_data.get('pnl_points')
 
-        # Convert to local timezone
-        if hasattr(timestamp, 'tz_localize'):
-            # Pandas Timestamp
-            timestamp = timestamp.to_pydatetime()
-        timestamp_local = timestamp + timedelta(hours=self.timezone_offset)
+            if not all([direction, entry_price is not None, exit_price is not None,
+                       exit_type, pnl_pct is not None, pnl_points is not None]):
+                print(f"❌ send_exit_signal: Missing required fields")
+                return False
 
-        # Determine emoji based on profit/loss
-        if pnl_pct > 0:
-            result_emoji = "✅"
-            result_text = "ПРИБЫЛЬ"
-        else:
-            result_emoji = "❌"
-            result_text = "УБЫТОК"
+            duration = exit_data.get('duration_hours', 0)
+            timestamp = exit_data.get('timestamp', datetime.now())
+        except Exception as e:
+            print(f"❌ send_exit_signal: Error processing exit_data - {e}")
+            return False
 
-        # Exit type emoji
-        exit_emoji = {
-            'TP': '🎯',
-            'SL': '🛑',
-            'EOD': '⏱️'
-        }.get(exit_type, '🔔')
+        try:
+            # Convert to local timezone
+            if hasattr(timestamp, 'tz_localize'):
+                # Pandas Timestamp
+                timestamp = timestamp.to_pydatetime()
+            timestamp_local = timestamp + timedelta(hours=self.timezone_offset)
 
-        message = f"""
+            # Determine emoji based on profit/loss
+            if pnl_pct > 0:
+                result_emoji = "✅"
+                result_text = "ПРИБЫЛЬ"
+            else:
+                result_emoji = "❌"
+                result_text = "УБЫТОК"
+
+            # Exit type emoji
+            exit_emoji = {
+                'TP': '🎯',
+                'SL': '🛑',
+                'EOD': '⏱️'
+            }.get(exit_type, '🔔')
+
+            message = f"""
 {result_emoji} <b>{result_text} - ЗАКРЫТИЕ ПОЗИЦИИ</b>
 
 📊 <b>Стратегия:</b> Pattern Recognition (1.618)
@@ -157,7 +210,10 @@ class TelegramNotifier:
 💰 <b>Доход при лоте 0.01:</b> ${pnl_points * 0.01:+.2f}
 """
 
-        return self.send_message(message)
+            return self.send_message(message)
+        except Exception as e:
+            print(f"❌ send_exit_signal: Error creating message - {e}")
+            return False
 
     def send_daily_summary(self, summary_data):
         """Send daily summary report"""
@@ -303,14 +359,25 @@ class TelegramNotifier:
 
             if response.status_code == 200:
                 data = response.json()
-                if data['ok']:
-                    bot_info = data['result']
-                    print(f"✅ Telegram bot connected: @{bot_info['username']}")
+                if data.get('ok', False):
+                    bot_info = data.get('result', {})
+                    bot_username = bot_info.get('username', 'Unknown')
+                    print(f"✅ Telegram bot connected: @{bot_username}")
                     return True
+                else:
+                    error_desc = data.get('description', 'Unknown error')
+                    print(f"❌ Telegram bot connection failed: {error_desc}")
+                    return False
             else:
-                print(f"❌ Telegram bot connection failed: {response.status_code}")
+                print(f"❌ Telegram bot connection failed: HTTP {response.status_code}")
                 return False
 
+        except requests.exceptions.Timeout:
+            print(f"❌ Telegram bot test failed: Connection timeout")
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Telegram bot test failed: Network error - {e}")
+            return False
         except Exception as e:
             print(f"❌ Telegram bot test failed: {e}")
             return False
