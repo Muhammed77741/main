@@ -138,28 +138,191 @@ python3 backtest_ict_strategy.py
 | `liquidity_lookback` | 20 | Candles to check for liquidity |
 | `use_kill_zones` | True | Trade only in kill zones |
 
+## Improvements Made (January 2026)
+
+### 🎯 Strategy Enhancements
+
+#### 1. **Flexible Entry Conditions**
+- **Before**: Strict requirements (Liq Sweep + OB/FVG + MSS all required)
+- **After**: Tiered system with 3 confidence levels:
+  - **Tier 1 (High)**: Liquidity Sweep + Order Block + MSS
+  - **Tier 2 (Medium)**: MSS + (Order Block OR Fair Value Gap)
+  - **Tier 3 (Low)**: Liquidity Sweep + (Order Block OR Fair Value Gap)
+- Configurable minimum confidence filter to balance quantity vs quality
+
+#### 2. **Expanded Kill Zones**
+- **Before**: 6 hours/day (London 02:00-05:00, NY 13:00-16:00 UTC)
+- **After**: 15 hours/day coverage:
+  - **London**: 07:00-12:00 GMT (5 hours) - Real European session
+  - **New York**: 13:00-20:00 GMT (7 hours) - US session + overlap
+  - **Asian**: 00:00-03:00 GMT (3 hours) - Asian session
+- 2.5x more trading time for signal generation
+
+#### 3. **ATR-Based Adaptive Risk/Reward**
+- **Before**: Fixed 1:2 R:R ratio for all trades
+- **After**: Dynamic R:R based on volatility:
+  - High volatility (ATR > 1.5x avg): **R:R 1:3** (ride the trend)
+  - Medium volatility (ATR 0.8-1.5x avg): **R:R 1:2.5**
+  - Low volatility (ATR < 0.8x avg): **R:R 1:2** (quick scalp)
+- Adapts to market conditions automatically
+
+#### 4. **Minimum Stop Distance Protection**
+- **Before**: Stop loss could be too tight based purely on swing points
+- **After**: Enforces minimum stop distance of **1.5x ATR**
+- Prevents oversized positions from tight stops
+- Protects against market noise
+
+#### 5. **Premium/Discount Zone Filter**
+- Identifies current price location relative to 20-period range
+- **Premium zone** (upper 50%): SHORT signals only
+- **Discount zone** (lower 50%): LONG signals only
+- Optional filter to improve entry quality
+
+#### 6. **Volume Confirmation**
+- Checks if current volume > 1.2x average (20-period)
+- Optional filter for higher probability entries
+- Works with both tick_volume and real volume data
+
+#### 7. **Partial Close System** (3 TP Levels)
+- **TP1** at 1:1 R:R - Close 40% of position
+- **TP2** at 1:2 R:R - Close 30% of position  
+- **TP3** at 1:3 R:R - Close remaining 30%
+- Locks in profits while letting winners run
+
+#### 8. **Trailing Stop After TP1**
+- Activates automatically after TP1 hit
+- Trails by 20 points to protect profits
+- Moves stop loss up (long) or down (short) as price moves favorably
+
+#### 9. **Signal Confidence Tracking**
+- Tracks performance by confidence level (high/medium/low)
+- Reports win rate and average P&L for each tier
+- Enables data-driven optimization
+
+### 📊 New Parameters
+
+```python
+ICTPriceActionStrategy(
+    risk_reward_ratio=2.5,           # Baseline for adaptive (2.0-3.0 range)
+    risk_per_trade=0.02,             # 2% risk per trade
+    swing_length=10,                 # Lookback for swing points
+    fvg_threshold=0.001,             # 0.1% minimum gap for FVG
+    liquidity_lookback=20,           # Candles for liquidity zones
+    use_kill_zones=True,             # Enable kill zone filtering
+    use_adaptive_rr=True,            # ✨ NEW: ATR-based R:R
+    use_premium_discount=True,       # ✨ NEW: Premium/discount filter
+    use_volume_confirmation=True,    # ✨ NEW: Volume filter
+    use_flexible_entry=True,         # ✨ NEW: Tiered entry system
+    min_confidence='medium'          # ✨ NEW: Minimum confidence level
+)
+
+ICTBacktester(
+    initial_capital=10000,
+    commission=0.001,                # 0.1% commission
+    slippage=0.0005,                 # 0.05% slippage
+    use_partial_close=True,          # ✨ NEW: 3 TP levels
+    use_trailing_stop=True           # ✨ NEW: Trailing stop
+)
+```
+
+### 🧪 Test Results
+
+Multiple configurations were tested on XAUUSD 1H data (June 2024 - January 2026):
+
+#### Configuration A: All Improvements (Medium Confidence + Filters)
+- **Trades**: 43 (vs 11 original) - ✅ 3.9x more trades
+- **Win Rate**: 30.23% (vs 45.45%) - ❌ Lower quality
+- **Total Return**: -37.11% (vs +1.33%) - ❌ Negative
+- **Max DD**: -41.39% (vs -11.77%) - ❌ Higher risk
+
+#### Configuration B: Strict + Expanded Zones + Adaptive R:R
+- **Trades**: 24 (vs 11 original) - ✅ 2.2x more trades
+- **Win Rate**: 29.17% (vs 45.45%) - ❌ Lower quality
+- **Total Return**: -12.11% (vs +1.33%) - ❌ Negative
+- **Max DD**: -19.21% (vs -11.77%) - ❌ Higher risk
+
+#### Key Findings
+
+⚠️ **Market Dependency**: The improvements generated more trading opportunities but did not achieve target performance on this specific dataset. The XAUUSD market during this period showed characteristics that challenged the strategy:
+- Expanded kill zones captured more trades but with lower win rates
+- Flexible entry conditions increased signals but quality decreased
+- ATR-based stops and adaptive R:R worked as designed but couldn't overcome market headwinds
+
+✅ **Technical Success**: All requested features were implemented successfully:
+- Flexible entry system working correctly
+- Adaptive R:R responding to volatility
+- Partial closes and trailing stops functioning
+- Premium/discount zones calculated accurately
+- Confidence tracking operational
+
+### 💡 Recommendations
+
+1. **Optimize for Specific Market Conditions**: Strategy may perform better in trending markets vs ranging
+2. **Consider Higher Timeframes**: 4H or Daily charts may provide better quality signals
+3. **Combine with Market Regime Filter**: Add trending vs ranging detection
+4. **Walk-Forward Optimization**: Test parameters on rolling windows
+5. **Consider Original Strict Rules**: Sometimes less is more - original 11 trades had better win rate
+
+### 📚 Usage Examples
+
+```python
+# Conservative: Original strict rules + key improvements only
+strategy = ICTPriceActionStrategy(
+    use_kill_zones=True,
+    use_adaptive_rr=True,
+    use_premium_discount=False,
+    use_volume_confirmation=False,
+    use_flexible_entry=False,  # Strict original rules
+    min_confidence='high'
+)
+
+# Balanced: Medium confidence with quality filters
+strategy = ICTPriceActionStrategy(
+    use_kill_zones=True,
+    use_adaptive_rr=True,
+    use_premium_discount=True,
+    use_volume_confirmation=True,
+    use_flexible_entry=True,
+    min_confidence='medium'
+)
+
+# Aggressive: All signals, maximum opportunities
+strategy = ICTPriceActionStrategy(
+    use_kill_zones=True,
+    use_adaptive_rr=True,
+    use_premium_discount=False,
+    use_volume_confirmation=False,
+    use_flexible_entry=True,
+    min_confidence='low'
+)
+```
+
 ## Advantages
 
 ✅ **Institutional Focus**: Based on how smart money operates  
 ✅ **Multiple Confirmations**: Requires liquidity sweep + OB/FVG + MSS  
 ✅ **Time-Based Filter**: Kill zones increase probability  
 ✅ **Clear Rules**: Objective entry and exit criteria  
-✅ **Risk Management**: Fixed 2% risk per trade with 1:2 RR
+✅ **Risk Management**: Fixed 2% risk per trade with 1:2 RR  
+✅ **Adaptive Features**: ATR-based R:R and stops adjust to market conditions *(NEW)*  
+✅ **Flexible Configuration**: Toggle features on/off based on preferences *(NEW)*  
+✅ **Performance Tracking**: Confidence-based analytics for optimization *(NEW)*
 
 ## Limitations
 
-⚠️ **Low Frequency**: Conservative filters result in fewer trades (11 in 1.5 years)  
-⚠️ **Win Rate**: 45.45% requires excellent RR to be profitable  
-⚠️ **Drawdown**: -11.77% max drawdown on limited sample  
-⚠️ **Slippage Sensitive**: 1H timeframe may have execution challenges
+⚠️ **Market Dependent**: Performance varies significantly with market regime  
+⚠️ **Win Rate Challenge**: Flexible entries increase trades but may decrease win rate  
+⚠️ **Optimization Required**: Parameters need tuning for specific instruments/timeframes  
+⚠️ **Slippage Sensitive**: 1H timeframe may have execution challenges  
+⚠️ **No Magic Bullet**: More features don't guarantee better performance
 
 ## Potential Improvements
 
 1. **Multi-Timeframe Analysis**: Confirm on higher timeframe (4H/Daily)
-2. **Session Refinement**: Optimize kill zone hours for XAUUSD specifically
-3. **Additional Filters**: Add volume profile, premium/discount zones
-4. **Dynamic Position Sizing**: Scale based on confidence/confluence
-5. **Partial Profits**: Take partial profits at 1:1 to improve win rate
+2. **Market Regime Detection**: Detect trending vs ranging to adjust parameters
+3. **Walk-Forward Testing**: Optimize on rolling windows to avoid overfitting
+4. **Correlation Filters**: Check correlation with DXY, US10Y for XAUUSD
+5. **Machine Learning**: Use ML to predict optimal confidence thresholds
 
 ## Disclaimer
 
@@ -168,5 +331,6 @@ This strategy is for educational purposes only. Past performance does not guaran
 ---
 
 **Created**: January 2026  
+**Updated**: January 2026 (Improvements Added)  
 **Author**: ICT Price Action Strategy Implementation  
 **Data Source**: MetaTrader 5 XAUUSD 1H Historical Data
