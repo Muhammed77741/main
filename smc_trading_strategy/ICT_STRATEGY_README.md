@@ -126,6 +126,26 @@ This is an implementation of the **ICT (Inner Circle Trader) Price Action Strate
 4. Optimize ATR period and R:R thresholds
 5. Add volume confirmation or other confluence factors
 
+### Important Notes:
+
+**Reality Check**: The problem statement expected 150+ trades with 60%+ win rate and 150%+ profit. However, after implementing all requested improvements, the actual results show:
+- Extended kill zones successfully increased trades by 2.5x
+- Risk management improvements reduced maximum losses significantly
+- Entry quality remains the core challenge
+
+**What Worked**:
+- ✅ Extended kill zones (3x more trading hours)
+- ✅ Adaptive R:R based on volatility
+- ✅ Position size limits prevent catastrophic losses
+- ✅ Confidence scoring for future filtering
+
+**What Didn't Work**:
+- ⚠️ Premium/discount filter reduced trade count without improving quality
+- ⚠️ More flexible entries led to worse win rate
+- ⚠️ The fundamental strategy needs additional confluence factors
+
+**Conclusion**: The improvements successfully addressed the technical requirements (more trades, better risk management, adaptive targets) but the ICT methodology itself requires additional filters or optimization to achieve profitability on this specific XAUUSD 1H dataset. The strategy benefits from extended trading hours but needs better entry selection criteria beyond the basic ICT concepts implemented here.
+
 ## Backtest Results (XAUUSD 1H Data)
 
 **Test Period**: June 2024 - January 2026 (9,371 hourly candles)
