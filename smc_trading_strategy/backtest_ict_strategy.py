@@ -675,16 +675,17 @@ def main():
     
     # Initialize strategy
     print("\nInitializing Enhanced ICT Price Action Strategy...")
+    print("Configuration: Balanced (Killzones + Quality Filters)")
     strategy = ICTPriceActionStrategy(
         risk_reward_ratio=2.0,
         risk_per_trade=0.02,
-        swing_length=10,
-        fvg_threshold=0.001,
-        liquidity_lookback=20,
+        swing_length=12,  # Slightly wider for better swing detection
+        fvg_threshold=0.0015,  # 0.15% minimum gap
+        liquidity_lookback=25,  # More history for liquidity
         use_kill_zones=True,
         fib_levels=[0.618, 0.786],
-        killzone_only=False,  # Don't filter by killzone to get more signals
-        premium_discount_filter=False,  # Don't filter by premium/discount initially
+        killzone_only=True,  # Only trade in killzones for quality
+        premium_discount_filter=False,  # Disabled for more signals
         min_liquidity_sweep=2
     )
     
