@@ -507,11 +507,7 @@ class LiveBotMT5FullAuto:
                 message += f"Max positions: {self.max_positions}\n\n"
                 message += "⚠️ Monitor your account regularly!"
 
-                self.notifier.send_message(
-                    chat_id=self.notifier.chat_id,
-                    text=message,
-                    parse_mode='Markdown'
-                )
+                self.notifier.send_message(message)
 
         while True:
             try:
@@ -580,11 +576,7 @@ class LiveBotMT5FullAuto:
                 message += f"Ticket: {ticket}\n"
                 message += f"Direction: {position['direction']}\n"
                 message += f"Reason: SL or Manual"
-                self.notifier.send_message(
-                    chat_id=self.notifier.chat_id,
-                    text=message,
-                    parse_mode='Markdown'
-                )
+                self.notifier.send_message(message)
             return
 
         mt5_pos = mt5_positions[0]
@@ -673,11 +665,7 @@ class LiveBotMT5FullAuto:
                 message += f"Closed: {volume_to_close:.2f} lots ({close_pct*100:.0f}%)\n"
                 message += f"Price: {position[f'{tp_name.lower()}_price']:.2f}"
 
-                self.notifier.send_message(
-                    chat_id=self.notifier.chat_id,
-                    text=message,
-                    parse_mode='Markdown'
-                )
+                self.notifier.send_message(message)
         else:
             print(f"❌ Failed to close partial at {tp_name}")
 
@@ -741,11 +729,7 @@ class LiveBotMT5FullAuto:
                 message += f"Reason: {reason}\n"
                 message += f"Close price: {price:.2f}"
 
-                self.notifier.send_message(
-                    chat_id=self.notifier.chat_id,
-                    text=message,
-                    parse_mode='Markdown'
-                )
+                self.notifier.send_message(message)
         else:
             print(f"❌ Failed to close position {ticket}: {result.comment}")
 
