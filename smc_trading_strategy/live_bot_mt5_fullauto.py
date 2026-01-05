@@ -482,7 +482,7 @@ class LiveBotMT5FullAuto:
             message += f"🎫 Ticket: {result.order}\n\n"
             message += f"✨ Bot will manage TP/SL automatically"
 
-            self.notifier.bot.send_message(
+            self.notifier.send_message(
                 chat_id=self.notifier.chat_id,
                 text=message,
                 parse_mode='Markdown'
@@ -511,7 +511,7 @@ class LiveBotMT5FullAuto:
                 message += f"Max positions: {self.max_positions}\n\n"
                 message += "⚠️ Monitor your account regularly!"
 
-                self.notifier.bot.send_message(
+                self.notifier.send_message(
                     chat_id=self.notifier.chat_id,
                     text=message,
                     parse_mode='Markdown'
@@ -584,7 +584,7 @@ class LiveBotMT5FullAuto:
                 message += f"Ticket: {ticket}\n"
                 message += f"Direction: {position['direction']}\n"
                 message += f"Reason: SL or Manual"
-                self.notifier.bot.send_message(
+                self.notifier.send_message(
                     chat_id=self.notifier.chat_id,
                     text=message,
                     parse_mode='Markdown'
@@ -677,7 +677,7 @@ class LiveBotMT5FullAuto:
                 message += f"Closed: {volume_to_close:.2f} lots ({close_pct*100:.0f}%)\n"
                 message += f"Price: {position[f'{tp_name.lower()}_price']:.2f}"
 
-                self.notifier.bot.send_message(
+                self.notifier.send_message(
                     chat_id=self.notifier.chat_id,
                     text=message,
                     parse_mode='Markdown'
@@ -745,7 +745,7 @@ class LiveBotMT5FullAuto:
                 message += f"Reason: {reason}\n"
                 message += f"Close price: {price:.2f}"
 
-                self.notifier.bot.send_message(
+                self.notifier.send_message(
                     chat_id=self.notifier.chat_id,
                     text=message,
                     parse_mode='Markdown'

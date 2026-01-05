@@ -114,12 +114,8 @@ def test_telegram_connection():
             print("✅ Telegram connection successful!")
             print(f"   Sending test message...")
 
-            message = "✅ **Test Message**\n\nSemi-Auto Bot configuration test successful!"
-            notifier.bot.send_message(
-                chat_id=telegram_chat_id,
-                text=message,
-                parse_mode='Markdown'
-            )
+            message = "✅ <b>Test Message</b>\n\nSemi-Auto Bot configuration test successful!"
+            notifier.send_message(message)
 
             print("✅ Test message sent! Check your Telegram.")
             return True

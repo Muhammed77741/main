@@ -157,15 +157,11 @@ def test_telegram_connection():
         if notifier.test_connection():
             print("✅ Telegram connection successful!")
 
-            message = "⚠️ **FULL-AUTO BOT TEST**\n\n"
+            message = "⚠️ <b>FULL-AUTO BOT TEST</b>\n\n"
             message += "Testing Telegram notifications...\n"
             message += "Bot is ready to start!"
 
-            notifier.bot.send_message(
-                chat_id=telegram_chat_id,
-                text=message,
-                parse_mode='Markdown'
-            )
+            notifier.send_message(message)
 
             print("✅ Test message sent! Check your Telegram.")
             return True
