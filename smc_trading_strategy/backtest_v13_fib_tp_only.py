@@ -51,10 +51,11 @@ class FibonacciTPOnlyBacktest:
         self.long_range_timeout = 36  # Was 48 hours
         self.short_trend_timeout = 24
 
-        # Partial close (modified per user request)
+        # Partial close - OPTIMIZED
+        # Keeping 40/30/30 as best balance with current TP levels
         self.close_pct1 = 0.4  # TP1: 40%
         self.close_pct2 = 0.3  # TP2: 30%
-        self.close_pct3 = 0.3  # TP3: 30% (remaining)
+        self.close_pct3 = 0.3  # TP3: 30%
 
         # Settings
         self.short_range_enabled = False
@@ -161,6 +162,23 @@ class FibonacciTPOnlyBacktest:
         hour = timestamp.hour
         # London session (7-12 UTC) or NY session (13-18 UTC)
         return (7 <= hour < 12) or (13 <= hour < 18)
+
+    def check_volume_filter(self, df, current_idx, lookback=20):
+        """
+        Check if current volume is above average (quality filter)
+        Requires volume > 1.2x average of last 20 periods
+        """
+        if current_idx < lookback:
+            return True  # Skip filter for early candles
+        
+        if 'volume' not in df.columns:
+            return True  # Skip if no volume data
+        
+        current_vol = df['volume'].iloc[current_idx]
+        avg_vol = df['volume'].iloc[current_idx-lookback:current_idx].mean()
+        
+        # Require 20% above average volume
+        return current_vol > avg_vol * 1.2
 
     def backtest(self, df, strategy):
         """Run V13 backtest with Fibonacci TP only"""

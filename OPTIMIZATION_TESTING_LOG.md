@@ -67,7 +67,35 @@
 
 ---
 
-### ⚠️ Test #4: Session Time Filter (TESTED, NOT IMPLEMENTED)
+### ❌ Test #4: Volume Filter (REJECTED)
+
+**Change:** Require volume > 1.2x average of last 20 periods
+
+**Results (Combined with Tests #1+#2):**
+- Total PnL: +40.02% → **+37.41%** (-2.61%)
+- Win Rate: 59.3% → **58.9%** (-0.4%)
+- Profit Factor: 1.61 → 1.58 (-0.03)
+- Trades: 194 → 190 (-4 trades)
+- TP Hit Rates: Similar
+
+**Verdict:** ❌ **REJECT** - Filtered out profitable trades, minimal benefit
+
+---
+
+### ❌ Test #5: More Aggressive Partial Close (REJECTED)
+
+**Change:** Partial close from 40/30/30 → **50/30/20**
+
+**Results (Combined with Tests #1+#2):**
+- Total PnL: +40.02% → **+39.75%** (-0.27%)
+- Win Rate: 59.3% → 59.3% (unchanged)
+- Profit Factor: 1.61 → 1.60 (-0.01)
+
+**Verdict:** ❌ **REJECT** - Taking more profit at TP1 slightly worse than 40/30/30
+
+---
+
+### ❌ Test #6: Session Time Filter (REJECTED)
 
 **Change:** Only trade during London (07:00-12:00) and NY (13:00-18:00) sessions
 
