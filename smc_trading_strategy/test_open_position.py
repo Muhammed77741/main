@@ -98,7 +98,9 @@ class MT5PositionTester:
             print(f"   Error message: {error[1] if len(error) > 1 else 'Unknown'}")
             return False
 
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
+        # For order_check, retcode 0 means success
+        # For order_send, retcode 10009 (TRADE_RETCODE_DONE) means success
+        if result.retcode != 0:
             print(f"❌ Order check failed")
             print(f"   Return code: {result.retcode}")
             print(f"   Comment: {result.comment}")
@@ -122,12 +124,19 @@ class MT5PositionTester:
             elif result.retcode == 10027:
                 print(f"\n💡 Error 10027: AutoTrading disabled")
                 print(f"   - Enable AutoTrading in MT5 (Ctrl+E or Tools > Options > Expert Advisors)")
+            elif result.retcode == 0:
+                print(f"\n💡 Return code 0 with error comment")
+                print(f"   This might indicate a check passed but with warnings")
+            else:
+                print(f"\n💡 Unknown error code: {result.retcode}")
+                print(f"   Check MT5 documentation for this error code")
 
             return False
 
         print(f"✅ Order check passed")
-        print(f"   Balance after: {result.balance}")
-        print(f"   Margin needed: {result.margin}")
+        print(f"   Estimated balance after: ${result.balance:.2f}")
+        print(f"   Margin required: ${result.margin:.2f}")
+        print(f"   Comment: {result.comment}")
         return True
 
     def open_position(self, direction='long', lot=0.01, sl_points=100, tp_points=300):

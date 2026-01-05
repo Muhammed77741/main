@@ -2,6 +2,20 @@
 
 ## Основные ошибки и их решения
 
+## ⚠️ ВАЖНО: Различие между order_check и order_send
+
+**order_check()** - проверка параметров ордера:
+- ✅ Успех: `result.retcode == 0`
+- ❌ Ошибка: `result.retcode != 0`
+
+**order_send()** - отправка ордера на сервер:
+- ✅ Успех: `result.retcode == 10009` (TRADE_RETCODE_DONE)
+- ❌ Ошибка: `result.retcode != 10009`
+
+**НЕ путайте эти коды!** Если вы видите "Order check failed - Return code: 0" - это на самом деле УСПЕХ для order_check!
+
+---
+
 ### ❌ Error: "Order send failed: No result"
 
 **Причина:** `mt5.order_send()` возвращает `None` вместо результата
