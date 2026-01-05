@@ -45,9 +45,10 @@ class FibonacciTPOnlyBacktest:
         self.long_range_trailing = 20
         self.short_trend_trailing = 13
 
-        # V9 timeout (без изменений)
+        # V9 timeout - OPTIMIZED
+        # Reduced RANGE timeout from 48h to 36h to free capital faster
         self.long_trend_timeout = 60
-        self.long_range_timeout = 48
+        self.long_range_timeout = 36  # Was 48 hours
         self.short_trend_timeout = 24
 
         # Partial close (modified per user request)
@@ -151,6 +152,16 @@ class FibonacciTPOnlyBacktest:
         trend_signals = sum([ema_trend, high_volatility, strong_direction, sequential_trend, structural_trend])
         return 'TREND' if trend_signals >= 3 else 'RANGE'
 
+    def is_valid_session(self, timestamp):
+        """
+        Check if timestamp is during high-liquidity trading sessions
+        London: 07:00-12:00 UTC
+        NY: 13:00-18:00 UTC
+        """
+        hour = timestamp.hour
+        # London session (7-12 UTC) or NY session (13-18 UTC)
+        return (7 <= hour < 12) or (13 <= hour < 18)
+
     def backtest(self, df, strategy):
         """Run V13 backtest with Fibonacci TP only"""
 
@@ -195,6 +206,7 @@ class FibonacciTPOnlyBacktest:
             # Check for new signal
             if signal != 0:
                 total_signals += 1
+                
                 regime = self.detect_market_regime(df_strategy, i)
 
                 # FILTER TREND REGIME (unprofitable -7.62%)
