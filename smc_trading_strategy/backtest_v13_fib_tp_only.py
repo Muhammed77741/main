@@ -33,10 +33,12 @@ class FibonacciTPOnlyBacktest:
         self.commission = commission_points
         self.swap_per_day = swap_per_day
 
-        # Fibonacci extension levels (для TP)
-        self.fib_tp1 = 1.272  # 127.2%
-        self.fib_tp2 = 1.618  # 161.8% - Golden ratio
-        self.fib_tp3 = 2.000  # 200%
+        # Fibonacci extension levels (для TP) - OPTIMIZED
+        # Lowered from 127.2%/161.8%/200% to 100%/127.2%/161.8%
+        # for more realistic profit targets and higher hit rates
+        self.fib_tp1 = 1.000  # 100% (was 127.2%)
+        self.fib_tp2 = 1.272  # 127.2% (was 161.8%)
+        self.fib_tp3 = 1.618  # 161.8% Golden ratio (was 200%)
 
         # V9 trailing (без изменений)
         self.long_trend_trailing = 25
