@@ -569,10 +569,13 @@ def main():
     # Initialize strategy with NEW improvements
     print("\nInitializing IMPROVED ICT Price Action Strategy...")
     print("  ✓ Flexible entry conditions (Tier 1/2/3)")
-    print("  ✓ Expanded kill zones (15h/day)")
+    print("  ✓ Flexible entry (Tier 1+2: requires MSS)")
+    print("  ✓ Expanded kill zones (15h/day vs 6h)")
     print("  ✓ ATR-based adaptive R:R (2.0-3.0)")
-    print("  ✓ Premium/Discount zone filter")
-    print("  ✓ Volume confirmation")
+    print("  ✓ Premium/Discount filter (LONG in discount, SHORT in premium)")
+    print("  ✓ Volume confirmation (1.2x average)")
+    print("  ✓ Minimum confidence: MEDIUM+")
+    print("  ✓ Minimum stop distance: 1.5x ATR")
     
     strategy = ICTPriceActionStrategy(
         risk_reward_ratio=RISK_REWARD_RATIO,
@@ -581,23 +584,24 @@ def main():
         fvg_threshold=0.001,  # 0.1% minimum gap
         liquidity_lookback=20,
         use_kill_zones=True,  # Expanded kill zones
-        use_adaptive_rr=True,  # NEW: ATR-based R:R
-        use_premium_discount=True,  # NEW: Premium/discount filter
-        use_volume_confirmation=True,  # NEW: Volume filter
-        use_flexible_entry=True  # NEW: Tier-based entries
+        use_adaptive_rr=True,  # ATR-based R:R
+        use_premium_discount=True,  # ENABLE: Quality filter
+        use_volume_confirmation=True,  # ENABLE: Quality filter
+        use_flexible_entry=True,  # Tier-based (but filtered)
+        min_confidence='medium'  # Medium+ quality
     )
     
     # Initialize backtester with NEW features
     print("\nInitializing backtester with:")
-    print("  ✓ 3 TP levels (40%/30%/30% partial close)")
-    print("  ✓ Trailing stop after TP1")
+    print("  ✓ Adaptive R:R based take profits")
+    print("  ✓ Single TP with trailing stop (simplified)")
     
     backtester = ICTBacktester(
         initial_capital=INITIAL_CAPITAL,
         commission=0.001,  # 0.1%
         slippage=0.0005,  # 0.05%
-        use_partial_close=True,  # NEW: 3 TP levels
-        use_trailing_stop=True  # NEW: Trailing stop
+        use_partial_close=False,  # Disable for now - caused issues
+        use_trailing_stop=False  # Disable for now - test basic first
     )
     
     # Run backtest

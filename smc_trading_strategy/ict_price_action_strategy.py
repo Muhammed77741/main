@@ -38,7 +38,8 @@ class ICTPriceActionStrategy:
         use_adaptive_rr: bool = True,  # NEW: Use ATR-based R:R
         use_premium_discount: bool = True,  # NEW: Filter by price zones
         use_volume_confirmation: bool = True,  # NEW: Volume filter
-        use_flexible_entry: bool = True  # NEW: Tier-based entry system
+        use_flexible_entry: bool = True,  # NEW: Tier-based entry system
+        min_confidence: str = 'low'  # NEW: Minimum confidence level (high/medium/low)
     ):
         """
         Initialize ICT Strategy
@@ -54,6 +55,7 @@ class ICTPriceActionStrategy:
             use_premium_discount: Filter entries by premium/discount zones
             use_volume_confirmation: Require volume confirmation
             use_flexible_entry: Use tiered entry system (more signals)
+            min_confidence: Minimum signal confidence ('high', 'medium', 'low')
         """
         self.risk_reward_ratio = risk_reward_ratio
         self.risk_per_trade = risk_per_trade
@@ -65,6 +67,7 @@ class ICTPriceActionStrategy:
         self.use_premium_discount = use_premium_discount
         self.use_volume_confirmation = use_volume_confirmation
         self.use_flexible_entry = use_flexible_entry
+        self.min_confidence = min_confidence
         
     def detect_liquidity_sweeps(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -566,6 +569,18 @@ class ICTPriceActionStrategy:
                                 reasons.append('MSS')
                             df.loc[df.index[i], 'entry_reason'] = '+'.join(reasons) + f'+{zone}'
         
+        # Filter by minimum confidence level
+        confidence_order = {'high': 3, 'medium': 2, 'low': 1}
+        min_conf_level = confidence_order.get(self.min_confidence, 1)
+        
+        for i in range(len(df)):
+            if df.iloc[i]['signal'] != 0:
+                signal_conf = df.iloc[i]['signal_confidence']
+                if confidence_order.get(signal_conf, 0) < min_conf_level:
+                    df.loc[df.index[i], 'signal'] = 0
+                    df.loc[df.index[i], 'signal_confidence'] = ''
+                    df.loc[df.index[i], 'entry_reason'] = ''
+        
         return df
     
     def calculate_position_size(
@@ -604,6 +619,7 @@ class ICTPriceActionStrategy:
         Calculate entry, stop loss, and take profit levels
         
         IMPROVED: Now uses adaptive R:R based on ATR volatility
+        and enforces minimum stop loss distance
         
         Args:
             df: DataFrame with signals
@@ -624,10 +640,19 @@ class ICTPriceActionStrategy:
         # Get adaptive risk/reward ratio
         risk_reward_ratio = self.get_adaptive_risk_reward(df, signal_idx)
         
+        # Calculate ATR for minimum stop distance
+        atr = self.calculate_atr(df)
+        current_atr = atr.iloc[signal_idx] if not pd.isna(atr.iloc[signal_idx]) else entry_price * 0.01
+        min_stop_distance = current_atr * 1.5  # Minimum 1.5x ATR
+        
         if signal == 1:  # Long
             # Stop loss: below recent swing low
             lookback = df.iloc[max(0, signal_idx-self.swing_length):signal_idx]
             stop_loss = lookback['low'].min() * 0.998  # 0.2% buffer
+            
+            # Enforce minimum stop distance
+            if (entry_price - stop_loss) < min_stop_distance:
+                stop_loss = entry_price - min_stop_distance
             
             # Take profit: risk/reward ratio
             risk = entry_price - stop_loss
@@ -637,6 +662,10 @@ class ICTPriceActionStrategy:
             # Stop loss: above recent swing high
             lookback = df.iloc[max(0, signal_idx-self.swing_length):signal_idx]
             stop_loss = lookback['high'].max() * 1.002  # 0.2% buffer
+            
+            # Enforce minimum stop distance
+            if (stop_loss - entry_price) < min_stop_distance:
+                stop_loss = entry_price + min_stop_distance
             
             # Take profit: risk/reward ratio
             risk = stop_loss - entry_price
