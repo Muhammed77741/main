@@ -71,13 +71,12 @@ def load_and_prepare_data(file_path):
     if 'datetime' not in df.columns:
         # Might be MT5 format without proper headers
         # First column is datetime, then open, high, low, close, volume
-        if len(df.columns) >= 6:
-            df.columns = ['datetime', 'open', 'high', 'low', 'close', 'volume'] + list(df.columns[6:])
-        else:
-            # First column might be datetime, extract standard columns
-            col_names = df.columns.tolist()
-            if len(col_names) >= 5:
-                df.columns = ['datetime', 'open', 'high', 'low', 'close'] + (['volume'] if len(col_names) > 5 else []) + list(df.columns[6:])
+        col_names = df.columns.tolist()
+        if len(col_names) >= 6:
+            df.columns = ['datetime', 'open', 'high', 'low', 'close', 'volume'] + col_names[6:]
+        elif len(col_names) >= 5:
+            # If only 5 columns, assume no volume or extra columns
+            df.columns = ['datetime', 'open', 'high', 'low', 'close'] + col_names[5:]
     
     # Convert datetime
     df['datetime'] = pd.to_datetime(df['datetime'])
@@ -143,7 +142,7 @@ def print_backtest_summary(trades_df, data_file):
     print(f"   Max Loss: {max_loss:+.2f}%")
     
     if avg_loss != 0:
-        profit_factor = abs((avg_win * wins) / (avg_loss * losses))
+        profit_factor = (avg_win * wins) / (-avg_loss * losses)
         print(f"   Profit Factor: {profit_factor:.2f}")
     
     print(f"\n⏱️  DURATION METRICS")
@@ -152,9 +151,9 @@ def print_backtest_summary(trades_df, data_file):
     print(f"   Max Duration: {trades_df['duration_hours'].max():.1f} hours")
     
     # TP Analysis
-    tp1_hits = len(trades_df[trades_df['tp1_hit'] == True])
-    tp2_hits = len(trades_df[trades_df['tp2_hit'] == True])
-    tp3_hits = len(trades_df[trades_df['tp3_hit'] == True])
+    tp1_hits = len(trades_df[trades_df['tp1_hit']])
+    tp2_hits = len(trades_df[trades_df['tp2_hit']])
+    tp3_hits = len(trades_df[trades_df['tp3_hit']])
     
     print(f"\n🎯 TP HIT RATES")
     print(f"   TP1 (Fib 127.2%): {tp1_hits}/{total_trades} ({tp1_hits/total_trades*100:.1f}%)")
