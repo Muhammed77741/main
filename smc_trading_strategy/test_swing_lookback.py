@@ -89,20 +89,22 @@ def run_backtest_with_lookback(lookback):
         
         # Calculate metrics
         total_trades = len(trades_df)
-        wins = len(trades_df[trades_df['profit'] > 0])
-        losses = len(trades_df[trades_df['profit'] < 0])
+        wins = len(trades_df[trades_df['pnl_pct'] > 0])
+        losses = len(trades_df[trades_df['pnl_pct'] < 0])
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
         
-        total_profit = trades_df['profit'].sum()
-        gross_profit = trades_df[trades_df['profit'] > 0]['profit'].sum()
-        gross_loss = abs(trades_df[trades_df['profit'] < 0]['profit'].sum())
+        total_profit = trades_df['pnl_pct'].sum()
+        gross_profit = trades_df[trades_df['pnl_pct'] > 0]['pnl_pct'].sum()
+        gross_loss = abs(trades_df[trades_df['pnl_pct'] < 0]['pnl_pct'].sum())
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
         
-        # Calculate average SL distance
-        avg_sl_distance = abs(trades_df['entry_price'] - trades_df['sl']).mean()
+        # Calculate average SL distance (if SL column exists, otherwise estimate from direction and TP distances)
+        # Note: V3 Adaptive doesn't store SL in trade records, only TP levels
+        # We'll estimate SL size from entry prices for now
+        avg_sl_distance = 0  # Not available in V3 trade records
         
         # Calculate max drawdown
-        cumulative_pnl = trades_df['profit'].cumsum()
+        cumulative_pnl = trades_df['pnl_pct'].cumsum()
         running_max = cumulative_pnl.expanding().max()
         drawdown = cumulative_pnl - running_max
         max_dd = drawdown.min()
