@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from smc_trading_strategy.data_loader import DataLoader
+from smc_trading_strategy.data_loader import load_data_from_csv
 from smc_trading_strategy.simplified_smc_strategy import SimplifiedSMCStrategy
 
 
@@ -143,7 +143,7 @@ class FixedSLBacktester:
                 position = {
                     'trade_number': trade_number,
                     'entry_idx': idx,
-                    'entry_time': current_candle['time'],
+                    'entry_time': df.index[idx],
                     'entry_price': entry_price,
                     'signal': signal_type,
                     'sl': sl_price,
@@ -345,6 +345,12 @@ class FixedSLBacktester:
 
 def main():
     """Run backtest for all 3 variants"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='V4 Fixed SL Backtest')
+    parser.add_argument('--file', required=True, help='CSV file with OHLC data')
+    args = parser.parse_args()
+    
     print("\n" + "="*70)
     print("BACKTEST V4: FIXED 35-POINT SL + AGGRESSIVE TP LEVELS")
     print("="*70)
@@ -359,16 +365,18 @@ def main():
     print("  2. Balanced: 40%-30%-30% (mixed)")
     print("  3. Aggressive: 30%-30%-40% (high risk-reward)")
     
-    # Load data
-    loader = DataLoader()
-    df = loader.load_h1_data()
+    # Load data directly with pandas
+    print(f"\n📂 Loading data from {args.file}...")
+    df = pd.read_csv(args.file)
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df = df.set_index('datetime')
     
     if df is None or df.empty:
         print("Error: Could not load data")
         return
     
     print(f"\nData loaded: {len(df)} candles")
-    print(f"Period: {df['time'].iloc[0]} to {df['time'].iloc[-1]}")
+    print(f"Period: {df.index[0]} to {df.index[-1]}")
     
     # Test all 3 variants
     results = {}
