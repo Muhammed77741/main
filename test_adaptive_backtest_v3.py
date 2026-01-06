@@ -145,7 +145,7 @@ def test_adaptive_backtest():
             
             # Show sample trades
             print(f"\n   Sample trades:")
-            for i, row in trades_df.head(3).iterrows():
+            for _, row in trades_df.head(3).iterrows():
                 print(f"   - {row['direction']} ({row['regime']}): {row['pnl_pct']:+.2f}% - Exit: {row['exit_type']}")
             
             return True

@@ -46,6 +46,9 @@ class AdaptiveBacktestV3:
         self.max_loss_per_day = -5.0  # %
         self.max_positions = 5  # LIMITED to reduce DD (was 7, original 999)
         self.max_drawdown = -999.0  # UNLIMITED
+        
+        # Market regime detection threshold
+        self.trend_detection_threshold = 3  # Minimum number of trend signals required (out of 5)
 
     def detect_market_regime(self, df, current_idx, lookback=100):
         """
@@ -122,8 +125,8 @@ class AdaptiveBacktestV3:
             structural_trend     # Higher highs или Lower lows
         ])
 
-        # ТРЕНД если 3+ сигнала из 5 (было: все 3 обязательны)
-        is_trend = trend_signals >= 3
+        # ТРЕНД если достигнут порог (по умолчанию: 3+ сигнала из 5)
+        is_trend = trend_signals >= self.trend_detection_threshold
 
         return 'TREND' if is_trend else 'RANGE'
 
