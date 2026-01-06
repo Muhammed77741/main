@@ -12,6 +12,8 @@ import time
 from datetime import datetime, timedelta
 import sys
 from pathlib import Path
+import csv
+import os
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -74,6 +76,11 @@ class LiveBotMT5FullAuto:
         # Current market regime
         self.current_regime = 'RANGE'
         
+        # Position tracking
+        self.trades_file = 'bot_trades_log.csv'
+        self.positions_tracker = {}  # {ticket: position_data}
+        self._initialize_trades_log()
+        
         # Telegram bot (optional)
         self.telegram_bot = None
         if telegram_token and telegram_chat_id:
@@ -84,6 +91,94 @@ class LiveBotMT5FullAuto:
                 print(f"⚠️  Telegram init failed: {e}")
         
         self.mt5_connected = False
+    
+    def _initialize_trades_log(self):
+        """Initialize CSV file for trade logging"""
+        if not os.path.exists(self.trades_file):
+            with open(self.trades_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    'Ticket', 'Open_Time', 'Close_Time', 'Type', 'Volume',
+                    'Entry_Price', 'SL', 'TP', 'Close_Price', 'Profit',
+                    'Pips', 'Market_Regime', 'Duration_Hours', 'Status', 'Comment'
+                ])
+            print(f"📝 Created trade log file: {self.trades_file}")
+    
+    def _log_position_opened(self, ticket, position_type, volume, entry_price, 
+                             sl, tp, regime, comment=''):
+        """Log when position is opened"""
+        self.positions_tracker[ticket] = {
+            'ticket': ticket,
+            'open_time': datetime.now(),
+            'close_time': None,
+            'type': position_type,
+            'volume': volume,
+            'entry_price': entry_price,
+            'sl': sl,
+            'tp': tp,
+            'close_price': None,
+            'profit': None,
+            'pips': None,
+            'regime': regime,
+            'duration': None,
+            'status': 'OPEN',
+            'comment': comment
+        }
+        print(f"📊 Logged opened position: Ticket={ticket}, Type={position_type}, Entry={entry_price}")
+    
+    def _log_position_closed(self, ticket, close_price, profit, status='CLOSED'):
+        """Log when position is closed"""
+        if ticket not in self.positions_tracker:
+            print(f"⚠️  Ticket {ticket} not found in tracker")
+            return
+        
+        pos = self.positions_tracker[ticket]
+        pos['close_time'] = datetime.now()
+        pos['close_price'] = close_price
+        pos['profit'] = profit
+        pos['status'] = status
+        
+        # Calculate duration
+        if pos['open_time']:
+            duration = (pos['close_time'] - pos['open_time']).total_seconds() / 3600
+            pos['duration'] = round(duration, 2)
+        
+        # Calculate pips
+        if pos['type'] == 'BUY':
+            pips = (close_price - pos['entry_price']) * 10  # For XAUUSD
+        else:
+            pips = (pos['entry_price'] - close_price) * 10
+        pos['pips'] = round(pips, 1)
+        
+        # Write to CSV
+        self._write_trade_to_csv(pos)
+        
+        # Remove from tracker
+        del self.positions_tracker[ticket]
+        
+        print(f"📊 Logged closed position: Ticket={ticket}, Profit={profit:.2f}, Pips={pips:.1f}, Duration={pos['duration']}h")
+    
+    def _write_trade_to_csv(self, trade_data):
+        """Write completed trade to CSV file"""
+        with open(self.trades_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                trade_data['ticket'],
+                trade_data['open_time'].strftime('%Y-%m-%d %H:%M:%S') if trade_data['open_time'] else '',
+                trade_data['close_time'].strftime('%Y-%m-%d %H:%M:%S') if trade_data['close_time'] else '',
+                trade_data['type'],
+                trade_data['volume'],
+                trade_data['entry_price'],
+                trade_data['sl'],
+                trade_data['tp'],
+                trade_data['close_price'],
+                trade_data['profit'],
+                trade_data['pips'],
+                trade_data['regime'],
+                trade_data['duration'],
+                trade_data['status'],
+                trade_data['comment']
+            ])
         
     def connect_mt5(self):
         """Connect to MT5"""
@@ -106,6 +201,51 @@ class LiveBotMT5FullAuto:
         if self.mt5_connected:
             mt5.shutdown()
             self.mt5_connected = False
+    
+    def _check_closed_positions(self):
+        """Check for positions that have been closed and log them"""
+        if not self.mt5_connected:
+            return
+        
+        # Get currently open position tickets
+        open_positions = mt5.positions_get(symbol=self.symbol)
+        current_tickets = set()
+        if open_positions:
+            current_tickets = {pos.ticket for pos in open_positions}
+        
+        # Find positions that were tracked but are now closed
+        tracked_tickets = set(self.positions_tracker.keys())
+        closed_tickets = tracked_tickets - current_tickets
+        
+        # Log closed positions
+        for ticket in closed_tickets:
+            # Try to get deal history for this ticket
+            from_date = datetime.now() - timedelta(days=7)
+            deals = mt5.history_deals_get(from_date, datetime.now())
+            
+            if deals:
+                for deal in deals:
+                    if deal.order == ticket and deal.entry == mt5.DEAL_ENTRY_OUT:
+                        # Found the closing deal
+                        self._log_position_closed(
+                            ticket=ticket,
+                            close_price=deal.price,
+                            profit=deal.profit,
+                            status='TP' if deal.comment and 'tp' in deal.comment.lower() else 
+                                   'SL' if deal.comment and 'sl' in deal.comment.lower() else 
+                                   'CLOSED'
+                        )
+                        break
+            else:
+                # If we can't find deal history, mark as closed with unknown status
+                pos_data = self.positions_tracker.get(ticket)
+                if pos_data:
+                    self._log_position_closed(
+                        ticket=ticket,
+                        close_price=pos_data['entry_price'],
+                        profit=0,
+                        status='UNKNOWN'
+                    )
             
     async def send_telegram(self, message):
         """Send Telegram notification"""
@@ -442,6 +582,20 @@ class LiveBotMT5FullAuto:
         print(f"   Order: #{result.order}")
         print(f"   Price: {result.price:.2f}")
         
+        # Log position to tracking system
+        position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
+        regime = signal.get('regime', 'UNKNOWN')
+        self._log_position_opened(
+            ticket=result.order,
+            position_type=position_type,
+            volume=lot_size,
+            entry_price=result.price,
+            sl=signal['sl'],
+            tp=signal['tp'],
+            regime=regime,
+            comment=f"V3_Adaptive_{regime_code}"
+        )
+        
         # Send Telegram notification
         if self.telegram_bot:
             import asyncio
@@ -457,6 +611,65 @@ class LiveBotMT5FullAuto:
             asyncio.run(self.send_telegram(message))
             
         return True
+    
+    def generate_report(self):
+        """Generate trading report from CSV log"""
+        if not os.path.exists(self.trades_file):
+            print("❌ No trade log file found")
+            return
+        
+        df = pd.read_csv(self.trades_file)
+        
+        if len(df) == 0:
+            print("📊 No trades recorded yet")
+            return
+        
+        print(f"\n{'='*80}")
+        print("📊 TRADING REPORT")
+        print(f"{'='*80}")
+        print(f"Total trades: {len(df)}")
+        
+        if 'Status' in df.columns and 'Profit' in df.columns:
+            completed = df[df['Status'].isin(['CLOSED', 'TP', 'SL'])]
+            if len(completed) > 0:
+                wins = completed[completed['Profit'] > 0]
+                losses = completed[completed['Profit'] < 0]
+                
+                print(f"\n💰 P&L Summary:")
+                print(f"   Total P&L: ${completed['Profit'].sum():.2f}")
+                print(f"   Wins: {len(wins)} ({len(wins)/len(completed)*100:.1f}%)")
+                print(f"   Losses: {len(losses)} ({len(losses)/len(completed)*100:.1f}%)")
+                
+                if len(wins) > 0:
+                    print(f"   Avg Win: ${wins['Profit'].mean():.2f}")
+                    print(f"   Max Win: ${wins['Profit'].max():.2f}")
+                
+                if len(losses) > 0:
+                    print(f"   Avg Loss: ${losses['Profit'].mean():.2f}")
+                    print(f"   Max Loss: ${losses['Profit'].min():.2f}")
+                
+                if len(losses) > 0 and abs(losses['Profit'].sum()) > 0:
+                    pf = abs(wins['Profit'].sum()) / abs(losses['Profit'].sum())
+                    print(f"   Profit Factor: {pf:.2f}")
+        
+        if 'Market_Regime' in df.columns:
+            print(f"\n📊 By Market Regime:")
+            for regime in df['Market_Regime'].unique():
+                regime_trades = df[df['Market_Regime'] == regime]
+                if len(regime_trades) > 0:
+                    regime_profit = regime_trades['Profit'].sum() if 'Profit' in df.columns else 0
+                    print(f"   {regime}: {len(regime_trades)} trades, ${regime_profit:.2f}")
+        
+        if 'Duration_Hours' in df.columns:
+            completed = df[df['Duration_Hours'].notna()]
+            if len(completed) > 0:
+                print(f"\n⏱️  Duration:")
+                print(f"   Avg: {completed['Duration_Hours'].mean():.1f}h")
+                print(f"   Min: {completed['Duration_Hours'].min():.1f}h")
+                print(f"   Max: {completed['Duration_Hours'].max():.1f}h")
+        
+        print(f"\n📁 Full log: {self.trades_file}")
+        print(f"{'='*80}\n")
         
     def run(self):
         """Main bot loop"""
@@ -507,6 +720,10 @@ class LiveBotMT5FullAuto:
                 
                 # Check current positions
                 open_positions = self.get_open_positions()
+                
+                # Check for closed positions and log them
+                self._check_closed_positions()
+                
                 print(f"📊 Open positions: {len(open_positions)}/{self.max_positions}")
                 
                 if len(open_positions) > 0:
@@ -582,6 +799,9 @@ class LiveBotMT5FullAuto:
                 print("   Remember to close them manually if needed.")
             else:
                 print("\n✅ No open positions")
+            
+            # Generate trading report
+            self.generate_report()
                 
             print(f"{'='*80}\n")
         except Exception as e:
