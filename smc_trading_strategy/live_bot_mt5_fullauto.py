@@ -392,16 +392,21 @@ class LiveBotMT5FullAuto:
                 print(f"   ℹ️  No signals detected")
                 return None
                 
-            # Check if last signal is recent (within last 5 candles)
+            # ONLY CHECK THE MOST RECENT CLOSED CANDLE (not historical signals)
+            # This ensures we only trade on fresh signals, not old ones
             last_signal = signals.iloc[-1]
             last_signal_time = signals.index[-1]
             current_time = df.index[-1]
             
-            time_diff = (current_time - last_signal_time).total_seconds() / 3600
+            # Signal must be from the LAST COMPLETED CANDLE ONLY
+            # If signal is older than 1.5 hours, it's from a previous candle - ignore it
+            time_diff_hours = (current_time - last_signal_time).total_seconds() / 3600
             
-            if time_diff > 5:  # More than 5 hours old
-                print(f"   ⏰ Last signal is {time_diff:.1f}h old (too old, need <5h)")
+            if time_diff_hours > 1.5:  # More than 1.5 hours old = not from last closed candle
+                print(f"   ⏰ Last signal is {time_diff_hours:.1f}h old (not from latest candle, skipping)")
                 return None
+                
+            print(f"   ✅ Signal from latest candle (age: {time_diff_hours:.1f}h)")
             
             # Adjust TP based on market regime
             if self.current_regime == 'TREND':
@@ -427,11 +432,11 @@ class LiveBotMT5FullAuto:
                 tp3 = entry - tp3_distance
                 
             direction = "LONG" if last_signal['signal'] == 1 else "SHORT"
-            print(f"\n   ✅ FRESH SIGNAL DETECTED!")
+            print(f"\n   ✅ FRESH SIGNAL FROM LATEST CANDLE!")
             print(f"      Direction: {direction}")
             print(f"      Market Regime: {self.current_regime}")
             print(f"      Signal time: {last_signal_time.strftime('%Y-%m-%d %H:%M')}")
-            print(f"      Age: {time_diff:.1f}h ago")
+            print(f"      Age: {time_diff_hours:.1f}h ago")
             print(f"      Entry: ${entry:.2f}")
             print(f"      SL: ${sl:.2f}")
             print(f"      TP1: ${tp1:.2f} ({tp1_distance}p)")
@@ -713,8 +718,22 @@ class LiveBotMT5FullAuto:
         print(f"\n📁 Full log: {self.trades_file}")
         print(f"{'='*80}\n")
         
+    def _wait_until_next_hour(self):
+        """Wait until the next full hour (01:00, 02:00, etc.)"""
+        now = datetime.now()
+        
+        # Calculate next hour
+        next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        wait_seconds = (next_hour - now).total_seconds()
+        
+        if wait_seconds > 0:
+            print(f"\n⏰ Waiting until next hour: {next_hour.strftime('%H:%M:%S')}")
+            print(f"   Time now: {now.strftime('%H:%M:%S')}")
+            print(f"   Wait time: {int(wait_seconds/60)} min {int(wait_seconds%60)} sec")
+            time.sleep(wait_seconds)
+            
     def run(self):
-        """Main bot loop"""
+        """Main bot loop - runs exactly on the hour (01:00, 02:00, etc.)"""
         print(f"\n{'='*80}")
         print(f"🤖 BOT STARTED - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*80}")
@@ -722,7 +741,8 @@ class LiveBotMT5FullAuto:
         print(f"   Symbol: {self.symbol}")
         print(f"   Timeframe: H1")
         print(f"   Strategy: V3 Adaptive (TREND/RANGE detection)")
-        print(f"   Check interval: {self.check_interval/60:.0f} minutes")
+        print(f"   Check interval: Every hour on the hour (01:00, 02:00, 03:00...)")
+        print(f"   Signal source: ONLY latest closed candle (no historical signals)")
         print(f"   Risk per trade: {self.risk_percent}%")
         print(f"   Max positions: {self.max_positions}")
         print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
@@ -741,6 +761,10 @@ class LiveBotMT5FullAuto:
             print("🚀 LIVE TRADING MODE: Real trades will be executed!")
             print("   ⚠️  Monitor your account regularly")
             print("   ⚠️  Stop the bot with Ctrl+C\n")
+        
+        # Wait until the next hour before starting
+        print("⏰ Bot will start checking at the next full hour...")
+        self._wait_until_next_hour()
         
         iteration = 0
         
@@ -817,15 +841,14 @@ class LiveBotMT5FullAuto:
                     profit_pct = ((account_info.equity - account_info.balance) / account_info.balance * 100) if account_info.balance > 0 else 0
                     print(f"   Floating P&L: ${account_info.equity - account_info.balance:.2f} ({profit_pct:+.2f}%)")
                     
-                # Wait before next check
-                next_check = datetime.now() + timedelta(seconds=self.check_interval)
+                # Wait until next full hour
                 print(f"\n{'='*80}")
-                print(f"💤 Sleeping for {self.check_interval/60:.0f} minutes")
-                print(f"   Next check at: {next_check.strftime('%H:%M:%S')}")
+                print(f"💤 Waiting until next full hour...")
                 print(f"   Press Ctrl+C to stop the bot")
                 print(f"{'='*80}\n")
                 
-                time.sleep(self.check_interval)
+                # Wait until next hour (01:00, 02:00, 03:00, etc.)
+                self._wait_until_next_hour()
                 
         except KeyboardInterrupt:
             print("\n\n{'='*80}")
