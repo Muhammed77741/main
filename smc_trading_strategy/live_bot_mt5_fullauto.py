@@ -132,27 +132,27 @@ class LiveBotMT5FullAuto:
         
     def analyze_market(self):
         """Analyze market and get signals"""
-        print(f"\n{'='*60}")
-        print(f"🔍 Analyzing market: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'='*60}")
-        
-        # Get data
-        df = self.get_market_data()
-        if df is None:
-            return None
-            
-        print(f"📊 Data: {len(df)} candles")
-        print(f"   Last close: {df['close'].iloc[-1]:.2f}")
-        
-        # Run strategy
         try:
+            # Get data
+            print(f"   📥 Fetching market data...")
+            df = self.get_market_data()
+            if df is None:
+                print(f"   ❌ Failed to get market data")
+                return None
+                
+            last_close = df['close'].iloc[-1]
+            last_time = df.index[-1]
+            print(f"   📊 Got {len(df)} candles, last close: ${last_close:.2f} at {last_time.strftime('%Y-%m-%d %H:%M')}")
+            
+            # Run strategy
+            print(f"   🧠 Running V3 Adaptive Strategy...")
             result = self.strategy.run_strategy(df)
             
             # Get last signal (most recent)
             signals = result[result['signal'] != 0]
             
             if len(signals) == 0:
-                print("   No signals found")
+                print(f"   ℹ️  No signals detected")
                 return None
                 
             # Check if last signal is recent (within last 5 candles)
@@ -163,15 +163,17 @@ class LiveBotMT5FullAuto:
             time_diff = (current_time - last_signal_time).total_seconds() / 3600
             
             if time_diff > 5:  # More than 5 hours old
-                print(f"   Last signal too old ({time_diff:.1f}h ago)")
+                print(f"   ⏰ Last signal is {time_diff:.1f}h old (too old, need <5h)")
                 return None
                 
             direction = "LONG" if last_signal['signal'] == 1 else "SHORT"
-            print(f"\n✅ SIGNAL FOUND: {direction}")
-            print(f"   Time: {last_signal_time}")
-            print(f"   Entry: {last_signal['entry_price']:.2f}")
-            print(f"   SL: {last_signal['stop_loss']:.2f}")
-            print(f"   TP: {last_signal['take_profit']:.2f}")
+            print(f"\n   ✅ FRESH SIGNAL DETECTED!")
+            print(f"      Direction: {direction}")
+            print(f"      Signal time: {last_signal_time.strftime('%Y-%m-%d %H:%M')}")
+            print(f"      Age: {time_diff:.1f}h ago")
+            print(f"      Entry: ${last_signal['entry_price']:.2f}")
+            print(f"      SL: ${last_signal['stop_loss']:.2f}")
+            print(f"      TP: ${last_signal['take_profit']:.2f}")
             
             # Calculate risk/reward
             if last_signal['signal'] == 1:
@@ -182,7 +184,9 @@ class LiveBotMT5FullAuto:
                 reward = last_signal['entry_price'] - last_signal['take_profit']
                 
             rr = reward / risk if risk > 0 else 0
-            print(f"   Risk: {risk:.2f}п, Reward: {reward:.2f}п, R:R = {rr:.2f}")
+            print(f"      Risk: {risk:.2f} points")
+            print(f"      Reward: {reward:.2f} points")
+            print(f"      Risk:Reward = 1:{rr:.2f}")
             
             return {
                 'direction': last_signal['signal'],
@@ -193,7 +197,7 @@ class LiveBotMT5FullAuto:
             }
             
         except Exception as e:
-            print(f"❌ Strategy error: {e}")
+            print(f"   ❌ Strategy analysis error: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -334,25 +338,65 @@ class LiveBotMT5FullAuto:
         
     def run(self):
         """Main bot loop"""
-        print(f"\n{'='*60}")
-        print(f"🤖 BOT STARTED")
-        print(f"{'='*60}")
-        print(f"Symbol: {self.symbol}")
-        print(f"Timeframe: {self.timeframe}")
-        print(f"Check interval: {self.check_interval}s")
-        print(f"Risk: {self.risk_percent}%")
-        print(f"Max positions: {self.max_positions}")
-        print(f"Mode: {'DRY RUN' if self.dry_run else 'LIVE'}")
-        print(f"{'='*60}\n")
+        print(f"\n{'='*80}")
+        print(f"🤖 BOT STARTED - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'='*80}")
+        print(f"📊 Configuration:")
+        print(f"   Symbol: {self.symbol}")
+        print(f"   Timeframe: H1")
+        print(f"   Check interval: {self.check_interval/60:.0f} minutes")
+        print(f"   Risk per trade: {self.risk_percent}%")
+        print(f"   Max positions: {self.max_positions}")
+        print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
+        print(f"{'='*80}\n")
+        
+        if self.dry_run:
+            print("🧪 DRY RUN MODE: All trades will be simulated only")
+            print("   ✅ Analysis will run normally")
+            print("   ✅ Signals will be detected")
+            print("   ✅ Position sizing will be calculated")
+            print("   ⚠️  NO real trades will be executed\n")
+        else:
+            print("🚀 LIVE TRADING MODE: Real trades will be executed!")
+            print("   ⚠️  Monitor your account regularly")
+            print("   ⚠️  Stop the bot with Ctrl+C\n")
+        
+        iteration = 0
         
         try:
             while True:
+                iteration += 1
+                
+                print(f"\n{'='*80}")
+                print(f"🔄 Iteration #{iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"{'='*80}")
+                
+                # Check connection
+                if not self.mt5_connected:
+                    print("❌ MT5 disconnected! Attempting to reconnect...")
+                    if not self.connect_mt5():
+                        print("❌ Reconnection failed. Waiting 60s...")
+                        time.sleep(60)
+                        continue
+                
+                # Check current positions
+                open_positions = self.get_open_positions()
+                print(f"📊 Open positions: {len(open_positions)}/{self.max_positions}")
+                
+                if len(open_positions) > 0:
+                    for i, pos in enumerate(open_positions, 1):
+                        direction = "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT"
+                        profit = pos.profit
+                        print(f"   Position #{i}: {direction} @ {pos.price_open:.2f}, "
+                              f"SL={pos.sl:.2f}, TP={pos.tp:.2f}, "
+                              f"P&L: ${profit:.2f}")
+                
                 # Analyze market
+                print(f"\n🔍 Analyzing market...")
                 signal = self.analyze_market()
                 
                 if signal:
-                    # Check if we should open position
-                    open_positions = self.get_open_positions()
+                    print(f"\n✅ Signal detected!")
                     
                     # Check if already have position in same direction
                     has_same_direction = False
@@ -363,19 +407,62 @@ class LiveBotMT5FullAuto:
                             break
                             
                     if has_same_direction:
-                        print(f"⚠️  Already have {('LONG' if signal['direction']==1 else 'SHORT')} position")
+                        direction_str = 'LONG' if signal['direction'] == 1 else 'SHORT'
+                        print(f"⚠️  Already have {direction_str} position - skipping")
+                    elif len(open_positions) >= self.max_positions:
+                        print(f"⚠️  Max positions reached ({self.max_positions}) - skipping")
                     else:
                         # Open position
-                        self.open_position(signal)
+                        print(f"📈 Attempting to open position...")
+                        success = self.open_position(signal)
+                        if success:
+                            print(f"✅ Position opened successfully!")
+                        else:
+                            print(f"❌ Failed to open position")
                 else:
-                    print("   Waiting for signal...")
+                    print("   ℹ️  No signals at this time")
+                    
+                # Account status
+                account_info = mt5.account_info()
+                if account_info:
+                    print(f"\n💰 Account status:")
+                    print(f"   Balance: ${account_info.balance:.2f}")
+                    print(f"   Equity: ${account_info.equity:.2f}")
+                    print(f"   Margin: ${account_info.margin:.2f}")
+                    profit_pct = ((account_info.equity - account_info.balance) / account_info.balance * 100) if account_info.balance > 0 else 0
+                    print(f"   Floating P&L: ${account_info.equity - account_info.balance:.2f} ({profit_pct:+.2f}%)")
                     
                 # Wait before next check
-                print(f"\n💤 Sleeping for {self.check_interval/60:.0f} minutes...")
-                print(f"   Next check: {(datetime.now() + timedelta(seconds=self.check_interval)).strftime('%H:%M:%S')}")
+                next_check = datetime.now() + timedelta(seconds=self.check_interval)
+                print(f"\n{'='*80}")
+                print(f"💤 Sleeping for {self.check_interval/60:.0f} minutes")
+                print(f"   Next check at: {next_check.strftime('%H:%M:%S')}")
+                print(f"   Press Ctrl+C to stop the bot")
+                print(f"{'='*80}\n")
+                
                 time.sleep(self.check_interval)
                 
         except KeyboardInterrupt:
-            print("\n\n⚠️  Bot stopped by user")
+            print("\n\n{'='*80}")
+            print("⚠️  BOT STOPPED BY USER")
+            print(f"{'='*80}")
+            print(f"Total iterations: {iteration}")
+            print(f"Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # Show final positions
+            open_positions = self.get_open_positions()
+            if len(open_positions) > 0:
+                print(f"\n⚠️  WARNING: {len(open_positions)} position(s) still open!")
+                print("   Remember to close them manually if needed.")
+            else:
+                print("\n✅ No open positions")
+                
+            print(f"{'='*80}\n")
+        except Exception as e:
+            print(f"\n\n❌ BOT ERROR: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
+            print("🔌 Disconnecting from MT5...")
             self.disconnect_mt5()
+            print("✅ Shutdown complete")
