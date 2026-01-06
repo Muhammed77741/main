@@ -534,9 +534,27 @@ def main():
 
     # Load data
     print(f"\n📂 Loading data from {args.file}...")
+    # Try to read with standard format first
     df = pd.read_csv(args.file)
-    df['datetime'] = pd.to_datetime(df['datetime'])
+    
+    # Check if datetime parsing is needed
+    if 'datetime' in df.columns:
+        # Check if datetime column contains actual dates or numbers
+        if df['datetime'].dtype in ['float64', 'int64']:
+            # MT5 format issue - datetime is in index, columns are shifted
+            df = pd.read_csv(args.file, names=['datetime', 'open', 'high', 'low', 'close', 'volume', 'extra'], skiprows=1)
+            if 'extra' in df.columns:
+                df = df.drop('extra', axis=1)
+        
+        # Parse datetime with dot format (MT5 style)
+        df['datetime'] = pd.to_datetime(df['datetime'], format='%Y.%m.%d %H:%M', errors='coerce')
+        
+        # If that failed, try standard parsing
+        if df['datetime'].isna().any():
+            df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+    
     df = df.set_index('datetime')
+    df = df.dropna()  # Remove any rows with invalid dates
 
     if 'is_active' not in df.columns:
         df['is_london'] = df.index.hour.isin(range(7, 12))
