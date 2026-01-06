@@ -7,6 +7,7 @@ Uses V3 Adaptive Strategy with TREND/RANGE detection
 
 import MetaTrader5 as mt5
 import pandas as pd
+import numpy as np
 import time
 from datetime import datetime, timedelta
 import sys
@@ -23,8 +24,9 @@ class LiveBotMT5FullAuto:
     Full-automatic trading bot for MT5
     
     Features:
-    - Uses V3 Adaptive Strategy (Pattern Recognition + Fibonacci 1.618)
+    - Uses V3 Adaptive Strategy with TREND/RANGE detection
     - Automatic position opening/closing
+    - Adapts TP levels based on market regime
     - Risk management
     - Optional Telegram notifications
     - DRY RUN mode for testing
@@ -58,6 +60,19 @@ class LiveBotMT5FullAuto:
         
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
+        
+        # TREND MODE parameters (strong trend)
+        self.trend_tp1 = 30
+        self.trend_tp2 = 55
+        self.trend_tp3 = 90
+        
+        # RANGE MODE parameters (sideways)
+        self.range_tp1 = 20
+        self.range_tp2 = 35
+        self.range_tp3 = 50
+        
+        # Current market regime
+        self.current_regime = 'RANGE'
         
         # Telegram bot (optional)
         self.telegram_bot = None
@@ -130,8 +145,85 @@ class LiveBotMT5FullAuto:
         
         return df
         
+    def detect_market_regime(self, df, lookback=100):
+        """
+        Detect market regime: TREND or RANGE
+        
+        Uses:
+        1. EMA crossover (trend determined by crossing)
+        2. ATR (volatility)
+        3. Directional movement
+        4. Consecutive candles in one direction
+        """
+        if len(df) < lookback:
+            return 'RANGE'  # Default to range
+        
+        # Get recent data
+        recent_data = df.iloc[-lookback:]
+        
+        # 1. EMA CROSSOVER (main trend indicator)
+        closes = recent_data['close']
+        ema_fast = closes.ewm(span=20, adjust=False).mean()
+        ema_slow = closes.ewm(span=50, adjust=False).mean()
+        
+        # Current EMA position
+        current_fast = ema_fast.iloc[-1]
+        current_slow = ema_slow.iloc[-1]
+        
+        # Difference between EMAs in %
+        ema_diff_pct = abs((current_fast - current_slow) / current_slow) * 100
+        
+        # If EMAs diverge > 0.3% = clear trend
+        ema_trend = ema_diff_pct > 0.3
+        
+        # 2. ATR (volatility - should be above average)
+        high_low = recent_data['high'] - recent_data['low']
+        atr = high_low.rolling(window=14).mean().iloc[-1]
+        avg_atr = high_low.rolling(window=14).mean().mean()
+        
+        high_volatility = atr > avg_atr * 1.05
+        
+        # 3. Directional movement (price moves in one direction)
+        price_change = recent_data['close'].iloc[-1] - recent_data['close'].iloc[0]
+        price_range = recent_data['high'].max() - recent_data['low'].min()
+        
+        directional_move_pct = abs(price_change) / price_range if price_range > 0 else 0
+        strong_direction = directional_move_pct > 0.35
+        
+        # 4. Consecutive movements (candles in one direction)
+        closes_arr = recent_data['close'].values
+        up_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] > closes_arr[i-1])
+        down_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] < closes_arr[i-1])
+        total_moves = up_moves + down_moves
+        
+        trend_strength = abs(up_moves - down_moves) / total_moves if total_moves > 0 else 0
+        directional_bias = trend_strength > 0.15
+        
+        # 5. Consecutive higher highs / lower lows
+        highs = recent_data['high'].values[-20:]
+        lows = recent_data['low'].values[-20:]
+        
+        higher_highs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
+        lower_lows = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
+        
+        structural_trend = (higher_highs > 12) or (lower_lows > 12)
+        
+        # Count trend signals
+        trend_signals = sum([
+            ema_trend,
+            high_volatility,
+            strong_direction,
+            directional_bias,
+            structural_trend
+        ])
+        
+        # TREND if 3+ signals out of 5
+        is_trend = trend_signals >= 3
+        
+        return 'TREND' if is_trend else 'RANGE'
+    
     def analyze_market(self):
-        """Analyze market and get signals"""
+        """Analyze market and get signals with adaptive TP levels"""
         try:
             # Get data
             print(f"   📥 Fetching market data...")
@@ -143,6 +235,11 @@ class LiveBotMT5FullAuto:
             last_close = df['close'].iloc[-1]
             last_time = df.index[-1]
             print(f"   📊 Got {len(df)} candles, last close: ${last_close:.2f} at {last_time.strftime('%Y-%m-%d %H:%M')}")
+            
+            # Detect market regime
+            print(f"   🔍 Detecting market regime...")
+            self.current_regime = self.detect_market_regime(df)
+            print(f"   📊 Market Regime: {self.current_regime}")
             
             # Run strategy
             print(f"   🧠 Running V3 Adaptive Strategy...")
@@ -165,23 +262,44 @@ class LiveBotMT5FullAuto:
             if time_diff > 5:  # More than 5 hours old
                 print(f"   ⏰ Last signal is {time_diff:.1f}h old (too old, need <5h)")
                 return None
+            
+            # Adjust TP based on market regime
+            if self.current_regime == 'TREND':
+                tp1_distance = self.trend_tp1
+                tp2_distance = self.trend_tp2
+                tp3_distance = self.trend_tp3
+            else:
+                tp1_distance = self.range_tp1
+                tp2_distance = self.range_tp2
+                tp3_distance = self.range_tp3
+                
+            # Calculate adaptive TP (use TP2 as main target)
+            entry = last_signal['entry_price']
+            sl = last_signal['stop_loss']
+            
+            if last_signal['signal'] == 1:  # LONG
+                tp = entry + tp2_distance
+            else:  # SHORT
+                tp = entry - tp2_distance
                 
             direction = "LONG" if last_signal['signal'] == 1 else "SHORT"
             print(f"\n   ✅ FRESH SIGNAL DETECTED!")
             print(f"      Direction: {direction}")
+            print(f"      Market Regime: {self.current_regime}")
             print(f"      Signal time: {last_signal_time.strftime('%Y-%m-%d %H:%M')}")
             print(f"      Age: {time_diff:.1f}h ago")
-            print(f"      Entry: ${last_signal['entry_price']:.2f}")
-            print(f"      SL: ${last_signal['stop_loss']:.2f}")
-            print(f"      TP: ${last_signal['take_profit']:.2f}")
+            print(f"      Entry: ${entry:.2f}")
+            print(f"      SL: ${sl:.2f}")
+            print(f"      TP (adaptive): ${tp:.2f} ({tp2_distance}p for {self.current_regime})")
+            print(f"      Available TPs: {tp1_distance}p / {tp2_distance}p / {tp3_distance}p")
             
             # Calculate risk/reward
             if last_signal['signal'] == 1:
-                risk = last_signal['entry_price'] - last_signal['stop_loss']
-                reward = last_signal['take_profit'] - last_signal['entry_price']
+                risk = entry - sl
+                reward = tp - entry
             else:
-                risk = last_signal['stop_loss'] - last_signal['entry_price']
-                reward = last_signal['entry_price'] - last_signal['take_profit']
+                risk = sl - entry
+                reward = entry - tp
                 
             rr = reward / risk if risk > 0 else 0
             print(f"      Risk: {risk:.2f} points")
@@ -190,10 +308,11 @@ class LiveBotMT5FullAuto:
             
             return {
                 'direction': last_signal['signal'],
-                'entry': last_signal['entry_price'],
-                'sl': last_signal['stop_loss'],
-                'tp': last_signal['take_profit'],
-                'time': last_signal_time
+                'entry': entry,
+                'sl': sl,
+                'tp': tp,
+                'time': last_signal_time,
+                'regime': self.current_regime
             }
             
         except Exception as e:
@@ -291,6 +410,7 @@ class LiveBotMT5FullAuto:
         price = tick.ask if signal['direction'] == 1 else tick.bid
         
         # Create request
+        regime_code = "T" if signal.get('regime') == 'TREND' else "R"
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": self.symbol,
@@ -301,7 +421,7 @@ class LiveBotMT5FullAuto:
             "tp": signal['tp'],
             "deviation": 20,
             "magic": 234000,
-            "comment": "V3_Adaptive_Bot",
+            "comment": f"V3_Adaptive_{regime_code}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
@@ -325,8 +445,10 @@ class LiveBotMT5FullAuto:
         # Send Telegram notification
         if self.telegram_bot:
             import asyncio
+            regime = signal.get('regime', 'UNKNOWN')
             message = f"🤖 <b>Position Opened</b>\n\n"
             message += f"Direction: {direction_str}\n"
+            message += f"Market Regime: {regime}\n"
             message += f"Entry: {result.price:.2f}\n"
             message += f"SL: {signal['sl']:.2f}\n"
             message += f"TP: {signal['tp']:.2f}\n"
@@ -344,10 +466,14 @@ class LiveBotMT5FullAuto:
         print(f"📊 Configuration:")
         print(f"   Symbol: {self.symbol}")
         print(f"   Timeframe: H1")
+        print(f"   Strategy: V3 Adaptive (TREND/RANGE detection)")
         print(f"   Check interval: {self.check_interval/60:.0f} minutes")
         print(f"   Risk per trade: {self.risk_percent}%")
         print(f"   Max positions: {self.max_positions}")
         print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
+        print(f"\n🎯 Adaptive TP Levels:")
+        print(f"   TREND Mode: {self.trend_tp1}p / {self.trend_tp2}p / {self.trend_tp3}p")
+        print(f"   RANGE Mode: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p")
         print(f"{'='*80}\n")
         
         if self.dry_run:
