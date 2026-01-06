@@ -169,7 +169,7 @@ class AdaptiveBacktestV3FixedSL:
             entry_price = signal['entry_price']
             regime = signal['regime']
 
-            # Set TP/TP based on regime (FIXED SL!)
+            # Set TP/SL based on regime (FIXED SL!)
             sl_points = self.fixed_sl_points
             
             if regime == 'TREND':
@@ -201,7 +201,8 @@ class AdaptiveBacktestV3FixedSL:
             signal_idx = df[df['time'] == signal_time].index[0]
             
             # Simulate trade
-            future_data = df.iloc[signal_idx+1:signal_idx+1+timeout_hours]
+            max_future_idx = min(signal_idx + 1 + timeout_hours, len(df) - 1)
+            future_data = df.iloc[signal_idx+1:max_future_idx]
             
             pnl_pct = 0.0
             exit_reason = 'TIMEOUT'
