@@ -210,8 +210,8 @@ def test_telegram_connection():
         return False
 
 
-def get_configuration(dry_run=False):
-    """Get configuration from user"""
+def get_configuration(dry_run=False, risk=None, max_positions=None, no_confirm=False):
+    """Get configuration from user or command line args"""
     print("\n" + "="*80)
     print("⚙️  CONFIGURATION")
     print("="*80)
@@ -223,6 +223,19 @@ def get_configuration(dry_run=False):
             'max_positions': 1,
             'check_interval': 3600,
             'dry_run': True
+        }
+
+    # If command line args provided, use them
+    if no_confirm and risk is not None and max_positions is not None:
+        print(f"\n⚙️  Using command line configuration:")
+        print(f"   Risk: {risk}%")
+        print(f"   Max positions: {max_positions}")
+        print(f"   Check interval: 1 hour")
+        return {
+            'risk_percent': risk,
+            'max_positions': max_positions,
+            'check_interval': 3600,
+            'dry_run': False
         }
 
     print("\nDefault settings:")
@@ -242,9 +255,9 @@ def get_configuration(dry_run=False):
 
     print("\n📝 Custom configuration:")
 
-    risk = input("Risk per trade (0.5-5.0%): ")
+    risk_input = input("Risk per trade (0.5-5.0%): ")
     try:
-        risk = float(risk)
+        risk = float(risk_input)
         if risk < 0.5 or risk > 5.0:
             print("⚠️  Risk must be between 0.5% and 5.0%. Using 2.0%")
             risk = 2.0
@@ -270,13 +283,25 @@ def get_configuration(dry_run=False):
     }
 
 
-def final_confirmation(dry_run=False):
+def final_confirmation(dry_run=False, no_confirm=False):
     """Get final confirmation from user"""
     if dry_run:
         print("\n" + "="*80)
         print("🧪 DRY RUN - NO CONFIRMATION NEEDED")
         print("="*80)
         print("\nDry run will simulate trading without real orders.")
+        return True
+
+    if no_confirm:
+        print("\n" + "="*80)
+        print("⚠️  NO-CONFIRM MODE - SKIPPING CONFIRMATION")
+        print("="*80)
+        print("\n🚨 Bot will start IMMEDIATELY without confirmation!")
+        print("   Using this mode means you accept ALL risks.")
+        print("   Recommended ONLY for automated deployment on DEMO accounts.")
+        print("\n⏳ Starting in 3 seconds...")
+        import time
+        time.sleep(3)
         return True
 
     print("\n" + "="*80)
@@ -380,7 +405,22 @@ def main():
     parser = argparse.ArgumentParser(description='Full-Auto Trading Bot')
     parser.add_argument('--dry-run', action='store_true', 
                        help='Run in test mode (no real trades)')
+    parser.add_argument('--no-confirm', action='store_true',
+                       help='Skip confirmation prompts (DANGEROUS! Use only for automated deployment)')
+    parser.add_argument('--risk', type=float, default=2.0,
+                       help='Risk per trade (0.5-5.0%%, default: 2.0)')
+    parser.add_argument('--max-positions', type=int, default=3,
+                       help='Max simultaneous positions (1-5, default: 3)')
     args = parser.parse_args()
+
+    # Validate args
+    if args.risk < 0.5 or args.risk > 5.0:
+        print(f"❌ Error: Risk must be between 0.5%% and 5.0%%. Got: {args.risk}%%")
+        sys.exit(1)
+    
+    if args.max_positions < 1 or args.max_positions > 5:
+        print(f"❌ Error: Max positions must be between 1 and 5. Got: {args.max_positions}")
+        sys.exit(1)
 
     # Show warning
     show_warning(dry_run=args.dry_run)
@@ -396,10 +436,15 @@ def main():
     test_telegram_connection()
 
     # Step 4: Get configuration
-    config = get_configuration(dry_run=args.dry_run)
+    config = get_configuration(
+        dry_run=args.dry_run,
+        risk=args.risk,
+        max_positions=args.max_positions,
+        no_confirm=args.no_confirm
+    )
 
     # Step 5: Final confirmation
-    if not final_confirmation(dry_run=args.dry_run):
+    if not final_confirmation(dry_run=args.dry_run, no_confirm=args.no_confirm):
         sys.exit(0)
 
     # Step 6: Start bot

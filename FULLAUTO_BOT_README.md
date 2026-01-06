@@ -38,17 +38,61 @@ This will:
 
 ### 2. Live Trading (DANGEROUS!)
 
+**Interactive Mode (with confirmation prompts):**
 ```bash
 python run_fullauto_bot.py
 ```
 
-⚠️ **Only use this after:**
+**Automated Mode (NO confirmation - for scripts/cron):**
+```bash
+# With default settings (2% risk, 3 max positions)
+python run_fullauto_bot.py --no-confirm
+
+# With custom settings
+python run_fullauto_bot.py --no-confirm --risk 1.5 --max-positions 2
+```
+
+⚠️ **Only use `--no-confirm` for:**
+- Automated deployment (systemd, cron, docker)
+- DEMO accounts after extensive testing
+- Production ONLY after 30+ days successful DEMO testing
+
+⚠️ **Only use live trading after:**
 1. Testing in DRY RUN mode for 7+ days
-2. Testing on DEMO account for 7+ days
+2. Testing on DEMO account for 7+ days  
 3. Understanding the V3 Adaptive Strategy
 4. Setting appropriate risk (1-2% recommended)
 
 ## Configuration
+
+### Command Line Arguments
+
+```bash
+python run_fullauto_bot.py [OPTIONS]
+
+Options:
+  --dry-run              Run in test mode (no real trades)
+  --no-confirm           Skip confirmation prompts (DANGEROUS!)
+  --risk FLOAT           Risk per trade, 0.5-5.0% (default: 2.0)
+  --max-positions INT    Max positions, 1-5 (default: 3)
+  -h, --help             Show help message
+```
+
+### Examples
+
+```bash
+# Test mode (safe)
+python run_fullauto_bot.py --dry-run
+
+# Live with defaults, interactive confirmation
+python run_fullauto_bot.py
+
+# Live with custom risk, interactive confirmation
+python run_fullauto_bot.py --risk 1.5 --max-positions 2
+
+# Automated mode (no prompts) - for cron/systemd
+python run_fullauto_bot.py --no-confirm --risk 2.0 --max-positions 3
+```
 
 ### Default Settings
 
@@ -58,9 +102,9 @@ python run_fullauto_bot.py
 - Symbol: XAUUSD
 - Timeframe: H1
 
-### Custom Settings
+### Interactive Configuration
 
-Run the bot and it will prompt you for:
+If you run without `--no-confirm` and without specifying `--risk` and `--max-positions`, the bot will prompt you for:
 - Risk per trade (0.5-5.0%)
 - Max positions (1-5)
 
@@ -139,13 +183,55 @@ python run_fullauto_bot.py
 
 ## Monitoring
 
+### Running as a Service
+
+For automated deployment, create a systemd service:
+
+```ini
+# /etc/systemd/system/trading-bot.service
+[Unit]
+Description=Full-Auto Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/path/to/repo
+ExecStart=/usr/bin/python3 run_fullauto_bot.py --no-confirm --risk 2.0 --max-positions 3
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+```bash
+sudo systemctl enable trading-bot
+sudo systemctl start trading-bot
+sudo journalctl -u trading-bot -f  # View logs
+```
+
+### Cron Job
+
+For periodic execution (not recommended for continuous trading):
+```bash
+# Run bot every hour
+0 * * * * cd /path/to/repo && python3 run_fullauto_bot.py --no-confirm --risk 2.0
+```
+
+### Logging
+
 The bot logs:
 - Market analysis results
 - Signals found
 - Positions opened
 - Errors and warnings
 
-Check console output regularly.
+Check console output or redirect to file:
+```bash
+python run_fullauto_bot.py --no-confirm > bot.log 2>&1
+```
 
 ## Stopping the Bot
 
