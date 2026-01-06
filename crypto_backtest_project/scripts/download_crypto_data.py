@@ -6,6 +6,8 @@ For backtesting crypto trading strategy based on v3 advanced backtest
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 
 def download_crypto_data(symbol, period_years=2, interval='1h'):

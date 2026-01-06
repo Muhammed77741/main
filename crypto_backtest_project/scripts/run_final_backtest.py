@@ -35,8 +35,8 @@ def main():
     
     # Ensure data exists
     data_dir = "../data"
-    btc_data = f"{data_dir}/BTC_1h_20240107_20260106.csv"
-    eth_data = f"{data_dir}/ETH_1h_20240107_20260106.csv"
+    btc_data = f"{data_dir}/BTC_1h_20240107_20260106_real.csv"
+    eth_data = f"{data_dir}/ETH_1h_20240107_20260106_real.csv"
     
     if not os.path.exists(btc_data) or not os.path.exists(eth_data):
         print("\n⚠️  Data files not found. Generating simulated data...")
