@@ -413,14 +413,18 @@ class LiveBotMT5FullAuto:
                 tp2_distance = self.range_tp2
                 tp3_distance = self.range_tp3
                 
-            # Calculate adaptive TP (use TP2 as main target)
+            # Calculate all 3 TP levels
             entry = last_signal['entry_price']
             sl = last_signal['stop_loss']
             
             if last_signal['signal'] == 1:  # LONG
-                tp = entry + tp2_distance
+                tp1 = entry + tp1_distance
+                tp2 = entry + tp2_distance
+                tp3 = entry + tp3_distance
             else:  # SHORT
-                tp = entry - tp2_distance
+                tp1 = entry - tp1_distance
+                tp2 = entry - tp2_distance
+                tp3 = entry - tp3_distance
                 
             direction = "LONG" if last_signal['signal'] == 1 else "SHORT"
             print(f"\n   ✅ FRESH SIGNAL DETECTED!")
@@ -430,27 +434,33 @@ class LiveBotMT5FullAuto:
             print(f"      Age: {time_diff:.1f}h ago")
             print(f"      Entry: ${entry:.2f}")
             print(f"      SL: ${sl:.2f}")
-            print(f"      TP (adaptive): ${tp:.2f} ({tp2_distance}p for {self.current_regime})")
-            print(f"      Available TPs: {tp1_distance}p / {tp2_distance}p / {tp3_distance}p")
+            print(f"      TP1: ${tp1:.2f} ({tp1_distance}p)")
+            print(f"      TP2: ${tp2:.2f} ({tp2_distance}p)")
+            print(f"      TP3: ${tp3:.2f} ({tp3_distance}p)")
             
-            # Calculate risk/reward
+            # Calculate risk/reward (for TP2)
             if last_signal['signal'] == 1:
                 risk = entry - sl
-                reward = tp - entry
+                reward = tp2 - entry
             else:
                 risk = sl - entry
-                reward = entry - tp
+                reward = entry - tp2
                 
             rr = reward / risk if risk > 0 else 0
             print(f"      Risk: {risk:.2f} points")
-            print(f"      Reward: {reward:.2f} points")
+            print(f"      Reward (TP2): {reward:.2f} points")
             print(f"      Risk:Reward = 1:{rr:.2f}")
             
             return {
                 'direction': last_signal['signal'],
                 'entry': entry,
                 'sl': sl,
-                'tp': tp,
+                'tp1': tp1,
+                'tp2': tp2,
+                'tp3': tp3,
+                'tp1_distance': tp1_distance,
+                'tp2_distance': tp2_distance,
+                'tp3_distance': tp3_distance,
                 'time': last_signal_time,
                 'regime': self.current_regime
             }
@@ -507,40 +517,48 @@ class LiveBotMT5FullAuto:
         return list(positions)
         
     def open_position(self, signal):
-        """Open a position"""
+        """Open 3 positions with different TP levels (TP1, TP2, TP3)"""
         direction_str = "BUY" if signal['direction'] == 1 else "SELL"
         
         print(f"\n{'='*60}")
-        print(f"📈 OPENING {direction_str} POSITION")
+        print(f"📈 OPENING 3 {direction_str} POSITIONS (Multi-TP)")
         print(f"{'='*60}")
         
-        # Check max positions
+        # Check max positions (need room for 3 positions)
         open_positions = self.get_open_positions()
-        if len(open_positions) >= self.max_positions:
-            print(f"⚠️  Max positions reached ({self.max_positions})")
+        if len(open_positions) + 3 > self.max_positions:
+            print(f"⚠️  Not enough room for 3 positions (need {3}, have {self.max_positions - len(open_positions)} slots)")
             return False
             
-        # Calculate lot size
-        lot_size = self.calculate_position_size(signal['entry'], signal['sl'])
-        print(f"   Lot size: {lot_size}")
+        # Calculate total lot size
+        total_lot_size = self.calculate_position_size(signal['entry'], signal['sl'])
+        
+        # Split into 3 parts: 33%, 33%, 34%
+        lot1 = round(total_lot_size * 0.33, 2)
+        lot2 = round(total_lot_size * 0.33, 2)
+        lot3 = round(total_lot_size * 0.34, 2)
+        
+        print(f"   Total lot size: {total_lot_size}")
+        print(f"   Position 1 (TP1): {lot1} lot")
+        print(f"   Position 2 (TP2): {lot2} lot")
+        print(f"   Position 3 (TP3): {lot3} lot")
         
         if self.dry_run:
-            print(f"\n🧪 DRY RUN: Would open {direction_str} position:")
+            print(f"\n🧪 DRY RUN: Would open 3 {direction_str} positions:")
             print(f"   Entry: {signal['entry']:.2f}")
             print(f"   SL: {signal['sl']:.2f}")
-            print(f"   TP: {signal['tp']:.2f}")
-            print(f"   Lot: {lot_size}")
-            print(f"   Risk: {self.risk_percent}%")
+            print(f"   Position 1: {lot1} lot, TP1: {signal['tp1']:.2f} ({signal['tp1_distance']}p)")
+            print(f"   Position 2: {lot2} lot, TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}p)")
+            print(f"   Position 3: {lot3} lot, TP3: {signal['tp3']:.2f} ({signal['tp3_distance']}p)")
+            print(f"   Total risk: {self.risk_percent}%")
             return True
             
-        # Prepare request
+        # Prepare common parameters
         symbol_info = mt5.symbol_info(self.symbol)
         if symbol_info is None:
             print(f"❌ Symbol info not found")
             return False
             
-        point = symbol_info.point
-        
         # Get current price
         tick = mt5.symbol_info_tick(self.symbol)
         if tick is None:
@@ -548,66 +566,90 @@ class LiveBotMT5FullAuto:
             return False
             
         price = tick.ask if signal['direction'] == 1 else tick.bid
-        
-        # Create request
         regime_code = "T" if signal.get('regime') == 'TREND' else "R"
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": self.symbol,
-            "volume": lot_size,
-            "type": mt5.ORDER_TYPE_BUY if signal['direction'] == 1 else mt5.ORDER_TYPE_SELL,
-            "price": price,
-            "sl": signal['sl'],
-            "tp": signal['tp'],
-            "deviation": 20,
-            "magic": 234000,
-            "comment": f"V3_Adaptive_{regime_code}",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
+        order_type = mt5.ORDER_TYPE_BUY if signal['direction'] == 1 else mt5.ORDER_TYPE_SELL
         
-        # Send order
-        result = mt5.order_send(request)
+        # Open 3 positions
+        positions_opened = []
+        tp_levels = [
+            (signal['tp1'], lot1, 'TP1', signal['tp1_distance']),
+            (signal['tp2'], lot2, 'TP2', signal['tp2_distance']),
+            (signal['tp3'], lot3, 'TP3', signal['tp3_distance'])
+        ]
         
-        if result is None:
-            print(f"❌ Order failed: No result")
-            return False
+        for tp_price, lot_size, tp_name, tp_distance in tp_levels:
+            # Ensure minimum lot size
+            if lot_size < symbol_info.volume_min:
+                print(f"   ⚠️  {tp_name}: lot size {lot_size} < minimum {symbol_info.volume_min}, skipping")
+                continue
+                
+            # Create request
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": self.symbol,
+                "volume": lot_size,
+                "type": order_type,
+                "price": price,
+                "sl": signal['sl'],
+                "tp": tp_price,
+                "deviation": 20,
+                "magic": 234000,
+                "comment": f"V3_{regime_code}_{tp_name}",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
             
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            print(f"❌ Order failed: {result.retcode}")
-            print(f"   Comment: {result.comment}")
-            return False
+            # Send order
+            result = mt5.order_send(request)
             
-        print(f"\n✅ Position opened successfully!")
-        print(f"   Order: #{result.order}")
-        print(f"   Price: {result.price:.2f}")
+            if result is None:
+                print(f"   ❌ {tp_name} order failed: No result")
+                continue
+                
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                print(f"   ❌ {tp_name} order failed: {result.retcode} - {result.comment}")
+                continue
+                
+            print(f"   ✅ {tp_name} position opened!")
+            print(f"      Order: #{result.order}")
+            print(f"      Lot: {lot_size}")
+            print(f"      TP: {tp_price:.2f} ({tp_distance}p)")
+            
+            # Log position
+            position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
+            regime = signal.get('regime', 'UNKNOWN')
+            self._log_position_opened(
+                ticket=result.order,
+                position_type=position_type,
+                volume=lot_size,
+                entry_price=result.price,
+                sl=signal['sl'],
+                tp=tp_price,
+                regime=regime,
+                comment=f"V3_{regime_code}_{tp_name}"
+            )
+            
+            positions_opened.append((result.order, tp_name, tp_price))
         
-        # Log position to tracking system
-        position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
-        regime = signal.get('regime', 'UNKNOWN')
-        self._log_position_opened(
-            ticket=result.order,
-            position_type=position_type,
-            volume=lot_size,
-            entry_price=result.price,
-            sl=signal['sl'],
-            tp=signal['tp'],
-            regime=regime,
-            comment=f"V3_Adaptive_{regime_code}"
-        )
+        if len(positions_opened) == 0:
+            print(f"\n❌ Failed to open any positions!")
+            return False
+        
+        print(f"\n✅ Successfully opened {len(positions_opened)}/3 positions!")
         
         # Send Telegram notification
         if self.telegram_bot:
             import asyncio
             regime = signal.get('regime', 'UNKNOWN')
-            message = f"🤖 <b>Position Opened</b>\n\n"
+            message = f"🤖 <b>3 Positions Opened (Multi-TP)</b>\n\n"
             message += f"Direction: {direction_str}\n"
             message += f"Market Regime: {regime}\n"
-            message += f"Entry: {result.price:.2f}\n"
-            message += f"SL: {signal['sl']:.2f}\n"
-            message += f"TP: {signal['tp']:.2f}\n"
-            message += f"Lot: {lot_size}\n"
-            message += f"Risk: {self.risk_percent}%"
+            message += f"Entry: ~{price:.2f}\n"
+            message += f"SL: {signal['sl']:.2f}\n\n"
+            message += f"<b>Take Profits:</b>\n"
+            for ticket, tp_name, tp_price in positions_opened:
+                message += f"  {tp_name}: ${tp_price:.2f} (#{ticket})\n"
+            message += f"\nTotal risk: {self.risk_percent}%"
             asyncio.run(self.send_telegram(message))
             
         return True
