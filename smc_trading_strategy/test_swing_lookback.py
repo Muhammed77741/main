@@ -1,158 +1,180 @@
+#!/usr/bin/env python3
 """
-Test V3 Adaptive Backtest with different swing lookback periods
-Compares results with 20, 10, and 5 candle lookbacks
+Test to compare V3 Adaptive backtest performance with different swing lookback periods.
+Tests 20, 10, and 5 candles lookback to optimize SL placement.
 """
+
+import sys
+import os
+sys.path.insert(0, os.path.dirname(__file__))
 
 import pandas as pd
 import numpy as np
-from datetime import datetime
-import sys
-import os
-
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from backtest_v3_adaptive import AdaptiveBacktestV3
 from pattern_recognition_strategy import PatternRecognitionStrategy
-from simplified_smc_strategy import SimplifiedSMCStrategy
+from backtest_v3_adaptive import AdaptiveBacktestV3
 
 
-def modify_stop_loss_lookback(strategy, lookback):
-    """Modify the stop loss lookback period in SimplifiedSMCStrategy"""
-    # We need to monkey-patch the _calculate_stop_loss method
-    original_method = strategy.smc_strategy._calculate_stop_loss
+def monkey_patch_swing_lookback(lookback_period):
+    """Monkey-patch the _calculate_stop_loss method to use custom lookback period."""
+    original_method = PatternRecognitionStrategy._calculate_stop_loss
     
-    def new_calculate_stop_loss(df, idx, direction):
+    def patched_calculate_stop_loss(self, df, idx, direction):
+        """Modified version with custom swing lookback period."""
         if direction == 1:  # Long
-            recent_data = df.iloc[max(0, idx-lookback):idx]
+            # Stop below recent swing low (modified lookback)
+            recent_data = df.iloc[max(0, idx-lookback_period):idx]
             recent_swings = recent_data[recent_data['swing_low']]
             if len(recent_swings) > 0:
                 stop = recent_swings['low'].min()
             else:
-                stop = df['low'].iloc[max(0, idx-10):idx].min()
-            return stop * 0.998
-        else:  # Short
-            recent_data = df.iloc[max(0, idx-lookback):idx]
+                # Fallback: lowest low in last lookback candles
+                stop = df.iloc[max(0, idx-lookback_period):idx]['low'].min()
+            return stop - 0.5  # Small buffer
+        
+        else:  # Short (direction == -1)
+            # Stop above recent swing high (modified lookback)
+            recent_data = df.iloc[max(0, idx-lookback_period):idx]
             recent_swings = recent_data[recent_data['swing_high']]
             if len(recent_swings) > 0:
                 stop = recent_swings['high'].max()
             else:
-                stop = df['high'].iloc[max(0, idx-10):idx].max()
-            return stop * 1.002
+                # Fallback: highest high in last lookback candles
+                stop = df.iloc[max(0, idx-lookback_period):idx]['high'].max()
+            return stop + 0.5  # Small buffer
     
-    strategy.smc_strategy._calculate_stop_loss = new_calculate_stop_loss
+    # Apply monkey patch
+    PatternRecognitionStrategy._calculate_stop_loss = patched_calculate_stop_loss
+    
+    return original_method
 
 
-def run_backtest_with_lookback(lookback_period):
-    """Run backtest with specific swing lookback period"""
-    
+def restore_original_method(original_method):
+    """Restore original _calculate_stop_loss method."""
+    PatternRecognitionStrategy._calculate_stop_loss = original_method
+
+
+def run_backtest_with_lookback(lookback):
+    """Run V3 Adaptive backtest with specified swing lookback period."""
     print(f"\n{'='*80}")
-    print(f"TESTING SWING LOOKBACK: {lookback_period} CANDLES")
+    print(f"TESTING SWING LOOKBACK: {lookback} CANDLES")
     print(f"{'='*80}\n")
     
     # Load data
-    data_file = "XAUUSD_1H_MT5_20241227_20251227.csv"
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_file = os.path.join(base_dir, 'XAUUSD_1H_MT5_20241227_20251227.csv')
     
     if not os.path.exists(data_file):
         print(f"❌ Data file not found: {data_file}")
         return None
     
-    df = pd.read_csv(data_file, parse_dates=['time'])
-    print(f"✅ Loaded {len(df)} candles from {df['time'].min()} to {df['time'].max()}")
+    df = pd.read_csv(data_file, parse_dates=['datetime'])
+    df = df.rename(columns={'datetime': 'time'})
+    df = df.set_index('time')
+    print(f"✅ Loaded {len(df)} candles from {df.index.min()} to {df.index.max()}")
     
-    # Initialize strategy with modified swing_lookback
-    strategy = PatternRecognitionStrategy(
-        risk_reward_ratio=2.0,
-        risk_per_trade=0.02,
-        swing_lookback=lookback_period,  # KEY PARAMETER
-        min_pattern_swings=3
-    )
+    # Apply monkey patch
+    original_method = monkey_patch_swing_lookback(lookback)
     
-    # Modify the underlying SimplifiedSMCStrategy's stop loss calculation
-    modify_stop_loss_lookback(strategy, lookback_period)
-    
-    # Generate signals
-    print(f"🔍 Generating signals with swing lookback = {lookback_period}...")
-    df_signals = strategy.generate_signals(df)
-    
-    # Count signals
-    long_signals = len(df_signals[df_signals['signal'] == 1])
-    short_signals = len(df_signals[df_signals['signal'] == -1])
-    total_signals = long_signals + short_signals
-    
-    print(f"   Total signals: {total_signals} (Long: {long_signals}, Short: {short_signals})")
-    
-    # Run backtest
-    backtest = AdaptiveBacktestV3(spread_points=2.0, commission_points=0.5)
-    
-    print(f"🔄 Running adaptive backtest...")
-    results = backtest.run_backtest(df_signals)
-    
-    return results
+    try:
+        # Initialize strategy
+        strategy = PatternRecognitionStrategy(fib_mode='standard')
+        
+        # Run adaptive backtest
+        backtest = AdaptiveBacktestV3()
+        trades_df = backtest.backtest(df, strategy)
+        
+        if trades_df is None or len(trades_df) == 0:
+            print("❌ No trades generated")
+            return None
+        
+        # Calculate metrics
+        total_trades = len(trades_df)
+        wins = len(trades_df[trades_df['profit'] > 0])
+        losses = len(trades_df[trades_df['profit'] < 0])
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        
+        total_profit = trades_df['profit'].sum()
+        gross_profit = trades_df[trades_df['profit'] > 0]['profit'].sum()
+        gross_loss = abs(trades_df[trades_df['profit'] < 0]['profit'].sum())
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
+        
+        # Calculate average SL distance
+        avg_sl_distance = abs(trades_df['entry_price'] - trades_df['sl']).mean()
+        
+        # Calculate max drawdown
+        cumulative_pnl = trades_df['profit'].cumsum()
+        running_max = cumulative_pnl.expanding().max()
+        drawdown = cumulative_pnl - running_max
+        max_dd = drawdown.min()
+        
+        results = {
+            'lookback': lookback,
+            'trades': total_trades,
+            'wins': wins,
+            'losses': losses,
+            'win_rate': win_rate,
+            'total_pnl': total_profit,
+            'profit_factor': profit_factor,
+            'max_dd': max_dd,
+            'avg_sl_distance': avg_sl_distance
+        }
+        
+        print(f"✅ Backtest complete:")
+        print(f"   Trades: {total_trades}")
+        print(f"   Win Rate: {win_rate:.1f}%")
+        print(f"   Total P&L: {total_profit:.2f}%")
+        print(f"   Profit Factor: {profit_factor:.2f}")
+        print(f"   Max DD: {max_dd:.2f}%")
+        print(f"   Avg SL Distance: {avg_sl_distance:.2f} points")
+        
+        return results
+        
+    finally:
+        # Restore original method
+        restore_original_method(original_method)
 
 
 def main():
-    """Main function to test different lookback periods"""
-    
-    print("\n" + "="*80)
+    print("="*80)
     print("V3 ADAPTIVE BACKTEST - SWING LOOKBACK COMPARISON")
     print("="*80)
     print("\nTesting swing lookback periods: 20, 10, and 5 candles")
-    print("This affects how far back the strategy looks for swing points to place SL")
+    print("This affects how far back the strategy looks for swing points to place SL\n")
     
     lookback_periods = [20, 10, 5]
-    all_results = {}
+    all_results = []
     
     for lookback in lookback_periods:
         results = run_backtest_with_lookback(lookback)
         if results:
-            all_results[lookback] = results
+            all_results.append(results)
     
-    # Compare results
+    # Print comparison table
     if len(all_results) > 0:
-        print("\n" + "="*80)
-        print("COMPARISON SUMMARY")
-        print("="*80)
+        print(f"\n{'='*80}")
+        print("COMPARISON RESULTS")
+        print(f"{'='*80}\n")
         
-        print(f"\n{'Lookback':<12} {'Trades':<10} {'P&L %':<12} {'Win Rate':<12} {'PF':<10} {'Max DD':<12} {'Avg SL (p)':<12}")
-        print("-" * 90)
+        print(f"{'Lookback':<12} {'Trades':<8} {'P&L %':<10} {'Win Rate':<10} {'PF':<8} {'Max DD %':<10} {'Avg SL':<10}")
+        print("-" * 80)
         
-        for lookback in sorted(all_results.keys(), reverse=True):
-            r = all_results[lookback]
-            print(f"{lookback:<12} {r['total_trades']:<10} {r['total_pnl_pct']:>10.2f}%  "
-                  f"{r['win_rate']:>10.1f}%  {r['profit_factor']:>8.2f}  "
-                  f"{r['max_drawdown']:>10.2f}%  {r.get('avg_sl_points', 0):>10.2f}")
-        
-        print("\n" + "="*80)
-        print("KEY INSIGHTS:")
-        print("="*80)
-        
-        # Calculate averageSL for each
-        for lookback, r in all_results.items():
-            if 'trades' in r and len(r['trades']) > 0:
-                trades_df = pd.DataFrame(r['trades'])
-                if 'sl_points' in trades_df.columns:
-                    avg_sl = trades_df['sl_points'].mean()
-                    r['avg_sl_points'] = avg_sl
-        
-        # Find best
-        best_pnl_lookback = max(all_results.keys(), key=lambda x: all_results[x]['total_pnl_pct'])
-        best_pf_lookback = max(all_results.keys(), key=lambda x: all_results[x]['profit_factor'])
-        
-        print(f"\n✅ Best P&L: {best_pnl_lookback} candles ({all_results[best_pnl_lookback]['total_pnl_pct']:.2f}%)")
-        print(f"✅ Best Profit Factor: {best_pf_lookback} candles ({all_results[best_pf_lookback]['profit_factor']:.2f})")
+        for r in all_results:
+            print(f"{r['lookback']:<12} {r['trades']:<8} {r['total_pnl']:<10.2f} {r['win_rate']:<10.1f} {r['profit_factor']:<8.2f} {r['max_dd']:<10.2f} {r['avg_sl_distance']:<10.2f}")
         
         # Recommendation
-        print("\n📊 RECOMMENDATION:")
-        if best_pnl_lookback == 20:
-            print("   Current 20-candle lookback is optimal")
-        elif best_pnl_lookback == 10:
-            print("   ✨ 10-candle lookback shows better results!")
-            print("   Tighter SL = better risk management")
-        else:
-            print("   ⚠️  5-candle lookback may be too aggressive")
-            print("   Very tight SL could lead to premature stopouts")
+        best_pnl = max(all_results, key=lambda x: x['total_pnl'])
+        best_pf = max(all_results, key=lambda x: x['profit_factor'])
+        smallest_sl = min(all_results, key=lambda x: x['avg_sl_distance'])
+        
+        print(f"\n{'='*80}")
+        print("RECOMMENDATIONS")
+        print(f"{'='*80}")
+        print(f"✅ Best P&L: {best_pnl['lookback']} candles ({best_pnl['total_pnl']:.2f}%)")
+        print(f"✅ Best Profit Factor: {best_pf['lookback']} candles (PF: {best_pf['profit_factor']:.2f})")
+        print(f"✅ Smallest SL: {smallest_sl['lookback']} candles ({smallest_sl['avg_sl_distance']:.2f} points)")
+        print(f"\n💡 Smaller lookback = tighter SL = better risk/reward ratio")
+        print(f"💡 Choose lookback that balances performance with risk management")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
