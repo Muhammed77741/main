@@ -69,11 +69,11 @@ CONFIG = {
         'swap_per_day': -0.3
     },
     
-    # Telegram notifications (optional)
+    # Telegram notifications (RECOMMENDED)
     'telegram': {
-        'enabled': False,
-        'bot_token': 'YOUR_TELEGRAM_BOT_TOKEN',
-        'chat_id': 'YOUR_TELEGRAM_CHAT_ID'
+        'enabled': True,  # Set to True to enable Telegram notifications
+        'bot_token': 'YOUR_TELEGRAM_BOT_TOKEN',  # Get from @BotFather on Telegram
+        'chat_id': 'YOUR_TELEGRAM_CHAT_ID'  # Your chat ID or channel ID
     },
     
     # Logging

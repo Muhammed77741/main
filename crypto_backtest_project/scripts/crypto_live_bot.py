@@ -211,10 +211,24 @@ class CryptoLiveBot:
             }
             
             print(f"✅ Order placed: {signal['type']} {symbol} @ {signal['entry']:.2f}")
+            print(f"   SL: {signal['sl']:.2f} | TP1: {signal['tp1']:.2f} | TP2: {signal['tp2']:.2f} | TP3: {signal['tp3']:.2f}")
             
-            # Send Telegram notification if configured
-            if self.config.get('telegram'):
-                self.send_telegram_notification(f"🚀 {signal['type']} {symbol} @ {signal['entry']:.2f}")
+            # Send detailed Telegram notification
+            if self.config.get('telegram', {}).get('enabled', False):
+                message = (
+                    f"🚀 <b>New {signal['type']} Position</b>\n\n"
+                    f"🪙 Symbol: {symbol}\n"
+                    f"📈 Type: {signal['type']}\n"
+                    f"💵 Entry: {signal['entry']:.2f}\n"
+                    f"🛑 SL: {signal['sl']:.2f}\n"
+                    f"🎯 TP1: {signal['tp1']:.2f} (50%)\n"
+                    f"🎯 TP2: {signal['tp2']:.2f} (30%)\n"
+                    f"🎯 TP3: {signal['tp3']:.2f} (20%)\n"
+                    f"💰 Position Size: {position_size_usd:.2f} USDT\n"
+                    f"📊 Regime: {signal['regime']}\n"
+                    f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                self.send_telegram_notification(message)
             
             return order
             
@@ -232,46 +246,79 @@ class CryptoLiveBot:
                 
                 signal = position['signal']
                 remaining = position['remaining']
+                entry_price = signal['entry']
                 
-                # Check TPs
+                # Calculate current P&L
+                if signal['type'] == 'LONG':
+                    pnl_pips = current_price - entry_price
+                    pnl_percent = (pnl_pips / entry_price) * 100
+                else:  # SHORT
+                    pnl_pips = entry_price - current_price
+                    pnl_percent = (pnl_pips / entry_price) * 100
+                
+                # Store P&L in position
+                position['current_pnl'] = pnl_percent
+                position['current_price'] = current_price
+                
+                # Send periodic updates (every 5 minutes)
+                if not hasattr(position, 'last_update') or \
+                   (datetime.now() - position.get('last_update', datetime.now())).seconds >= 300:
+                    position['last_update'] = datetime.now()
+                    
+                    # Send position update
+                    self.send_position_update(symbol, position, current_price, pnl_percent)
+                
+                # Check TPs and SLs
                 if signal['type'] == 'LONG':
                     # TP1 - close 50%
-                    if current_price >= signal['tp1'] and remaining >= position['quantity'] * 0.5:
-                        self.close_partial_position(symbol, 0.5, 'TP1')
+                    if current_price >= signal['tp1'] and not position.get('tp1_hit', False):
+                        position['tp1_hit'] = True
+                        self.close_partial_position(symbol, 0.5, 'TP1', current_price, pnl_percent)
                     
                     # TP2 - close 30%
-                    elif current_price >= signal['tp2'] and remaining >= position['quantity'] * 0.3:
-                        self.close_partial_position(symbol, 0.3, 'TP2')
+                    elif current_price >= signal['tp2'] and not position.get('tp2_hit', False):
+                        position['tp2_hit'] = True
+                        self.close_partial_position(symbol, 0.3, 'TP2', current_price, pnl_percent)
                     
                     # TP3 - close remaining
-                    elif current_price >= signal['tp3']:
-                        self.close_full_position(symbol, 'TP3')
+                    elif current_price >= signal['tp3'] and not position.get('tp3_hit', False):
+                        position['tp3_hit'] = True
+                        self.close_full_position(symbol, 'TP3', current_price, pnl_percent)
                     
                     # Check SL
-                    elif current_price <= signal['sl']:
-                        self.close_full_position(symbol, 'SL')
+                    elif current_price <= signal['sl'] and position['remaining'] > 0:
+                        self.close_full_position(symbol, 'SL', current_price, pnl_percent)
                 
                 else:  # SHORT
                     # TP1 - close 50%
-                    if current_price <= signal['tp1'] and remaining >= position['quantity'] * 0.5:
-                        self.close_partial_position(symbol, 0.5, 'TP1')
+                    if current_price <= signal['tp1'] and not position.get('tp1_hit', False):
+                        position['tp1_hit'] = True
+                        self.close_partial_position(symbol, 0.5, 'TP1', current_price, pnl_percent)
                     
                     # TP2 - close 30%
-                    elif current_price <= signal['tp2'] and remaining >= position['quantity'] * 0.3:
-                        self.close_partial_position(symbol, 0.3, 'TP2')
+                    elif current_price <= signal['tp2'] and not position.get('tp2_hit', False):
+                        position['tp2_hit'] = True
+                        self.close_partial_position(symbol, 0.3, 'TP2', current_price, pnl_percent)
                     
                     # TP3 - close remaining
-                    elif current_price <= signal['tp3']:
-                        self.close_full_position(symbol, 'TP3')
+                    elif current_price <= signal['tp3'] and not position.get('tp3_hit', False):
+                        position['tp3_hit'] = True
+                        self.close_full_position(symbol, 'TP3', current_price, pnl_percent)
                     
                     # Check SL
-                    elif current_price >= signal['sl']:
-                        self.close_full_position(symbol, 'SL')
+                    elif current_price >= signal['sl'] and position['remaining'] > 0:
+                        self.close_full_position(symbol, 'SL', current_price, pnl_percent)
                         
             except Exception as e:
                 print(f"⚠️ Error managing position {symbol}: {e}")
+                # Send error notification
+                if self.config.get('telegram', {}).get('enabled', False):
+                    self.send_telegram_notification(
+                        f"⚠️ <b>Error monitoring {symbol}</b>\n"
+                        f"Error: {str(e)}"
+                    )
     
-    def close_partial_position(self, symbol, percent, reason):
+    def close_partial_position(self, symbol, percent, reason, current_price, pnl_percent):
         """Close partial position"""
         try:
             position = self.positions[symbol]
@@ -288,15 +335,38 @@ class CryptoLiveBot:
             
             position['remaining'] -= close_quantity
             
-            print(f"✅ Partial close: {symbol} {int(percent*100)}% @ {reason}")
+            # Calculate realized P&L for this partial close
+            entry_price = position['signal']['entry']
+            if position['signal']['type'] == 'LONG':
+                pnl_pips = current_price - entry_price
+            else:
+                pnl_pips = entry_price - current_price
             
-            if self.config.get('telegram'):
-                self.send_telegram_notification(f"📊 Partial close: {symbol} {int(percent*100)}% @ {reason}")
+            realized_pnl = (pnl_pips / entry_price) * 100 * percent
+            
+            print(f"✅ Partial close: {symbol} {int(percent*100)}% @ {reason}")
+            print(f"   Price: {current_price:.2f} | P&L: {realized_pnl:+.2f}%")
+            
+            # Send detailed Telegram notification
+            if self.config.get('telegram', {}).get('enabled', False):
+                message = (
+                    f"📊 <b>Partial Close - {reason}</b>\n\n"
+                    f"🪙 Symbol: {symbol}\n"
+                    f"📈 Type: {position['signal']['type']}\n"
+                    f"💰 Closed: {int(percent*100)}%\n"
+                    f"💵 Entry: {entry_price:.2f}\n"
+                    f"💵 Exit: {current_price:.2f}\n"
+                    f"📊 P&L: {realized_pnl:+.2f}%\n"
+                    f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                self.send_telegram_notification(message)
             
         except Exception as e:
             print(f"❌ Error closing partial position: {e}")
+            if self.config.get('telegram', {}).get('enabled', False):
+                self.send_telegram_notification(f"❌ <b>Error closing partial {symbol}</b>\nError: {str(e)}")
     
-    def close_full_position(self, symbol, reason):
+    def close_full_position(self, symbol, reason, current_price, pnl_percent):
         """Close full position"""
         try:
             position = self.positions[symbol]
@@ -310,21 +380,118 @@ class CryptoLiveBot:
                 amount=position['remaining']
             )
             
-            print(f"✅ Position closed: {symbol} @ {reason}")
+            # Calculate total P&L
+            entry_price = position['signal']['entry']
+            entry_time = position['entry_time']
+            duration = datetime.now() - entry_time
             
-            if self.config.get('telegram'):
-                self.send_telegram_notification(f"🏁 Position closed: {symbol} @ {reason}")
+            print(f"✅ Position closed: {symbol} @ {reason}")
+            print(f"   Entry: {entry_price:.2f} | Exit: {current_price:.2f}")
+            print(f"   P&L: {pnl_percent:+.2f}% | Duration: {duration}")
+            
+            # Send detailed Telegram notification
+            if self.config.get('telegram', {}).get('enabled', False):
+                tp_hits = []
+                if position.get('tp1_hit'): tp_hits.append('TP1')
+                if position.get('tp2_hit'): tp_hits.append('TP2')
+                if position.get('tp3_hit'): tp_hits.append('TP3')
+                
+                message = (
+                    f"🏁 <b>Position Closed - {reason}</b>\n\n"
+                    f"🪙 Symbol: {symbol}\n"
+                    f"📈 Type: {position['signal']['type']}\n"
+                    f"💵 Entry: {entry_price:.2f}\n"
+                    f"💵 Exit: {current_price:.2f}\n"
+                    f"📊 Total P&L: {pnl_percent:+.2f}%\n"
+                    f"🎯 TPs Hit: {', '.join(tp_hits) if tp_hits else 'None'}\n"
+                    f"⏱️ Duration: {str(duration).split('.')[0]}\n"
+                    f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                self.send_telegram_notification(message)
+            
+            # Update daily P&L
+            self.daily_pnl += pnl_percent
+            self.daily_trades += 1
             
             # Remove from positions
             del self.positions[symbol]
             
         except Exception as e:
             print(f"❌ Error closing position: {e}")
+            if self.config.get('telegram', {}).get('enabled', False):
+                self.send_telegram_notification(f"❌ <b>Error closing {symbol}</b>\nError: {str(e)}")
+    
+    
+    def send_position_update(self, symbol, position, current_price, pnl_percent):
+        """Send periodic position update"""
+        if not self.config.get('telegram', {}).get('enabled', False):
+            return
+        
+        signal = position['signal']
+        entry_price = signal['entry']
+        duration = datetime.now() - position['entry_time']
+        
+        # Calculate distance to TP/SL
+        if signal['type'] == 'LONG':
+            sl_distance = ((current_price - signal['sl']) / current_price) * 100
+            tp1_distance = ((signal['tp1'] - current_price) / current_price) * 100
+            tp2_distance = ((signal['tp2'] - current_price) / current_price) * 100
+            tp3_distance = ((signal['tp3'] - current_price) / current_price) * 100
+        else:
+            sl_distance = ((signal['sl'] - current_price) / current_price) * 100
+            tp1_distance = ((current_price - signal['tp1']) / current_price) * 100
+            tp2_distance = ((current_price - signal['tp2']) / current_price) * 100
+            tp3_distance = ((current_price - signal['tp3']) / current_price) * 100
+        
+        # Status indicators
+        status = "🟢" if pnl_percent > 0 else "🔴"
+        tp_status = []
+        if position.get('tp1_hit'): tp_status.append("✅ TP1")
+        else: tp_status.append(f"⏳ TP1 ({tp1_distance:+.2f}%)")
+        
+        if position.get('tp2_hit'): tp_status.append("✅ TP2")
+        else: tp_status.append(f"⏳ TP2 ({tp2_distance:+.2f}%)")
+        
+        if position.get('tp3_hit'): tp_status.append("✅ TP3")
+        else: tp_status.append(f"⏳ TP3 ({tp3_distance:+.2f}%)")
+        
+        message = (
+            f"{status} <b>Position Update</b>\n\n"
+            f"🪙 Symbol: {symbol}\n"
+            f"📈 Type: {signal['type']}\n"
+            f"💵 Entry: {entry_price:.2f}\n"
+            f"💵 Current: {current_price:.2f}\n"
+            f"📊 P&L: {pnl_percent:+.2f}%\n"
+            f"🛑 SL Distance: {sl_distance:+.2f}%\n\n"
+            f"<b>Targets:</b>\n"
+            f"{chr(10).join(tp_status)}\n\n"
+            f"⏱️ Duration: {str(duration).split('.')[0]}"
+        )
+        
+        self.send_telegram_notification(message)
     
     def send_telegram_notification(self, message):
         """Send Telegram notification"""
-        # Implementation would use telegram bot API
-        pass
+        if not self.config.get('telegram', {}).get('enabled', False):
+            return
+        
+        try:
+            import requests
+            bot_token = self.config['telegram']['bot_token']
+            chat_id = self.config['telegram']['chat_id']
+            
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            data = {
+                'chat_id': chat_id,
+                'text': message,
+                'parse_mode': 'HTML'
+            }
+            
+            response = requests.post(url, data=data)
+            if not response.ok:
+                print(f"⚠️ Failed to send Telegram notification: {response.text}")
+        except Exception as e:
+            print(f"⚠️ Error sending Telegram notification: {e}")
     
     def check_daily_limits(self):
         """Check if daily limits are reached"""
@@ -347,11 +514,31 @@ class CryptoLiveBot:
         """Main bot loop"""
         print("🤖 Bot started - Monitoring markets...")
         
+        # Send startup notification
+        if self.config.get('telegram', {}).get('enabled', False):
+            startup_msg = (
+                f"🤖 <b>Bot Started</b>\n\n"
+                f"Mode: {'🧪 TESTNET' if self.config['testnet'] else '🚀 PRODUCTION'}\n"
+                f"📊 Symbols: {', '.join(self.config['symbols'])}\n"
+                f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            self.send_telegram_notification(startup_msg)
+        
         while True:
             try:
                 # Check daily limits
                 if not self.check_daily_limits():
                     print("⏸️ Trading paused due to daily limits")
+                    
+                    # Send daily limit notification
+                    if self.config.get('telegram', {}).get('enabled', False):
+                        self.send_telegram_notification(
+                            f"⏸️ <b>Trading Paused</b>\n\n"
+                            f"Daily loss limit reached\n"
+                            f"Daily P&L: {self.daily_pnl:.2f}%\n"
+                            f"Daily Trades: {self.daily_trades}"
+                        )
+                    
                     time.sleep(3600)  # Wait 1 hour
                     continue
                 
@@ -382,9 +569,30 @@ class CryptoLiveBot:
                 
             except KeyboardInterrupt:
                 print("\n⏹️ Bot stopped by user")
+                
+                # Send shutdown notification
+                if self.config.get('telegram', {}).get('enabled', False):
+                    shutdown_msg = (
+                        f"⏹️ <b>Bot Stopped</b>\n\n"
+                        f"Daily P&L: {self.daily_pnl:.2f}%\n"
+                        f"Daily Trades: {self.daily_trades}\n"
+                        f"Open Positions: {len(self.positions)}\n"
+                        f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    self.send_telegram_notification(shutdown_msg)
+                
                 break
             except Exception as e:
                 print(f"❌ Error in main loop: {e}")
+                
+                # Send error notification
+                if self.config.get('telegram', {}).get('enabled', False):
+                    self.send_telegram_notification(
+                        f"❌ <b>Bot Error</b>\n\n"
+                        f"Error: {str(e)}\n"
+                        f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                
                 time.sleep(60)
 
 
