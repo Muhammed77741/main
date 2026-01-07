@@ -14,6 +14,8 @@ This full-auto trading bot uses the **V3 Adaptive Strategy** (Pattern Recognitio
 - ✅ Position limits (max simultaneous positions)
 - ✅ Telegram notifications (optional)
 - ✅ **DRY RUN mode** for safe testing
+- ✅ **Real-time TP monitoring** (checks every 10 seconds)
+- ✅ **Multi-level TP tracking** (TP1, TP2, TP3) with detailed logging
 
 ## Requirements
 
@@ -129,9 +131,16 @@ Get your bot token from [@BotFather](https://t.me/BotFather) on Telegram.
 2. **If signal found**:
    - Calculates position size based on risk %
    - Checks max position limits
-   - Opens position with SL/TP
+   - Opens 3 positions with different TP levels (TP1, TP2, TP3)
+   - TP levels adapt based on market regime (TREND: 30/55/90p, RANGE: 20/35/50p)
 
-3. **MT5 handles**:
+3. **Real-time monitoring** (every 10 seconds):
+   - Checks all open positions for TP hits
+   - Logs TP hits to `bot_tp_hits_log.csv`
+   - Sends Telegram notifications (if configured)
+   - Tracks closed positions
+
+4. **MT5 handles**:
    - Stop loss execution
    - Take profit execution
    - Position management
@@ -226,11 +235,25 @@ The bot logs:
 - Market analysis results
 - Signals found
 - Positions opened
+- **TP hits in real-time** (NEW!)
 - Errors and warnings
+
+**Log Files:**
+- `bot_trades_log.csv`: Complete trade history (when positions close)
+- `bot_tp_hits_log.csv`: Real-time TP hit events with detailed metrics
+  - Tracks TP1, TP2, and TP3 separately
+  - Includes: timestamp, ticket, TP level, profit, pips, duration, and more
+  - See [TP_MONITORING_README.md](TP_MONITORING_README.md) for details
 
 Check console output or redirect to file:
 ```bash
 python run_fullauto_bot.py --no-confirm > bot.log 2>&1
+
+# View TP hits log
+cat bot_tp_hits_log.csv
+
+# Analyze TP performance
+tail -n 20 bot_tp_hits_log.csv
 ```
 
 ## Stopping the Bot
