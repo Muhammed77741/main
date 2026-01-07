@@ -252,7 +252,9 @@ class SimplifiedSMCStrategy:
         """
         if direction == 1:  # Long
             # Stop below recent swing low
-            recent_swings = df[df['swing_low']].iloc[max(0, idx-20):idx]
+            # FIX: Slice BEFORE filtering to maintain correct indices
+            recent_data = df.iloc[max(0, idx-20):idx]
+            recent_swings = recent_data[recent_data['swing_low']]
             if len(recent_swings) > 0:
                 stop = recent_swings['low'].min()
             else:
@@ -264,7 +266,9 @@ class SimplifiedSMCStrategy:
 
         else:  # Short
             # Stop above recent swing high
-            recent_swings = df[df['swing_high']].iloc[max(0, idx-20):idx]
+            # FIX: Slice BEFORE filtering to maintain correct indices
+            recent_data = df.iloc[max(0, idx-20):idx]
+            recent_swings = recent_data[recent_data['swing_high']]
             if len(recent_swings) > 0:
                 stop = recent_swings['high'].max()
             else:
