@@ -17,6 +17,10 @@ from mt5_position_monitor import MT5PositionMonitor
 from telegram_notifier import TelegramNotifier
 from mt5_data_downloader import MT5DataDownloader
 
+# Constants
+SIGNAL_FRESHNESS_BUFFER_SECONDS = 3600  # Allow 1 hour buffer for signal freshness check
+NOTIFICATION_BUFFER_SECONDS = 5  # Buffer for detecting recent TP hits
+
 
 class FullAutoTradingBot:
     """Full auto trading bot with live MT5 integration"""
@@ -166,7 +170,8 @@ class FullAutoTradingBot:
                 time_since_check = (datetime.now() - self.last_signal_check).total_seconds()
                 signal_age = (df.index[-1] - last_signal_time).total_seconds()
                 
-                if signal_age > time_since_check + 3600:  # Allow 1 hour buffer
+                # Allow buffer for signal freshness check
+                if signal_age > time_since_check + SIGNAL_FRESHNESS_BUFFER_SECONDS:
                     print(f"📊 Last signal is old ({signal_age/3600:.1f}h ago), ignoring")
                     return
             
@@ -307,7 +312,7 @@ class FullAutoTradingBot:
                                         time_since_hit = (datetime.now() - hit_time).total_seconds()
                                         
                                         # If hit in last monitoring interval, send notification
-                                        if time_since_hit <= self.monitor_interval + 5:  # +5s buffer
+                                        if time_since_hit <= self.monitor_interval + NOTIFICATION_BUFFER_SECONDS:
                                             tp_num = tp_level[-1]  # '1', '2', or '3'
                                             tp_price = pos[f'{tp_level}_price']
                                             

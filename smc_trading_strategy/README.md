@@ -20,8 +20,8 @@ python.exe .\run_fullauto_bot.py
 ```
 
 📖 **Документация:**
-- [Quick Start Guide](smc_trading_strategy/QUICK_START.md) - Быстрый старт
-- [Full Documentation](smc_trading_strategy/README_FULLAUTO_BOT.md) - Полная документация
+- [Quick Start Guide](QUICK_START.md) - Быстрый старт
+- [Full Documentation](README_FULLAUTO_BOT.md) - Полная документация
 
 ---
 

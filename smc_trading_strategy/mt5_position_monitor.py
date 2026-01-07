@@ -210,11 +210,16 @@ class MT5PositionMonitor:
                 
                 # Log as manual close if not already closed
                 if logged_pos['status'] == 'OPEN':
-                    # Get last known price from history
+                    # Try to get actual closing price from MT5 history
+                    # Note: This is a fallback - in production, better to track position state
+                    # before it closes to get accurate exit price
+                    exit_price = logged_pos['entry_price']  # Fallback to entry price
+                    
+                    # Mark this position with special status
                     self.logger.log_exit(
                         logged_pos['trade_id'],
-                        exit_price=logged_pos['entry_price'],  # Fallback to entry
-                        exit_type='MT5_CLOSED'
+                        exit_price=exit_price,
+                        exit_type='MT5_CLOSED_UNKNOWN_PRICE'
                     )
                     summary['closed_positions'] += 1
                 continue

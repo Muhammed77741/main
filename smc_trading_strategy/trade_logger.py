@@ -9,6 +9,9 @@ from datetime import datetime
 from pathlib import Path
 import os
 
+# Constants
+DEFAULT_CLOSE_PCT = 0.33  # Default close percentage if not specified (1/3 for 3 TP levels)
+
 
 class TradeLogger:
     """Logger for recording live trading activity to file"""
@@ -184,7 +187,7 @@ class TradeLogger:
                     
                     # Calculate PnL for this partial close
                     close_pct_key = f"close_pct{tp_level[-1]}"  # close_pct1, close_pct2, close_pct3
-                    close_pct = pos.get(close_pct_key, 0.33)
+                    close_pct = pos.get(close_pct_key, DEFAULT_CLOSE_PCT)
                     
                     if pos['direction'] == 'LONG':
                         pnl_points = hit_price - pos['entry_price']
