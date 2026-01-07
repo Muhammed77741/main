@@ -78,8 +78,10 @@ class LiveBotMT5FullAuto:
         
         # Position tracking
         self.trades_file = 'bot_trades_log.csv'
+        self.tp_hits_file = 'bot_tp_hits_log.csv'
         self.positions_tracker = {}  # {ticket: position_data}
         self._initialize_trades_log()
+        self._initialize_tp_hits_log()
         
         # Telegram bot (optional)
         self.telegram_bot = None
@@ -103,6 +105,18 @@ class LiveBotMT5FullAuto:
                     'Pips', 'Market_Regime', 'Duration_Hours', 'Status', 'Comment'
                 ])
             print(f"📝 Created trade log file: {self.trades_file}")
+    
+    def _initialize_tp_hits_log(self):
+        """Initialize CSV file for TP hits logging"""
+        if not os.path.exists(self.tp_hits_file):
+            with open(self.tp_hits_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    'Timestamp', 'Ticket', 'TP_Level', 'Type', 'Volume',
+                    'Entry_Price', 'TP_Target', 'Current_Price', 'SL',
+                    'Profit', 'Pips', 'Market_Regime', 'Duration_Minutes', 'Comment'
+                ])
+            print(f"📝 Created TP hits log file: {self.tp_hits_file}")
     
     def _log_position_opened(self, ticket, position_type, volume, entry_price, 
                              sl, tp, regime, comment=''):
@@ -179,6 +193,131 @@ class LiveBotMT5FullAuto:
                 trade_data['status'],
                 trade_data['comment']
             ])
+    
+    def _log_tp_hit(self, ticket, tp_level, current_price):
+        """Log when a TP level is hit"""
+        if ticket not in self.positions_tracker:
+            return
+        
+        pos = self.positions_tracker[ticket]
+        
+        # Calculate duration in minutes
+        duration_minutes = 0
+        if pos['open_time']:
+            duration_minutes = (datetime.now() - pos['open_time']).total_seconds() / 60
+        
+        # Calculate pips
+        if pos['type'] == 'BUY':
+            pips = (current_price - pos['entry_price']) * 10  # For XAUUSD
+        else:
+            pips = (pos['entry_price'] - current_price) * 10
+        
+        # Estimate profit (approximation based on pips)
+        point_value = 100.0  # For XAUUSD, 1 lot = $100 per point
+        profit = pips / 10 * pos['volume'] * point_value
+        
+        # Write to TP hits log
+        with open(self.tp_hits_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                ticket,
+                tp_level,
+                pos['type'],
+                pos['volume'],
+                pos['entry_price'],
+                pos['tp'],
+                current_price,
+                pos['sl'],
+                round(profit, 2),
+                round(pips, 1),
+                pos['regime'],
+                round(duration_minutes, 1),
+                pos['comment']
+            ])
+        
+        print(f"🎯 TP HIT LOGGED: Ticket={ticket}, Level={tp_level}, Price={current_price:.2f}, Pips={pips:.1f}")
+    
+    def _check_tp_levels_realtime(self):
+        """Monitor open positions in real-time and check if TP levels are hit"""
+        if not self.mt5_connected:
+            return
+        
+        # Get current open positions from MT5
+        open_positions = mt5.positions_get(symbol=self.symbol)
+        if not open_positions:
+            return
+        
+        for position in open_positions:
+            ticket = position.ticket
+            
+            # Skip if not in our tracker (might be manual position)
+            if ticket not in self.positions_tracker:
+                continue
+            
+            tracked_pos = self.positions_tracker[ticket]
+            
+            # Get current price
+            tick = mt5.symbol_info_tick(self.symbol)
+            if not tick:
+                continue
+            
+            # Use appropriate price based on position type
+            current_price = tick.bid if tracked_pos['type'] == 'BUY' else tick.ask
+            tp_target = tracked_pos['tp']
+            
+            # Determine which TP level this is from the comment
+            tp_level = 'UNKNOWN'
+            if 'TP1' in tracked_pos['comment']:
+                tp_level = 'TP1'
+            elif 'TP2' in tracked_pos['comment']:
+                tp_level = 'TP2'
+            elif 'TP3' in tracked_pos['comment']:
+                tp_level = 'TP3'
+            
+            # Check if TP is hit (with small tolerance for slippage)
+            tolerance = 0.5  # 0.5 point tolerance
+            tp_hit = False
+            
+            if tracked_pos['type'] == 'BUY':
+                # For BUY, TP is above entry
+                tp_hit = current_price >= (tp_target - tolerance)
+            else:
+                # For SELL, TP is below entry
+                tp_hit = current_price <= (tp_target + tolerance)
+            
+            # If TP is hit and we haven't logged it yet
+            if tp_hit and tracked_pos.get('status') == 'OPEN':
+                # Mark as TP hit in tracker
+                tracked_pos['status'] = 'TP_HIT_DETECTED'
+                tracked_pos['tp_hit_time'] = datetime.now()
+                
+                # Log the TP hit
+                self._log_tp_hit(ticket, tp_level, current_price)
+                
+                # Send Telegram notification if available
+                if self.telegram_bot:
+                    import asyncio
+                    message = f"🎯 <b>TP HIT!</b>\n\n"
+                    message += f"Ticket: #{ticket}\n"
+                    message += f"TP Level: {tp_level}\n"
+                    message += f"Type: {tracked_pos['type']}\n"
+                    message += f"Entry: ${tracked_pos['entry_price']:.2f}\n"
+                    message += f"TP Target: ${tp_target:.2f}\n"
+                    message += f"Current Price: ${current_price:.2f}\n"
+                    message += f"Volume: {tracked_pos['volume']} lot\n"
+                    
+                    # Calculate pips
+                    if tracked_pos['type'] == 'BUY':
+                        pips = (current_price - tracked_pos['entry_price']) * 10
+                    else:
+                        pips = (tracked_pos['entry_price'] - current_price) * 10
+                    message += f"Pips: {pips:.1f}\n"
+                    
+                    try:
+                        asyncio.run(self.send_telegram(message))
+                    except:
+                        pass
         
     def connect_mt5(self):
         """Connect to MT5"""
@@ -719,7 +858,8 @@ class LiveBotMT5FullAuto:
         print(f"{'='*80}\n")
         
     def _wait_until_next_hour(self):
-        """Wait until the next full hour (01:00, 02:00, etc.)"""
+        """Wait until the next full hour (01:00, 02:00, etc.)
+        While waiting, monitor positions every 10 seconds for TP hits"""
         now = datetime.now()
         
         # Calculate next hour
@@ -730,7 +870,23 @@ class LiveBotMT5FullAuto:
             print(f"\n⏰ Waiting until next hour: {next_hour.strftime('%H:%M:%S')}")
             print(f"   Time now: {now.strftime('%H:%M:%S')}")
             print(f"   Wait time: {int(wait_seconds/60)} min {int(wait_seconds%60)} sec")
-            time.sleep(wait_seconds)
+            print(f"   🎯 Real-time TP monitoring: Active (checking every 10s)")
+            
+            # Monitor positions while waiting
+            monitoring_interval = 10  # Check every 10 seconds
+            elapsed = 0
+            
+            while elapsed < wait_seconds:
+                # Sleep for monitoring interval or remaining time
+                sleep_time = min(monitoring_interval, wait_seconds - elapsed)
+                time.sleep(sleep_time)
+                elapsed += sleep_time
+                
+                # Check TP levels in real-time
+                self._check_tp_levels_realtime()
+                
+                # Also check for closed positions
+                self._check_closed_positions()
             
     def run(self):
         """Main bot loop - runs exactly on the hour (01:00, 02:00, etc.)"""
@@ -746,9 +902,13 @@ class LiveBotMT5FullAuto:
         print(f"   Risk per trade: {self.risk_percent}%")
         print(f"   Max positions: {self.max_positions}")
         print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
+        print(f"   🎯 Real-time TP monitoring: Every 10 seconds")
         print(f"\n🎯 Adaptive TP Levels:")
         print(f"   TREND Mode: {self.trend_tp1}p / {self.trend_tp2}p / {self.trend_tp3}p")
         print(f"   RANGE Mode: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p")
+        print(f"\n📁 Log Files:")
+        print(f"   Trade log: {self.trades_file}")
+        print(f"   TP hits log: {self.tp_hits_file}")
         print(f"{'='*80}\n")
         
         if self.dry_run:
@@ -786,6 +946,9 @@ class LiveBotMT5FullAuto:
                 
                 # Check current positions
                 open_positions = self.get_open_positions()
+                
+                # Check TP levels in real-time
+                self._check_tp_levels_realtime()
                 
                 # Check for closed positions and log them
                 self._check_closed_positions()
