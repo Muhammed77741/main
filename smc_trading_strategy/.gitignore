@@ -30,6 +30,7 @@ Thumbs.db
 
 # Trade logs (live trading)
 trade_logs/
+test_trade_logs/
 
 # Data files
 *.csv

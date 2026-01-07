@@ -246,12 +246,51 @@ class FullAutoTradingBot:
                 if not self.running:
                     break
                 
+                # Get current open positions before checking
+                positions_before = {pos['trade_id']: pos for pos in self.logger.get_open_positions()}
+                
                 # Check positions
                 summary = self.monitor.monitor_positions_once()
                 
+                # Get positions after checking
+                positions_after = {pos['trade_id']: pos for pos in self.logger.get_open_positions()}
+                
+                # Find positions that were closed (in before but not in after)
+                closed_trade_ids = set(positions_before.keys()) - set(positions_after.keys())
+                
+                # Send notifications for closed positions
+                if self.notifier and closed_trade_ids:
+                    # Get closed trades from logger
+                    closed_trades = self.logger.get_closed_trades()
+                    
+                    for trade_id in closed_trade_ids:
+                        # Find the closed trade
+                        closed_trade = next((t for t in closed_trades if t['trade_id'] == trade_id), None)
+                        
+                        if closed_trade:
+                            # Calculate duration
+                            try:
+                                entry_time = datetime.strptime(closed_trade['entry_time'], '%Y-%m-%d %H:%M:%S')
+                                exit_time = datetime.strptime(closed_trade['exit_time'], '%Y-%m-%d %H:%M:%S')
+                                duration_hours = (exit_time - entry_time).total_seconds() / 3600
+                            except:
+                                duration_hours = 0
+                            
+                            # Send exit notification
+                            self.notifier.send_exit_signal({
+                                'direction': closed_trade['direction'],
+                                'entry_price': closed_trade['entry_price'],
+                                'exit_price': closed_trade['exit_price'],
+                                'exit_type': closed_trade['exit_type'],
+                                'pnl_pct': closed_trade['total_pnl_pct'],
+                                'pnl_points': closed_trade['total_pnl_points'],
+                                'duration_hours': duration_hours,
+                                'timestamp': exit_time if 'exit_time' in locals() else datetime.now()
+                            })
+                
                 # Send notifications for TP/SL hits
                 if self.notifier and (summary['tp1_hits'] > 0 or summary['tp2_hits'] > 0 or 
-                                     summary['tp3_hits'] > 0 or summary['sl_hits'] > 0):
+                                     summary['tp3_hits'] > 0):
                     
                     # Get recent updates from logger
                     open_positions = self.logger.get_open_positions()
