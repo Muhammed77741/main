@@ -1,4 +1,5 @@
 """
+"""
 Pattern Recognition Strategy with Fibonacci Extensions
 Recognizes chart patterns: Double Top/Bottom, Head & Shoulders, Triangles, Wedges, Flags
 Uses Fibonacci 1.618 or 2.618 for dynamic TP (switchable mode)
@@ -27,7 +28,7 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
         fib_mode='standard',        # 'standard' (1.618) or 'aggressive' (2.618)
         pattern_tolerance=0.02,     # 2% tolerance for pattern matching (учет теней)
         min_pattern_swings=3,       # Minimum swings for pattern
-        swing_lookback=20,          # Lookback for swing detection
+        swing_lookback=15,          # Lookback for swing detection
         best_hours_only=True
     ):
         # Fibonacci level based on mode
