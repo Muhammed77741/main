@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 import csv
 import os
+import asyncio
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -263,6 +264,7 @@ class LiveBotMT5FullAuto:
                 continue
             
             # Use appropriate price based on position type
+            # For BUY: close at bid (sell price), For SELL: close at ask (buy price)
             current_price = tick.bid if tracked_pos['type'] == 'BUY' else tick.ask
             tp_target = tracked_pos['tp']
             
@@ -297,7 +299,6 @@ class LiveBotMT5FullAuto:
                 
                 # Send Telegram notification if available
                 if self.telegram_bot:
-                    import asyncio
                     message = f"🎯 <b>TP HIT!</b>\n\n"
                     message += f"Ticket: #{ticket}\n"
                     message += f"TP Level: {tp_level}\n"
@@ -316,8 +317,8 @@ class LiveBotMT5FullAuto:
                     
                     try:
                         asyncio.run(self.send_telegram(message))
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
         
     def connect_mt5(self):
         """Connect to MT5"""

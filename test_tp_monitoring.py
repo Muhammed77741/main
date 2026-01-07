@@ -146,8 +146,8 @@ def test_file_structure():
             if os.path.exists(test_tp_hits_file):
                 os.remove(test_tp_hits_file)
                 print(f"🧹 Cleaned up: {test_tp_hits_file}")
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠️  Could not clean up test file: {e}")
 
 
 def test_tp_level_detection():
