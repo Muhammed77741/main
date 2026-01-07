@@ -237,6 +237,64 @@ class TelegramNotifier:
 
         return self.send_message(message)
 
+    def send_partial_close(self, partial_data):
+        """Send partial close notification (TP1, TP2, or TP3 hit)"""
+
+        direction = partial_data['direction']
+        tp_level = partial_data['tp_level']  # 'TP1', 'TP2', or 'TP3'
+        tp_price = partial_data['tp_price']
+        entry_price = partial_data['entry_price']
+        close_pct = partial_data['close_pct']  # 0.5, 0.3, 0.2
+        pnl_pct = partial_data['pnl_pct']
+        pnl_points = partial_data['pnl_points']
+        position_remaining = partial_data['position_remaining']
+        regime = partial_data.get('regime', 'N/A')
+        trailing_activated = partial_data.get('trailing_activated', False)
+        trailing_distance = partial_data.get('trailing_distance', 0)
+        timestamp = partial_data.get('timestamp', datetime.now())
+
+        # Convert to local timezone
+        if hasattr(timestamp, 'tz_localize'):
+            timestamp = timestamp.to_pydatetime()
+        timestamp_local = timestamp + timedelta(hours=self.timezone_offset)
+
+        emoji = "🎯" if tp_level == 'TP1' else ("🎯🎯" if tp_level == 'TP2' else "🎯🎯🎯")
+        regime_emoji = "📈" if regime == "TREND" else "📊"
+
+        # Calculate profit in USD (for 0.01 lot)
+        profit_usd = pnl_points * 0.01
+
+        message = f"""
+{emoji} <b>ЧАСТИЧНОЕ ЗАКРЫТИЕ - {tp_level} HIT!</b>
+
+📊 <b>Стратегия:</b> Pattern Recognition (1.618)
+⏰ <b>Время:</b> {timestamp_local.strftime('%Y-%m-%d %H:%M:%S')} (UTC+{self.timezone_offset})
+
+{regime_emoji} <b>Режим:</b> {regime}
+{"🟢" if direction == "LONG" else "🔴"} <b>Направление:</b> {direction}
+💰 <b>Вход:</b> {entry_price:.2f}
+{emoji} <b>{tp_level}:</b> {tp_price:.2f}
+
+📊 <b>Закрыто:</b> {close_pct*100:.0f}% позиции
+💵 <b>Прибыль:</b> {pnl_pct:+.2f}% ({pnl_points:+.2f}п)
+💰 <b>Прибыль USD (лот 0.01):</b> ${profit_usd:+.2f}
+
+📈 <b>Осталось открыто:</b> {position_remaining*100:.0f}% позиции
+"""
+
+        if trailing_activated:
+            message += f"""
+🔄 <b>TRAILING STOP АКТИВИРОВАН!</b>
+   Расстояние: {trailing_distance}п
+   SL будет двигаться за ценой
+"""
+
+        message += """
+⚡ <b>Продолжаем держать оставшуюся позицию!</b>
+"""
+
+        return self.send_message(message)
+
     def send_startup_message(self):
         """Send bot startup notification"""
 

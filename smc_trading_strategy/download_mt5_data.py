@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import argparse
 
 
-def download_for_backtest(symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1, days=365):
+def download_for_backtest(symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1, days=800):
     """
     Загрузить данные для бэктестинга
 
@@ -104,7 +104,7 @@ def download_multiple_periods(symbol='XAUUSD'):
         df = downloader.download_history(from_date=from_date, to_date=to_date)
 
         if df is not None:
-            filename = f"../{symbol}_{period_name}_MT5.csv"
+            filename = f"./{symbol}_{period_name}_MT5.csv"
             downloader.save_to_csv(df, filename)
             print(f"✅ Сохранено: {filename} ({len(df)} свечей)")
         else:
@@ -134,7 +134,7 @@ def download_custom_range(symbol='XAUUSD', from_str=None, to_str=None):
     if from_str:
         from_date = datetime.strptime(from_str, '%Y-%m-%d')
     else:
-        from_date = datetime.now() - timedelta(days=365)
+        from_date = datetime.now() - timedelta(days=800)
 
     if to_str:
         to_date = datetime.strptime(to_str, '%Y-%m-%d')
