@@ -3,7 +3,7 @@ Main Window - main GUI window for the trading app
 """
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QTextEdit, QListWidget, QListWidgetItem,
+    QPushButton, QLabel, QPlainTextEdit, QListWidget, QListWidgetItem,
     QGroupBox, QMessageBox, QSplitter
 )
 from PySide6.QtCore import Qt, QTimer
@@ -201,7 +201,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
 
         # Log text area
-        self.log_text = QTextEdit()
+        self.log_text = QPlainTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumBlockCount(1000)  # Limit to 1000 lines
         layout.addWidget(self.log_text)
