@@ -10,18 +10,23 @@ from typing import Optional
 class TradeRecord:
     """Record of a completed trade"""
 
-    # Identification
+    # Identification (required fields)
     trade_id: int
     bot_id: str
     order_id: str
 
-    # Timing
+    # Timing (required)
     open_time: datetime
+
+    # Trade details (required)
+    trade_type: str  # 'BUY' or 'SELL'
+
+    # Optional fields with defaults
+    # Timing
     close_time: Optional[datetime] = None
     duration_hours: Optional[float] = None
 
     # Trade details
-    trade_type: str  # 'BUY' or 'SELL'
     amount: float = 0.0
     entry_price: float = 0.0
     close_price: Optional[float] = None
