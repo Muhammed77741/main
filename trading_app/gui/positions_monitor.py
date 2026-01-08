@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QHeaderView
 )
 from PySide6.QtCore import Qt, QTimer
-from ..models import BotConfig
+from models import BotConfig
 
 
 class PositionsMonitor(QDialog):

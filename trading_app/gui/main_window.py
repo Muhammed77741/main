@@ -8,12 +8,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QIcon
-from ..core import BotManager
-from ..database import DatabaseManager
-from ..models import BotConfig, BotStatus
-from .settings_dialog import SettingsDialog
-from .positions_monitor import PositionsMonitor
-from .statistics_dialog import StatisticsDialog
+from core import BotManager
+from database import DatabaseManager
+from models import BotConfig, BotStatus
+from gui.settings_dialog import SettingsDialog
+from gui.positions_monitor import PositionsMonitor
+from gui.statistics_dialog import StatisticsDialog
 
 
 class MainWindow(QMainWindow):

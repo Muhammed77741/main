@@ -6,8 +6,8 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QGroupBox, QHeaderView, QComboBox
 )
 from PySide6.QtCore import Qt
-from ..models import BotConfig
-from ..database import DatabaseManager
+from models import BotConfig
+from database import DatabaseManager
 
 
 class StatisticsDialog(QDialog):

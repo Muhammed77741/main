@@ -3,9 +3,9 @@ Bot Manager - manages all trading bots
 """
 from typing import Dict, Optional
 from PySide6.QtCore import QObject, Signal
-from ..models import BotConfig, BotStatus
-from ..database import DatabaseManager
-from .bot_thread import BotThread
+from models import BotConfig, BotStatus
+from database import DatabaseManager
+from core.bot_thread import BotThread
 
 
 class BotManager(QObject):

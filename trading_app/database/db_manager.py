@@ -5,7 +5,7 @@ import sqlite3
 import os
 from typing import List, Optional
 from datetime import datetime
-from ..models import BotConfig, BotStatus, TradeRecord
+from models import BotConfig, BotStatus, TradeRecord
 
 
 class DatabaseManager:

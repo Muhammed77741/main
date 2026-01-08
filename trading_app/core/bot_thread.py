@@ -11,7 +11,7 @@ import traceback
 # Add trading_bots to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_bots'))
 
-from ..models import BotConfig, BotStatus
+from models import BotConfig, BotStatus
 
 
 class BotThread(QThread):
