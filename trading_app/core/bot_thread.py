@@ -45,10 +45,15 @@ class BotThread(QThread):
             else:
                 raise ValueError(f"Unknown exchange: {self.config.exchange}")
 
-            # Connect to exchange
-            if not self.bot.connect_exchange():
-                self.error_signal.emit("Failed to connect to exchange")
-                return
+            # Connect to exchange (different method names for different exchanges)
+            if self.config.exchange == 'MT5':
+                if not self.bot.connect_mt5():
+                    self.error_signal.emit("Failed to connect to MT5")
+                    return
+            else:  # Binance
+                if not self.bot.connect_exchange():
+                    self.error_signal.emit("Failed to connect to Binance")
+                    return
 
             self.log_signal.emit(f"[{self.config.bot_id}] Connected to {self.config.exchange}")
 
@@ -64,7 +69,11 @@ class BotThread(QThread):
             self.running = False
             if self.bot:
                 try:
-                    self.bot.disconnect_exchange()
+                    # Call appropriate disconnect method based on exchange
+                    if self.config.exchange == 'MT5':
+                        self.bot.disconnect_mt5()
+                    else:  # Binance
+                        self.bot.disconnect_exchange()
                 except:
                     pass
             self.log_signal.emit(f"[{self.config.bot_id}] Bot stopped")
