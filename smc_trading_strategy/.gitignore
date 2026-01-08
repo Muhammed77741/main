@@ -24,3 +24,14 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Environment variables
+.env
+
+# Trade logs (live trading)
+trade_logs/
+test_trade_logs/
+
+# Data files
+*.csv
+*.png
