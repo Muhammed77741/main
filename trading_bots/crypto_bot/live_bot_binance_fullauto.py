@@ -17,10 +17,10 @@ import csv
 import os
 import asyncio
 
-# Add parent directory to path
+# Add parent directory to path to access shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from smc_trading_strategy.pattern_recognition_strategy import PatternRecognitionStrategy
+from shared.pattern_recognition_strategy import PatternRecognitionStrategy
 
 
 class LiveBotBinanceFullAuto:
