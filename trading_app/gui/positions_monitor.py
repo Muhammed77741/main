@@ -17,7 +17,8 @@ class PositionsMonitor(QDialog):
         self.config = config
 
         self.setWindowTitle(f"Open Positions - {config.name}")
-        self.setMinimumSize(900, 600)
+        self.setMinimumSize(1000, 600)  # Increased width for better column visibility
+        self.resize(1100, 650)  # Default size
 
         self.init_ui()
 
@@ -44,9 +45,22 @@ class PositionsMonitor(QDialog):
             'Order ID', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'P&L'
         ])
 
-        # Resize columns to content
+        # Configure column widths for better readability
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setStretchLastSection(True)  # Stretch P&L column
+
+        # Set specific column widths
+        self.table.setColumnWidth(0, 100)  # Order ID
+        self.table.setColumnWidth(1, 70)   # Type
+        self.table.setColumnWidth(2, 100)  # Amount
+        self.table.setColumnWidth(3, 100)  # Entry
+        self.table.setColumnWidth(4, 100)  # Current
+        self.table.setColumnWidth(5, 100)  # SL
+        self.table.setColumnWidth(6, 100)  # TP
+        # P&L (column 7) will stretch automatically
+
+        # Allow user to resize columns
+        header.setSectionResizeMode(QHeaderView.Interactive)
 
         layout.addWidget(self.table)
 

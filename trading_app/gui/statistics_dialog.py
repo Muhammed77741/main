@@ -93,9 +93,23 @@ class StatisticsDialog(QDialog):
             'Date', 'Type', 'Entry', 'Exit', 'Profit', 'Profit %', 'Pips', 'Duration', 'Regime'
         ])
 
-        # Resize columns
+        # Configure column widths for better readability
         header = self.history_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setStretchLastSection(True)  # Stretch Regime column
+
+        # Set specific column widths
+        self.history_table.setColumnWidth(0, 130)  # Date
+        self.history_table.setColumnWidth(1, 60)   # Type
+        self.history_table.setColumnWidth(2, 100)  # Entry
+        self.history_table.setColumnWidth(3, 100)  # Exit
+        self.history_table.setColumnWidth(4, 100)  # Profit
+        self.history_table.setColumnWidth(5, 80)   # Profit %
+        self.history_table.setColumnWidth(6, 80)   # Pips
+        self.history_table.setColumnWidth(7, 90)   # Duration
+        # Regime (column 8) will stretch automatically
+
+        # Allow user to resize columns
+        header.setSectionResizeMode(QHeaderView.Interactive)
 
         layout.addWidget(self.history_table)
 
