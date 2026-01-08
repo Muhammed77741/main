@@ -409,7 +409,7 @@ class MainWindow(QMainWindow):
         """Add log message"""
         from datetime import datetime
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.append(f"[{timestamp}] {message}")
+        self.log_text.appendPlainText(f"[{timestamp}] {message}")
 
     def on_bot_started(self, bot_id: str):
         """Handle bot started signal"""
