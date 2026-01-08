@@ -1,0 +1,16 @@
+# Common requirements for all bots
+pandas>=2.0.0
+numpy>=1.24.0
+python-dotenv>=1.0.0
+python-telegram-bot>=20.0
+
+# For XAUUSD bot (MT5)
+MetaTrader5>=5.0.45
+
+# For Crypto bot (Binance)
+ccxt>=4.0.0
+
+# For future Windows GUI (будет использоваться позже)
+# PySide6>=6.5.0
+# matplotlib>=3.7.0
+# plotly>=5.14.0
