@@ -398,7 +398,7 @@ def start_bot(config, symbol='BTC'):
         risk_percent=config['risk_percent'],
         max_positions=config['max_positions'],
         dry_run=config['dry_run'],
-        use_testnet=use_testnet
+        testnet=use_testnet
     )
 
     # Connect to Binance
