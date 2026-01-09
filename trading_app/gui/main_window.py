@@ -4,7 +4,7 @@ Main Window - main GUI window for the trading app
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QPlainTextEdit, QListWidget, QListWidgetItem,
-    QGroupBox, QMessageBox, QSplitter
+    QGroupBox, QMessageBox, QSplitter, QApplication
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QIcon
@@ -21,6 +21,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+
+        # Closing flag to prevent operations during shutdown
+        self.is_closing = False
 
         # Initialize database and bot manager
         self.db = DatabaseManager()
@@ -294,13 +297,22 @@ class MainWindow(QMainWindow):
 
     def update_status_display(self):
         """Update status display"""
-        if not self.current_bot_id:
+        # Skip if closing or no current bot
+        if self.is_closing or not self.current_bot_id:
             return
 
-        # Get status from cache or database
-        status = self.status_cache.get(self.current_bot_id)
-        if not status:
-            status = self.bot_manager.get_status(self.current_bot_id)
+        # Check if widgets still exist
+        if not hasattr(self, 'status_display') or self.status_display is None:
+            return
+
+        try:
+            # Get status from cache or database
+            status = self.status_cache.get(self.current_bot_id)
+            if not status:
+                status = self.bot_manager.get_status(self.current_bot_id)
+        except Exception as e:
+            print(f"⚠️  Error getting status: {e}")
+            return
 
         if not status:
             status = BotStatus(bot_id=self.current_bot_id, status='stopped')
@@ -482,9 +494,15 @@ class MainWindow(QMainWindow):
 
     def log(self, message: str):
         """Add log message"""
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.appendPlainText(f"[{timestamp}] {message}")
+        if self.is_closing:
+            return
+        try:
+            if hasattr(self, 'log_text') and self.log_text is not None:
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                self.log_text.appendPlainText(f"[{timestamp}] {message}")
+        except:
+            pass  # Ignore errors during logging
 
     def on_bot_started(self, bot_id: str):
         """Handle bot started signal"""
@@ -503,24 +521,46 @@ class MainWindow(QMainWindow):
 
     def on_bot_log(self, bot_id: str, message: str):
         """Handle bot log signal"""
-        self.log(message)
+        if self.is_closing:
+            return
+        try:
+            self.log(message)
+        except:
+            pass
 
     def on_bot_error(self, bot_id: str, error: str):
         """Handle bot error signal"""
-        self.log(f"ERROR: {error}")
-        QMessageBox.critical(self, 'Bot Error', f"Bot {bot_id} error:\n{error}")
+        if self.is_closing:
+            return
+        try:
+            self.log(f"ERROR: {error}")
+            QMessageBox.critical(self, 'Bot Error', f"Bot {bot_id} error:\n{error}")
+        except:
+            pass
 
     def on_status_updated(self, bot_id: str, status: BotStatus):
         """Handle status update signal"""
-        # Cache status
-        self.status_cache[bot_id] = status
+        if self.is_closing:
+            return
+        try:
+            # Cache status
+            self.status_cache[bot_id] = status
 
-        # Update display if this is current bot
-        if bot_id == self.current_bot_id:
-            self.update_status_display()
+            # Update display if this is current bot
+            if bot_id == self.current_bot_id:
+                self.update_status_display()
+        except:
+            pass
 
     def closeEvent(self, event):
         """Handle window close event"""
+        # Set closing flag to prevent further operations
+        self.is_closing = True
+
+        # Stop status update timer first
+        if hasattr(self, 'status_timer'):
+            self.status_timer.stop()
+
         # Check if any bots are running
         running_bots = [bid for bid in self.bot_manager.get_all_bot_ids()
                         if self.bot_manager.is_bot_running(bid)]
@@ -536,18 +576,40 @@ class MainWindow(QMainWindow):
 
             if reply != QMessageBox.Yes:
                 event.ignore()
+                # Reset closing flag and restart timer if user cancels
+                self.is_closing = False
+                if hasattr(self, 'status_timer'):
+                    self.status_timer.start(5000)
                 return
 
             # Stop all bots
+            print("🛑 Stopping all bots...")
             self.bot_manager.stop_all_bots()
 
-            # Give threads extra time to finish their cleanup
-            # This prevents database operations from threads after db.close()
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(500, lambda: None)  # 500ms delay
-            QApplication.processEvents()  # Process any pending signals
+            # Process any pending events from stopped threads
+            print("⏳ Waiting for threads to finish...")
+            QApplication.processEvents()
+
+            # Give threads time to finish cleanup
+            import time
+            time.sleep(0.5)
+
+            # Process remaining signals
+            QApplication.processEvents()
+
+        # Disconnect all signals to prevent callbacks after close
+        try:
+            self.bot_manager.bot_started.disconnect()
+            self.bot_manager.bot_stopped.disconnect()
+            self.bot_manager.bot_log.disconnect()
+            self.bot_manager.bot_error.disconnect()
+            self.bot_manager.bot_status_updated.disconnect()
+        except:
+            pass  # Ignore if already disconnected
 
         # Close database
+        print("🗄️  Closing database...")
         self.db.close()
 
+        print("✅ Application closed cleanly")
         event.accept()
