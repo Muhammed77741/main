@@ -252,22 +252,30 @@ class LiveBotBinanceFullAuto:
         """Connect to Binance"""
         try:
             if self.testnet:
+                # Testnet configuration
                 self.exchange = ccxt.binance({
                     'apiKey': self.api_key,
                     'secret': self.api_secret,
                     'enableRateLimit': True,
                     'options': {
                         'defaultType': 'future',
-                        'test': True
+                    },
+                    'urls': {
+                        'api': {
+                            'public': 'https://testnet.binancefuture.com/fapi/v1',
+                            'private': 'https://testnet.binancefuture.com/fapi/v1',
+                        }
                     }
                 })
             else:
+                # Mainnet configuration
                 self.exchange = ccxt.binance({
                     'apiKey': self.api_key,
                     'secret': self.api_secret,
                     'enableRateLimit': True,
                     'options': {
-                        'defaultType': 'future'
+                        'defaultType': 'future',
+                        'adjustForTimeDifference': True,  # Auto-adjust for time sync
                     }
                 })
 
