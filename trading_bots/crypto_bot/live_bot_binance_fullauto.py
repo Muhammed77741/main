@@ -40,7 +40,8 @@ class LiveBotBinanceFullAuto:
     def __init__(self, telegram_token=None, telegram_chat_id=None,
                  symbol='BTC/USDT', timeframe='1h',
                  check_interval=3600, risk_percent=2.0, max_positions=3,
-                 dry_run=False, testnet=True, api_key=None, api_secret=None):
+                 dry_run=False, testnet=True, api_key=None, api_secret=None,
+                 trailing_stop_enabled=True, trailing_stop_percent=1.5):
         """
         Initialize bot
 
@@ -56,6 +57,8 @@ class LiveBotBinanceFullAuto:
             testnet: If True, use Binance testnet
             api_key: Binance API key
             api_secret: Binance API secret
+            trailing_stop_enabled: Enable trailing stop
+            trailing_stop_percent: Trailing stop activation threshold (%)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -68,6 +71,11 @@ class LiveBotBinanceFullAuto:
         self.testnet = testnet
         self.api_key = api_key
         self.api_secret = api_secret
+
+        # Trailing stop settings
+        self.trailing_stop_enabled = trailing_stop_enabled
+        self.trailing_stop_percent = trailing_stop_percent  # Activate trailing after X% profit
+        self.trailing_distance_percent = 0.5  # Trail at 0.5% below peak
 
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
@@ -89,6 +97,7 @@ class LiveBotBinanceFullAuto:
         self.trades_file = f'bot_trades_log_{symbol.replace("/", "_")}.csv'
         self.tp_hits_file = f'bot_tp_hits_log_{symbol.replace("/", "_")}.csv'
         self.positions_tracker = {}  # {order_id: position_data}
+        self.position_peaks = {}  # Track highest profit for trailing stop
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
 
@@ -360,6 +369,94 @@ class LiveBotBinanceFullAuto:
         if self.exchange_connected:
             self.exchange.close()
             self.exchange_connected = False
+
+    def update_trailing_stops(self):
+        """
+        Update trailing stops for all open positions
+
+        Logic:
+        1. Check each open position's current profit
+        2. If profit > threshold (e.g. 1.5%), activate trailing
+        3. Track peak profit for this position
+        4. Move SL up to lock in profits (peak - trailing_distance%)
+        """
+        if not self.trailing_stop_enabled or not self.exchange_connected:
+            return
+
+        try:
+            # Get open positions
+            positions = self.exchange.fetch_positions([self.symbol])
+
+            for pos in positions:
+                contracts = float(pos.get('contracts', 0))
+                if contracts <= 0:
+                    continue
+
+                # Get position details
+                order_id = pos.get('id', '')
+                entry_price = float(pos.get('entryPrice', 0))
+                current_price = float(pos.get('markPrice', 0))
+                side = pos.get('side', '').lower()  # 'long' or 'short'
+                unrealized_pnl_pct = float(pos.get('percentage', 0))
+
+                # Skip if no valid data
+                if not entry_price or not current_price:
+                    continue
+
+                # Calculate profit percentage
+                if side == 'long':
+                    profit_pct = ((current_price - entry_price) / entry_price) * 100
+                else:  # short
+                    profit_pct = ((entry_price - current_price) / entry_price) * 100
+
+                # Check if trailing should be activated
+                if profit_pct < self.trailing_stop_percent:
+                    # Not enough profit yet to activate trailing
+                    continue
+
+                # Track peak profit
+                if order_id not in self.position_peaks:
+                    self.position_peaks[order_id] = {
+                        'peak_price': current_price,
+                        'peak_profit_pct': profit_pct,
+                        'entry_price': entry_price,
+                        'side': side,
+                        'trailing_active': False
+                    }
+                    print(f"🎯 Trailing stop ACTIVATED for {order_id}: Profit={profit_pct:.2f}%")
+
+                peak_data = self.position_peaks[order_id]
+
+                # Update peak if current profit is higher
+                if profit_pct > peak_data['peak_profit_pct']:
+                    peak_data['peak_price'] = current_price
+                    peak_data['peak_profit_pct'] = profit_pct
+                    peak_data['trailing_active'] = True
+
+                    # Calculate new trailing stop level
+                    if side == 'long':
+                        new_sl = current_price * (1 - self.trailing_distance_percent / 100)
+                    else:  # short
+                        new_sl = current_price * (1 + self.trailing_distance_percent / 100)
+
+                    # Update stop loss on exchange
+                    if not self.dry_run:
+                        try:
+                            self.exchange.edit_order(
+                                order_id,
+                                self.symbol,
+                                params={'stopLoss': new_sl}
+                            )
+                            print(f"📈 Trailing SL updated: {order_id}")
+                            print(f"   Peak: ${peak_data['peak_price']:.2f} (+{peak_data['peak_profit_pct']:.2f}%)")
+                            print(f"   New SL: ${new_sl:.2f} (trailing {self.trailing_distance_percent}%)")
+                        except Exception as e:
+                            print(f"⚠️  Failed to update SL for {order_id}: {e}")
+                    else:
+                        print(f"🧪 DRY RUN: Would update SL to ${new_sl:.2f} for {order_id}")
+
+        except Exception as e:
+            print(f"⚠️  Error updating trailing stops: {e}")
 
     def get_market_data(self, bars=500):
         """Get historical data from Binance"""
@@ -799,6 +896,10 @@ class LiveBotBinanceFullAuto:
 
                 # Check for closed positions
                 self._check_closed_positions()
+
+                # Update trailing stops for open positions
+                if len(open_positions) > 0:
+                    self.update_trailing_stops()
 
                 # Analyze market
                 print(f"\n🔍 Analyzing market...")

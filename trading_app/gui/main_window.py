@@ -208,6 +208,12 @@ class MainWindow(QMainWindow):
         stats_btn.setMinimumHeight(40)
         layout.addWidget(stats_btn)
 
+        # TP Hits button
+        tp_hits_btn = QPushButton("🎯 TP Hits")
+        tp_hits_btn.clicked.connect(self.show_tp_hits)
+        tp_hits_btn.setMinimumHeight(40)
+        layout.addWidget(tp_hits_btn)
+
         return group
 
     def create_active_bots_section(self):
@@ -434,6 +440,17 @@ class MainWindow(QMainWindow):
         config = self.bot_manager.get_config(self.current_bot_id)
 
         dialog = StatisticsDialog(config, self.db, self)
+        dialog.exec()
+
+    def show_tp_hits(self):
+        """Show TP hits history"""
+        if not self.current_bot_id:
+            return
+
+        config = self.bot_manager.get_config(self.current_bot_id)
+
+        from gui.tp_hits_viewer import TPHitsViewer
+        dialog = TPHitsViewer(config, self)
         dialog.exec()
 
     def refresh_bot_list(self):

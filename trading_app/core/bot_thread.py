@@ -157,10 +157,13 @@ class BotThread(QThread):
                     time.sleep(10)  # Check every 10 seconds
                     elapsed += 10
 
-                    # Update status every minute
-                    if elapsed % 60 == 0:
-                        status = self._get_bot_status()
-                        self.status_signal.emit(status)
+                    # Update status every 10 seconds for real-time monitoring
+                    status = self._get_bot_status()
+                    self.status_signal.emit(status)
+
+                    # Update trailing stops for crypto bots
+                    if hasattr(self.bot, 'update_trailing_stops') and elapsed % 60 == 0:
+                        self.bot.update_trailing_stops()
 
             except Exception as e:
                 self.log_signal.emit(f"[{self.config.bot_id}] Error in loop: {str(e)}")
