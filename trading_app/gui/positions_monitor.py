@@ -176,27 +176,60 @@ class PositionsMonitor(QDialog):
             elif self.config.exchange == 'Binance':
                 import ccxt
 
-                # Create exchange instance
-                exchange = ccxt.binance({
-                    'apiKey': self.config.api_key,
-                    'secret': self.config.api_secret,
-                    'enableRateLimit': True,
-                    'options': {
-                        'defaultType': 'future',
-                        'test': self.config.testnet
-                    }
-                })
+                # Create exchange instance with proper testnet/mainnet configuration
+                if self.config.testnet:
+                    # Testnet configuration
+                    exchange = ccxt.binance({
+                        'apiKey': self.config.api_key,
+                        'secret': self.config.api_secret,
+                        'enableRateLimit': True,
+                        'options': {
+                            'defaultType': 'future',
+                            'adjustForTimeDifference': True,
+                        },
+                        'urls': {
+                            'api': {
+                                'public': 'https://testnet.binancefuture.com/fapi/v1',
+                                'private': 'https://testnet.binancefuture.com/fapi/v1',
+                            }
+                        }
+                    })
+                else:
+                    # Mainnet configuration
+                    exchange = ccxt.binance({
+                        'apiKey': self.config.api_key,
+                        'secret': self.config.api_secret,
+                        'enableRateLimit': True,
+                        'options': {
+                            'defaultType': 'future',
+                            'adjustForTimeDifference': True,
+                        }
+                    })
 
                 # Fetch positions
+                print(f"🔍 Fetching positions for {self.config.symbol}...")
                 binance_positions = exchange.fetch_positions([self.config.symbol])
 
-                for pos in binance_positions:
+                print(f"📊 Raw positions data: {len(binance_positions)} positions returned")
+
+                for i, pos in enumerate(binance_positions):
                     contracts = float(pos.get('contracts', 0))
+                    side = pos.get('side', 'unknown')
+                    info = pos.get('info', {})
+
+                    print(f"   Position {i+1}: side={side}, contracts={contracts}")
+                    print(f"   Full data: {pos}")
+
                     if contracts > 0:
                         positions.append(pos)
+                        print(f"   ✅ Added to display")
+                    else:
+                        print(f"   ⚠️  Skipped (no contracts)")
 
         except Exception as e:
-            print(f"Error fetching positions: {e}")
+            print(f"❌ Error fetching positions: {e}")
+            import traceback
+            traceback.print_exc()
 
         return positions
 

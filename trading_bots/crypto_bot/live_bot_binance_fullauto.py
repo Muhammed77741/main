@@ -317,6 +317,23 @@ class LiveBotBinanceFullAuto:
             # Test connection
             print("🔄 Testing connection...")
             balance = self.exchange.fetch_balance()
+
+            # Set position mode to One-Way (not Hedge mode) for simpler position tracking
+            try:
+                # Check current position mode
+                position_mode = self.exchange.fapiPrivateGetPositionSideDual()
+                is_hedge = position_mode.get('dualSidePosition', True)
+
+                print(f"📊 Position mode: {'Hedge Mode' if is_hedge else 'One-Way Mode'}")
+
+                # If in hedge mode, switch to one-way mode
+                if is_hedge:
+                    print("🔄 Switching to One-Way position mode...")
+                    self.exchange.fapiPrivatePostPositionSideDual({'dualSidePosition': 'false'})
+                    print("✅ Switched to One-Way position mode")
+            except Exception as e:
+                print(f"⚠️  Could not check/set position mode: {e}")
+
             self.exchange_connected = True
 
             usdt_free = balance.get('USDT', {}).get('free', 0) or 0
@@ -721,6 +738,7 @@ class LiveBotBinanceFullAuto:
             # Place market order
             side = 'buy' if signal['direction'] == 1 else 'sell'
 
+            print(f"   🔄 Placing market order...")
             order = self.exchange.create_order(
                 symbol=self.symbol,
                 type='market',
@@ -732,10 +750,23 @@ class LiveBotBinanceFullAuto:
                 }
             )
 
-            print(f"   ✅ Position opened!")
+            print(f"   ✅ Order placed!")
             print(f"      Order ID: {order['id']}")
-            print(f"      Amount: {position_size}")
+            print(f"      Status: {order.get('status', 'unknown')}")
+            print(f"      Side: {order.get('side', 'unknown')}")
+            print(f"      Amount: {order.get('amount', position_size)}")
+            print(f"      Filled: {order.get('filled', 0)}")
             print(f"      Entry: ${order.get('average', signal['entry']):.2f}")
+
+            # Verify position was created
+            print(f"\n   🔍 Verifying position...")
+            import time
+            time.sleep(1)  # Wait for position to register
+            positions = self.get_open_positions()
+            print(f"   📊 Open positions after order: {len(positions)}")
+            if positions:
+                for pos in positions:
+                    print(f"      Position: {pos.get('side')} {pos.get('contracts')} @ ${pos.get('entryPrice', 0):.2f}")
 
             # Log position
             position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
