@@ -99,8 +99,19 @@ class MainWindow(QMainWindow):
         # Add bots
         for bot_id in self.bot_manager.get_all_bot_ids():
             config = self.bot_manager.get_config(bot_id)
-            item = QListWidgetItem(f"{self.get_bot_icon(bot_id)} {config.name}")
+
+            # Check if bot is running
+            is_running = self.bot_manager.is_bot_running(bot_id)
+            status_indicator = "🟢" if is_running else "⚫"
+
+            item = QListWidgetItem(f"{status_indicator} {self.get_bot_icon(bot_id)} {config.name}")
             item.setData(Qt.UserRole, bot_id)
+
+            # Set background color based on status
+            if is_running:
+                from PySide6.QtGui import QColor
+                item.setBackground(QColor(220, 255, 220))  # Light green
+
             self.bot_list.addItem(item)
 
         layout.addWidget(self.bot_list)
@@ -128,6 +139,10 @@ class MainWindow(QMainWindow):
         # Controls section
         controls_group = self.create_controls_section()
         layout.addWidget(controls_group)
+
+        # Active bots section
+        self.active_bots_group = self.create_active_bots_section()
+        layout.addWidget(self.active_bots_group)
 
         # Logs section
         logs_group = self.create_logs_section()
@@ -192,6 +207,20 @@ class MainWindow(QMainWindow):
         stats_btn.clicked.connect(self.show_statistics)
         stats_btn.setMinimumHeight(40)
         layout.addWidget(stats_btn)
+
+        return group
+
+    def create_active_bots_section(self):
+        """Create active bots section"""
+        group = QGroupBox("Active Bots")
+        layout = QHBoxLayout(group)
+
+        # Active bots label
+        self.active_bots_label = QLabel("No bots running")
+        self.active_bots_label.setStyleSheet("font-weight: bold; color: #555;")
+        layout.addWidget(self.active_bots_label)
+
+        layout.addStretch()
 
         return group
 
@@ -304,6 +333,24 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(not is_running)
         self.stop_btn.setEnabled(is_running)
 
+    def update_active_bots_display(self):
+        """Update active bots display"""
+        running_bots = []
+
+        for bot_id in self.bot_manager.get_all_bot_ids():
+            if self.bot_manager.is_bot_running(bot_id):
+                config = self.bot_manager.get_config(bot_id)
+                icon = self.get_bot_icon(bot_id)
+                running_bots.append(f"{icon} {config.name}")
+
+        if running_bots:
+            bots_text = ", ".join(running_bots)
+            self.active_bots_label.setText(f"🟢 Running: {bots_text}")
+            self.active_bots_label.setStyleSheet("font-weight: bold; color: green;")
+        else:
+            self.active_bots_label.setText("⚫ No bots running")
+            self.active_bots_label.setStyleSheet("font-weight: bold; color: #555;")
+
     def start_bot(self):
         """Start current bot"""
         if not self.current_bot_id:
@@ -395,8 +442,19 @@ class MainWindow(QMainWindow):
 
         for bot_id in self.bot_manager.get_all_bot_ids():
             config = self.bot_manager.get_config(bot_id)
-            item = QListWidgetItem(f"{self.get_bot_icon(bot_id)} {config.name}")
+
+            # Check if bot is running
+            is_running = self.bot_manager.is_bot_running(bot_id)
+            status_indicator = "🟢" if is_running else "⚫"
+
+            item = QListWidgetItem(f"{status_indicator} {self.get_bot_icon(bot_id)} {config.name}")
             item.setData(Qt.UserRole, bot_id)
+
+            # Set background color based on status
+            if is_running:
+                from PySide6.QtGui import QColor
+                item.setBackground(QColor(220, 255, 220))  # Light green
+
             self.bot_list.addItem(item)
 
         self.log("Bot list refreshed")
@@ -414,12 +472,16 @@ class MainWindow(QMainWindow):
     def on_bot_started(self, bot_id: str):
         """Handle bot started signal"""
         self.update_controls()
+        self.update_active_bots_display()
+        self.refresh_bot_list()  # Refresh to show green indicator
         self.log(f"Bot {bot_id} started")
 
     def on_bot_stopped(self, bot_id: str):
         """Handle bot stopped signal"""
         self.update_controls()
         self.update_status_display()
+        self.update_active_bots_display()
+        self.refresh_bot_list()  # Refresh to remove green indicator
         self.log(f"Bot {bot_id} stopped")
 
     def on_bot_log(self, bot_id: str, message: str):
