@@ -181,22 +181,32 @@ class DatabaseManager:
 
     def update_status(self, status: BotStatus):
         """Update bot status"""
-        cursor = self.conn.cursor()
+        # Check if connection is still valid
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed, skipping status update for {status.bot_id}")
+            return
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO bot_status (
-                bot_id, status, balance, equity, pnl_today, pnl_percent,
-                open_positions, max_positions, total_trades, win_rate, profit_factor,
-                current_regime, last_signal_time, last_update, error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            status.bot_id, status.status, status.balance, status.equity,
-            status.pnl_today, status.pnl_percent, status.open_positions, status.max_positions,
-            status.total_trades, status.win_rate, status.profit_factor,
-            status.current_regime, status.last_signal_time, datetime.now(), status.error_message
-        ))
+        try:
+            cursor = self.conn.cursor()
 
-        self.conn.commit()
+            cursor.execute("""
+                INSERT OR REPLACE INTO bot_status (
+                    bot_id, status, balance, equity, pnl_today, pnl_percent,
+                    open_positions, max_positions, total_trades, win_rate, profit_factor,
+                    current_regime, last_signal_time, last_update, error_message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                status.bot_id, status.status, status.balance, status.equity,
+                status.pnl_today, status.pnl_percent, status.open_positions, status.max_positions,
+                status.total_trades, status.win_rate, status.profit_factor,
+                status.current_regime, status.last_signal_time, datetime.now(), status.error_message
+            ))
+
+            self.conn.commit()
+        except sqlite3.ProgrammingError as e:
+            print(f"⚠️  Warning: Database error during status update: {e}")
+        except Exception as e:
+            print(f"⚠️  Warning: Unexpected error during status update: {e}")
 
     def get_status(self, bot_id: str) -> Optional[BotStatus]:
         """Get bot status"""
@@ -226,23 +236,33 @@ class DatabaseManager:
 
     def add_trade(self, trade: TradeRecord):
         """Add a trade record"""
-        cursor = self.conn.cursor()
+        # Check if connection is still valid
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed, skipping trade record for {trade.bot_id}")
+            return
 
-        cursor.execute("""
-            INSERT INTO trades (
-                bot_id, order_id, open_time, close_time, duration_hours,
-                trade_type, amount, entry_price, close_price,
-                stop_loss, take_profit, profit, profit_percent,
-                status, market_regime, comment
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            trade.bot_id, trade.order_id, trade.open_time, trade.close_time, trade.duration_hours,
-            trade.trade_type, trade.amount, trade.entry_price, trade.close_price,
-            trade.stop_loss, trade.take_profit, trade.profit, trade.profit_percent,
-            trade.status, trade.market_regime, trade.comment
-        ))
+        try:
+            cursor = self.conn.cursor()
 
-        self.conn.commit()
+            cursor.execute("""
+                INSERT INTO trades (
+                    bot_id, order_id, open_time, close_time, duration_hours,
+                    trade_type, amount, entry_price, close_price,
+                    stop_loss, take_profit, profit, profit_percent,
+                    status, market_regime, comment
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                trade.bot_id, trade.order_id, trade.open_time, trade.close_time, trade.duration_hours,
+                trade.trade_type, trade.amount, trade.entry_price, trade.close_price,
+                trade.stop_loss, trade.take_profit, trade.profit, trade.profit_percent,
+                trade.status, trade.market_regime, trade.comment
+            ))
+
+            self.conn.commit()
+        except sqlite3.ProgrammingError as e:
+            print(f"⚠️  Warning: Database error during trade add: {e}")
+        except Exception as e:
+            print(f"⚠️  Warning: Unexpected error during trade add: {e}")
 
     def get_trades(self, bot_id: str, limit: int = 100) -> List[TradeRecord]:
         """Get recent trades for a bot"""
@@ -280,14 +300,28 @@ class DatabaseManager:
 
     def log(self, level: str, message: str, bot_id: str = None):
         """Add a log entry"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO app_logs (level, bot_id, message)
-            VALUES (?, ?, ?)
-        """, (level, bot_id, message))
-        self.conn.commit()
+        # Check if connection is still valid
+        if not self.conn:
+            return
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO app_logs (level, bot_id, message)
+                VALUES (?, ?, ?)
+            """, (level, bot_id, message))
+            self.conn.commit()
+        except sqlite3.ProgrammingError:
+            pass  # Silently skip if database is closed
+        except Exception:
+            pass  # Silently skip other errors during logging
 
     def close(self):
         """Close database connection"""
         if self.conn:
-            self.conn.close()
+            try:
+                self.conn.close()
+            except Exception as e:
+                print(f"⚠️  Warning: Error closing database: {e}")
+            finally:
+                self.conn = None

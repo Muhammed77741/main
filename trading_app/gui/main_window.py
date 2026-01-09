@@ -524,6 +524,12 @@ class MainWindow(QMainWindow):
             # Stop all bots
             self.bot_manager.stop_all_bots()
 
+            # Give threads extra time to finish their cleanup
+            # This prevents database operations from threads after db.close()
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(500, lambda: None)  # 500ms delay
+            QApplication.processEvents()  # Process any pending signals
+
         # Close database
         self.db.close()
 

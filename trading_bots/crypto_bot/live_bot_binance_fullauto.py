@@ -251,24 +251,50 @@ class LiveBotBinanceFullAuto:
     def connect_exchange(self):
         """Connect to Binance"""
         try:
+            # Validate API credentials
+            if not self.api_key or not self.api_secret:
+                print("❌ Binance API key and secret are required!")
+                print("💡 Please configure them in Settings:")
+                print("   1. Go to Settings for this bot")
+                print("   2. Enter your Binance API Key and API Secret")
+                print("   3. Enable 'Use Testnet' for testing (recommended)")
+                return False
+
+            if len(self.api_key) < 10 or len(self.api_secret) < 10:
+                print("❌ Invalid API credentials format")
+                print(f"   API Key length: {len(self.api_key)} (expected 64)")
+                print(f"   API Secret length: {len(self.api_secret)} (expected 64)")
+                return False
+
+            print(f"🔄 Connecting to Binance {'Testnet' if self.testnet else 'Mainnet'}...")
+            print(f"   Symbol: {self.symbol}")
+            print(f"   API Key: {self.api_key[:8]}...{self.api_key[-4:]}")
+
             if self.testnet:
                 # Testnet configuration
+                print("⚠️  Using TESTNET - no real money will be traded")
                 self.exchange = ccxt.binance({
                     'apiKey': self.api_key,
                     'secret': self.api_secret,
                     'enableRateLimit': True,
                     'options': {
                         'defaultType': 'future',
+                        'adjustForTimeDifference': True,
                     },
                     'urls': {
                         'api': {
                             'public': 'https://testnet.binancefuture.com/fapi/v1',
                             'private': 'https://testnet.binancefuture.com/fapi/v1',
+                        },
+                        'test': {
+                            'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
+                            'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
                         }
                     }
                 })
             else:
                 # Mainnet configuration
+                print("⚠️  Using MAINNET - real money trading!")
                 self.exchange = ccxt.binance({
                     'apiKey': self.api_key,
                     'secret': self.api_secret,
@@ -280,13 +306,53 @@ class LiveBotBinanceFullAuto:
                 })
 
             # Test connection
+            print("🔄 Testing connection...")
             balance = self.exchange.fetch_balance()
             self.exchange_connected = True
-            print(f"✅ Connected to Binance: {balance['USDT']['free']:.2f} USDT available")
+
+            usdt_free = balance.get('USDT', {}).get('free', 0) or 0
+            print(f"✅ Connected to Binance {'Testnet' if self.testnet else 'Mainnet'}")
+            print(f"   Available balance: {usdt_free:.2f} USDT")
             return True
 
+        except ccxt.AuthenticationError as e:
+            print(f"❌ Authentication Failed: {e}")
+            print("\n💡 Troubleshooting:")
+            print("   1. Check your API Key and Secret are correct")
+            print("   2. Ensure API has 'Enable Futures' permission")
+            print("   3. If using Testnet, get keys from: https://testnet.binancefuture.com/")
+            print("   4. If using Mainnet, get keys from: https://www.binance.com/")
+            print("\n⚠️  Common issues:")
+            print("   - Wrong API keys (copy-paste error)")
+            print("   - Using Mainnet keys on Testnet (or vice versa)")
+            print("   - API doesn't have Futures trading permission")
+            return False
+
+        except ccxt.ExchangeError as e:
+            error_msg = str(e)
+            print(f"❌ Binance Error: {e}")
+
+            if '-1022' in error_msg or 'Signature' in error_msg:
+                print("\n💡 Signature Error - Possible causes:")
+                print("   1. API Secret is incorrect")
+                print("   2. System time is not synchronized")
+                print("   3. Wrong Testnet/Mainnet configuration")
+                print("\n🔧 Try these fixes:")
+                print("   1. Double-check your API Secret (no extra spaces)")
+                print("   2. Sync your system time: Settings → Time & Language → Sync now")
+                print("   3. Enable 'Use Testnet' in bot settings for testing")
+            elif '-1021' in error_msg or 'Timestamp' in error_msg:
+                print("\n💡 Time Synchronization Error:")
+                print("   Your system time is not synchronized with Binance")
+                print("\n🔧 Fix:")
+                print("   Windows: Settings → Time & Language → Sync now")
+                print("   Or enable automatic time synchronization")
+
+            return False
+
         except Exception as e:
-            print(f"❌ Failed to connect to Binance: {e}")
+            print(f"❌ Connection failed: {e}")
+            print(f"   Error type: {type(e).__name__}")
             return False
 
     def disconnect_exchange(self):
