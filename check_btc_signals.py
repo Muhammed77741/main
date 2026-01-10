@@ -27,7 +27,6 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 import ccxt
-import os
 
 # Add trading_bots to path
 sys.path.insert(0, str(Path(__file__).parent / 'trading_bots'))
@@ -134,7 +133,7 @@ def load_btc_data_from_csv(csv_file):
     print(f"   File: {csv_file}")
     
     try:
-        if not os.path.exists(csv_file):
+        if not Path(csv_file).exists():
             print(f"❌ File not found: {csv_file}")
             return None
         
@@ -204,11 +203,11 @@ def download_btc_data(symbol='BTC/USDT', timeframe='1h', days=7):
     
     try:
         # Initialize Binance
-        # NOTE: Using futures market type to match live bot configuration
-        # If your bot uses spot trading, change 'future' to 'spot' below
+        # NOTE: Using 'future' market type to match live bot configuration (Binance Futures)
+        # If your bot uses spot trading instead, change 'future' to 'spot' in the line below
         exchange = ccxt.binance({
             'enableRateLimit': True,
-            'options': {'defaultType': 'future'}
+            'options': {'defaultType': 'future'}  # Change to 'spot' for spot trading
         })
         
         # Calculate time range
@@ -349,11 +348,13 @@ def analyze_signals(df, symbol='BTC/USDT'):
         print(f"   Current Price: ${last_candle['close']:.2f}")
         
         # Calculate 24h change with bounds check
+        # NOTE: This assumes 1-hour timeframe (24 candles = 24 hours)
+        # For other timeframes, adjust the calculation accordingly
         if len(df_signals) >= 24:
             change_24h = ((last_candle['close'] - df_signals.iloc[-24]['close']) / df_signals.iloc[-24]['close'] * 100)
             print(f"   24h Change: {change_24h:.2f}%")
         else:
-            print(f"   24h Change: N/A (not enough data)")
+            print(f"   24h Change: N/A (not enough data, need 24+ candles)")
         
         if 'regime' in df_signals.columns:
             print(f"   Market Regime: {last_candle['regime'] if 'regime' in last_candle and not pd.isna(last_candle['regime']) else 'Unknown'}")
@@ -408,7 +409,12 @@ def plot_signals(df_signals, symbol='BTC/USDT', output_file='btc_signals_chart.p
     try:
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
-        
+    except ImportError:
+        print(f"⚠️  Could not import matplotlib - chart visualization skipped")
+        print(f"   Install matplotlib: pip install matplotlib")
+        return
+    
+    try:
         print(f"\n📊 Creating chart visualization...")
         
         fig, ax = plt.subplots(figsize=(16, 8))
@@ -552,7 +558,7 @@ def main():
     print(f"\n📁 Files created:")
     print(f"   - {csv_file} (detailed data with all indicators)")
     signals_file = csv_file.replace('.csv', '_signals_only.csv')
-    if os.path.exists(signals_file):
+    if Path(signals_file).exists():
         print(f"   - {signals_file} (signals only)")
     print(f"   - {chart_file} (price chart with signal markers)")
     
