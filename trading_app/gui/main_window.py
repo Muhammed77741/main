@@ -14,6 +14,7 @@ from models import BotConfig, BotStatus
 from gui.settings_dialog import SettingsDialog
 from gui.positions_monitor import PositionsMonitor
 from gui.statistics_dialog import StatisticsDialog
+from gui.signal_analysis_dialog import SignalAnalysisDialog
 
 
 class MainWindow(QMainWindow):
@@ -216,6 +217,12 @@ class MainWindow(QMainWindow):
         tp_hits_btn.clicked.connect(self.show_tp_hits)
         tp_hits_btn.setMinimumHeight(40)
         layout.addWidget(tp_hits_btn)
+
+        # Signal Analysis button (Backtest)
+        signal_analysis_btn = QPushButton("🔍 Signal Analysis")
+        signal_analysis_btn.clicked.connect(self.show_signal_analysis)
+        signal_analysis_btn.setMinimumHeight(40)
+        layout.addWidget(signal_analysis_btn)
 
         return group
 
@@ -463,6 +470,25 @@ class MainWindow(QMainWindow):
 
         from gui.tp_hits_viewer import TPHitsViewer
         dialog = TPHitsViewer(config, self)
+        dialog.exec()
+
+    def show_signal_analysis(self):
+        """Show signal analysis dialog"""
+        if not self.current_bot_id:
+            return
+
+        config = self.bot_manager.get_config(self.current_bot_id)
+        
+        # Only show for BTC/ETH bots
+        if 'BTC' not in config.name.upper() and 'ETH' not in config.name.upper():
+            QMessageBox.information(
+                self,
+                "Not Available",
+                "Signal Analysis is currently available for BTC and ETH bots only."
+            )
+            return
+
+        dialog = SignalAnalysisDialog(config, self)
         dialog.exec()
 
     def refresh_bot_list(self):
