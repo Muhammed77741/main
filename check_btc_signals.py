@@ -54,10 +54,6 @@ def generate_sample_btc_data(days=7, start_price=95000):
     print(f"   Start price: ${start_price:.2f}")
     
     try:
-        from datetime import datetime, timedelta
-        import pandas as pd
-        import numpy as np
-        
         # Generate timestamps (1 hour intervals)
         end_time = datetime.now()
         start_time = end_time - timedelta(days=days)
@@ -138,9 +134,6 @@ def load_btc_data_from_csv(csv_file):
     print(f"   File: {csv_file}")
     
     try:
-        import pandas as pd
-        import os
-        
         if not os.path.exists(csv_file):
             print(f"❌ File not found: {csv_file}")
             return None
@@ -211,6 +204,8 @@ def download_btc_data(symbol='BTC/USDT', timeframe='1h', days=7):
     
     try:
         # Initialize Binance
+        # NOTE: Using futures market type to match live bot configuration
+        # If your bot uses spot trading, change 'future' to 'spot' below
         exchange = ccxt.binance({
             'enableRateLimit': True,
             'options': {'defaultType': 'future'}
@@ -352,7 +347,13 @@ def analyze_signals(df, symbol='BTC/USDT'):
         
         last_candle = df_signals.iloc[-1]
         print(f"   Current Price: ${last_candle['close']:.2f}")
-        print(f"   24h Change: {((last_candle['close'] - df_signals.iloc[-24]['close']) / df_signals.iloc[-24]['close'] * 100):.2f}%")
+        
+        # Calculate 24h change with bounds check
+        if len(df_signals) >= 24:
+            change_24h = ((last_candle['close'] - df_signals.iloc[-24]['close']) / df_signals.iloc[-24]['close'] * 100)
+            print(f"   24h Change: {change_24h:.2f}%")
+        else:
+            print(f"   24h Change: N/A (not enough data)")
         
         if 'regime' in df_signals.columns:
             print(f"   Market Regime: {last_candle['regime'] if 'regime' in last_candle and not pd.isna(last_candle['regime']) else 'Unknown'}")
