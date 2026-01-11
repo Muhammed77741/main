@@ -278,12 +278,27 @@ class SignalAnalysisDialog(QDialog):
         row1.addWidget(QLabel("Symbol:"))
         
         self.symbol_combo = QComboBox()
-        # Determine symbol based on bot name
-        if 'BTC' in self.config.name.upper():
+        # Determine symbol based on bot name and symbol
+        bot_name_upper = self.config.name.upper()
+        symbol_upper = self.config.symbol.upper() if self.config.symbol else ''
+        
+        is_btc = (
+            'BTC' in bot_name_upper or 
+            'BITCOIN' in bot_name_upper or
+            'BTC' in symbol_upper
+        )
+        is_eth = (
+            'ETH' in bot_name_upper or 
+            'ETHEREUM' in bot_name_upper or
+            'ETH' in symbol_upper
+        )
+        
+        if is_btc and not is_eth:
             self.symbol_combo.addItems(['BTC/USDT'])
-        elif 'ETH' in self.config.name.upper():
+        elif is_eth and not is_btc:
             self.symbol_combo.addItems(['ETH/USDT'])
         else:
+            # Default: add both
             self.symbol_combo.addItems(['BTC/USDT', 'ETH/USDT'])
         row1.addWidget(self.symbol_combo)
         
