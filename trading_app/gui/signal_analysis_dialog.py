@@ -351,8 +351,17 @@ class SignalAnalysisDialog(QDialog):
             'ETHEREUM' in bot_name_upper or
             'ETH' in symbol_upper
         )
+        is_xauusd = (
+            'XAUUSD' in bot_name_upper or
+            'GOLD' in bot_name_upper or
+            'XAU' in bot_name_upper or
+            'XAUUSD' in symbol_upper or
+            'XAU' in symbol_upper
+        )
         
-        if is_btc and not is_eth:
+        if is_xauusd:
+            self.symbol_combo.addItems(['XAUUSD'])
+        elif is_btc and not is_eth:
             self.symbol_combo.addItems(['BTC/USDT'])
         elif is_eth and not is_btc:
             self.symbol_combo.addItems(['ETH/USDT'])
