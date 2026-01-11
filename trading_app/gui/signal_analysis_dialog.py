@@ -259,7 +259,7 @@ class SignalAnalysisDialog(QDialog):
         self.worker = None
         
         self.setWindowTitle(f"Signal Analysis - {config.name}")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1400, 900)  # Increased from 1200x800 for wider table
         
         # Check dependencies
         if not DEPENDENCIES_AVAILABLE:
@@ -306,7 +306,7 @@ class SignalAnalysisDialog(QDialog):
         
         # Results table
         results_group = self.create_results_section()
-        layout.addWidget(results_group, 1)
+        layout.addWidget(results_group, 2)  # Increased stretch factor for more space
         
         # Buttons
         button_layout = QHBoxLayout()
