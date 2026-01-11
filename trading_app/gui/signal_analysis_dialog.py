@@ -434,23 +434,31 @@ class SignalAnalysisDialog(QDialog):
             self.results_table.setItem(row_idx, 2, price_item)
             
             # Stop Loss
-            sl_value = row.get('sl', 0)
+            sl_value = row.get('stop_loss', 0)
+            if pd.isna(sl_value):
+                sl_value = 0
             sl_item = QTableWidgetItem(f"${sl_value:.2f}" if sl_value else "N/A")
             self.results_table.setItem(row_idx, 3, sl_item)
             
             # Take Profit
-            tp_value = row.get('tp', 0)
+            tp_value = row.get('take_profit', 0)
+            if pd.isna(tp_value):
+                tp_value = 0
             tp_item = QTableWidgetItem(f"${tp_value:.2f}" if tp_value else "N/A")
             self.results_table.setItem(row_idx, 4, tp_item)
             
             # Entry Reason
-            reason = row.get('entry_reason', 'N/A')
-            reason_item = QTableWidgetItem(str(reason) if reason else "N/A")
+            reason = row.get('signal_reason', 'N/A')
+            if pd.isna(reason) or not reason:
+                reason = 'N/A'
+            reason_item = QTableWidgetItem(str(reason))
             self.results_table.setItem(row_idx, 5, reason_item)
             
             # Regime
             regime = row.get('regime', 'N/A')
-            regime_item = QTableWidgetItem(str(regime) if regime else "N/A")
+            if pd.isna(regime) or not regime:
+                regime = 'N/A'
+            regime_item = QTableWidgetItem(str(regime))
             self.results_table.setItem(row_idx, 6, regime_item)
             
     def export_csv(self):
