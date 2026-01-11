@@ -18,9 +18,26 @@ class DatabaseManager:
 
     @staticmethod
     def _parse_datetime(value) -> Optional[datetime]:
-        """Parse a datetime value from SQLite, handling both strings and None"""
-        if value is not None and isinstance(value, str):
-            return datetime.fromisoformat(value)
+        """Parse a datetime value from SQLite, handling both strings and None
+        
+        Args:
+            value: A datetime value that could be a string, datetime object, or None
+            
+        Returns:
+            A datetime object or None
+            
+        Raises:
+            ValueError: If the string cannot be parsed as a datetime
+        """
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError as e:
+                raise ValueError(f"Failed to parse datetime string '{value}': {e}")
         return value
 
     def init_database(self):
