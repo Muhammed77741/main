@@ -16,6 +16,30 @@ class DatabaseManager:
         self.conn = None
         self.init_database()
 
+    @staticmethod
+    def _parse_datetime(value) -> Optional[datetime]:
+        """Parse a datetime value from SQLite, handling both strings and None
+        
+        Args:
+            value: A datetime value that could be a string, datetime object, or None
+            
+        Returns:
+            A datetime object or None
+            
+        Raises:
+            ValueError: If the string cannot be parsed as a datetime
+        """
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError as e:
+                raise ValueError(f"Failed to parse datetime string '{value}': {e}")
+        return value
+
     def init_database(self):
         """Initialize database with tables"""
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -228,8 +252,8 @@ class DatabaseManager:
                 win_rate=row['win_rate'],
                 profit_factor=row['profit_factor'],
                 current_regime=row['current_regime'],
-                last_signal_time=row['last_signal_time'],
-                last_update=row['last_update'],
+                last_signal_time=self._parse_datetime(row['last_signal_time']),
+                last_update=self._parse_datetime(row['last_update']),
                 error_message=row['error_message']
             )
         return None
@@ -280,8 +304,8 @@ class DatabaseManager:
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
                 order_id=row['order_id'],
-                open_time=row['open_time'],
-                close_time=row['close_time'],
+                open_time=self._parse_datetime(row['open_time']),
+                close_time=self._parse_datetime(row['close_time']),
                 duration_hours=row['duration_hours'],
                 trade_type=row['trade_type'],
                 amount=row['amount'],
@@ -313,8 +337,8 @@ class DatabaseManager:
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
                 order_id=row['order_id'],
-                open_time=row['open_time'],
-                close_time=row['close_time'],
+                open_time=self._parse_datetime(row['open_time']),
+                close_time=self._parse_datetime(row['close_time']),
                 duration_hours=row['duration_hours'],
                 trade_type=row['trade_type'],
                 amount=row['amount'],
