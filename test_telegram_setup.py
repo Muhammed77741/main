@@ -17,9 +17,13 @@ You can also provide token and chat_id as command-line arguments:
 import sys
 import os
 import asyncio
+from pathlib import Path
 
-# Add trading_bots to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'trading_bots'))
+# Add trading_bots to path (handle both direct execution and imports)
+script_dir = Path(__file__).resolve().parent
+trading_bots_dir = script_dir / 'trading_bots'
+if trading_bots_dir.exists():
+    sys.path.insert(0, str(trading_bots_dir))
 
 from shared.telegram_helper import check_telegram_bot_import
 

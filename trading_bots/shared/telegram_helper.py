@@ -82,7 +82,7 @@ def get_bot_instance(token):
         token: Telegram bot token
         
     Returns:
-        Bot instance or None if import fails
+        Bot instance if import succeeds
         
     Raises:
         ImportError with helpful message if package is not installed correctly
