@@ -102,6 +102,11 @@ class SignalAnalysisWorker(QThread):
             # Find signals
             signals_df = df_signals[df_signals['signal'] != 0].copy()
             
+            self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals...")
+            
+            # Calculate outcomes for each signal
+            self._calculate_signal_outcomes(signals_df, df_signals)
+            
             self.progress.emit(f"✅ Analysis complete! Found {len(signals_df)} signals")
             
             # Return results
@@ -109,6 +114,82 @@ class SignalAnalysisWorker(QThread):
             
         except Exception as e:
             self.error.emit(f"Error: {str(e)}")
+    
+    def _calculate_signal_outcomes(self, signals_df, full_df):
+        """
+        Calculate trade outcome for each signal
+        Check if price hit TP or SL in the following candles
+        """
+        # Add outcome columns
+        signals_df['outcome'] = 'Unknown'
+        signals_df['profit_pct'] = 0.0
+        signals_df['bars_held'] = 0
+        
+        for idx, signal_row in signals_df.iterrows():
+            signal_type = signal_row['signal']
+            entry_price = signal_row['close']
+            stop_loss = signal_row.get('stop_loss', 0)
+            take_profit = signal_row.get('take_profit', 0)
+            
+            # Skip if SL or TP not set
+            if pd.isna(stop_loss) or pd.isna(take_profit) or stop_loss == 0 or take_profit == 0:
+                signals_df.loc[idx, 'outcome'] = 'No SL/TP'
+                continue
+            
+            # Get future candles after this signal
+            future_candles = full_df[full_df.index > idx]
+            
+            if len(future_candles) == 0:
+                signals_df.loc[idx, 'outcome'] = 'No Data'
+                continue
+            
+            # Check each candle to see if TP or SL was hit
+            outcome = 'Open'
+            profit_pct = 0.0
+            bars = 0
+            
+            for future_idx, future_candle in future_candles.iterrows():
+                bars += 1
+                
+                if signal_type == 1:  # BUY signal
+                    # Check if hit SL (low went below stop loss)
+                    if future_candle['low'] <= stop_loss:
+                        outcome = 'Loss ❌'
+                        profit_pct = ((stop_loss - entry_price) / entry_price) * 100
+                        break
+                    # Check if hit TP (high went above take profit)
+                    elif future_candle['high'] >= take_profit:
+                        outcome = 'Win ✅'
+                        profit_pct = ((take_profit - entry_price) / entry_price) * 100
+                        break
+                        
+                elif signal_type == -1:  # SELL signal
+                    # Check if hit SL (high went above stop loss)
+                    if future_candle['high'] >= stop_loss:
+                        outcome = 'Loss ❌'
+                        profit_pct = ((entry_price - stop_loss) / entry_price) * 100
+                        break
+                    # Check if hit TP (low went below take profit)
+                    elif future_candle['low'] <= take_profit:
+                        outcome = 'Win ✅'
+                        profit_pct = ((entry_price - take_profit) / entry_price) * 100
+                        break
+                
+                # Limit check to 100 bars
+                if bars >= 100:
+                    outcome = 'Timeout'
+                    # Calculate current P&L at timeout
+                    current_price = future_candle['close']
+                    if signal_type == 1:
+                        profit_pct = ((current_price - entry_price) / entry_price) * 100
+                    else:
+                        profit_pct = ((entry_price - current_price) / entry_price) * 100
+                    break
+            
+            signals_df.loc[idx, 'outcome'] = outcome
+            signals_df.loc[idx, 'profit_pct'] = profit_pct
+            signals_df.loc[idx, 'bars_held'] = bars
+
 
 
 class SignalAnalysisDialog(QDialog):
@@ -257,9 +338,9 @@ class SignalAnalysisDialog(QDialog):
         
         # Table
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(7)
+        self.results_table.setColumnCount(10)
         self.results_table.setHorizontalHeaderLabels([
-            'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Entry Reason', 'Regime'
+            'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
         ])
         
         # Configure table
@@ -366,13 +447,32 @@ class SignalAnalysisDialog(QDialog):
             first_signal = signals_df.index[0]
             last_signal = signals_df.index[-1]
             
+            # Calculate win/loss statistics
+            wins = len(signals_df[signals_df['outcome'].str.contains('Win', na=False)])
+            losses = len(signals_df[signals_df['outcome'].str.contains('Loss', na=False)])
+            other = total_signals - wins - losses
+            win_rate = (wins / total_signals * 100) if total_signals > 0 else 0
+            
+            # Calculate average profit for wins and losses
+            avg_win = signals_df[signals_df['outcome'].str.contains('Win', na=False)]['profit_pct'].mean()
+            avg_loss = signals_df[signals_df['outcome'].str.contains('Loss', na=False)]['profit_pct'].mean()
+            
             summary_text = (
                 f"<b>Total Signals:</b> {total_signals}<br>"
                 f"<b>BUY Signals:</b> {buy_signals} 📈<br>"
                 f"<b>SELL Signals:</b> {sell_signals} 📉<br><br>"
-                f"<b>First Signal:</b> {first_signal.strftime('%Y-%m-%d %H:%M')}<br>"
-                f"<b>Last Signal:</b> {last_signal.strftime('%Y-%m-%d %H:%M')}<br><br>"
+                f"<b style='color: green;'>Wins:</b> {wins} ({win_rate:.1f}%)<br>"
+                f"<b style='color: red;'>Losses:</b> {losses}<br>"
+                f"<b>Other (Open/Timeout):</b> {other}<br><br>"
             )
+            
+            if wins > 0:
+                summary_text += f"<b>Avg Win:</b> <span style='color: green;'>+{avg_win:.2f}%</span><br>"
+            if losses > 0:
+                summary_text += f"<b>Avg Loss:</b> <span style='color: red;'>{avg_loss:.2f}%</span><br>"
+            
+            summary_text += f"<br><b>First Signal:</b> {first_signal.strftime('%Y-%m-%d %H:%M')}<br>"
+            summary_text += f"<b>Last Signal:</b> {last_signal.strftime('%Y-%m-%d %H:%M')}<br><br>"
             
             # Check last 2 days
             two_days_ago = datetime.now() - timedelta(days=2)
@@ -447,19 +547,46 @@ class SignalAnalysisDialog(QDialog):
             tp_item = QTableWidgetItem(f"${tp_value:.2f}" if tp_value else "N/A")
             self.results_table.setItem(row_idx, 4, tp_item)
             
+            # Result (Win/Loss)
+            outcome = row.get('outcome', 'Unknown')
+            result_item = QTableWidgetItem(str(outcome))
+            if 'Win' in str(outcome):
+                result_item.setForeground(Qt.darkGreen)
+            elif 'Loss' in str(outcome):
+                result_item.setForeground(Qt.darkRed)
+            self.results_table.setItem(row_idx, 5, result_item)
+            
+            # Profit %
+            profit_pct = row.get('profit_pct', 0)
+            if pd.isna(profit_pct):
+                profit_pct = 0
+            profit_item = QTableWidgetItem(f"{profit_pct:+.2f}%" if profit_pct != 0 else "0.00%")
+            if profit_pct > 0:
+                profit_item.setForeground(Qt.darkGreen)
+            elif profit_pct < 0:
+                profit_item.setForeground(Qt.darkRed)
+            self.results_table.setItem(row_idx, 6, profit_item)
+            
+            # Bars Held
+            bars = row.get('bars_held', 0)
+            if pd.isna(bars):
+                bars = 0
+            bars_item = QTableWidgetItem(f"{int(bars)}" if bars > 0 else "-")
+            self.results_table.setItem(row_idx, 7, bars_item)
+            
             # Entry Reason
             reason = row.get('signal_reason', 'N/A')
             if pd.isna(reason) or not reason:
                 reason = 'N/A'
             reason_item = QTableWidgetItem(str(reason))
-            self.results_table.setItem(row_idx, 5, reason_item)
+            self.results_table.setItem(row_idx, 8, reason_item)
             
             # Regime
             regime = row.get('regime', 'N/A')
             if pd.isna(regime) or not regime:
                 regime = 'N/A'
             regime_item = QTableWidgetItem(str(regime))
-            self.results_table.setItem(row_idx, 6, regime_item)
+            self.results_table.setItem(row_idx, 9, regime_item)
             
     def export_csv(self):
         """Export results to CSV"""
