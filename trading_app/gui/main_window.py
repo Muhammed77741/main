@@ -14,6 +14,7 @@ from models import BotConfig, BotStatus
 from gui.settings_dialog import SettingsDialog
 from gui.positions_monitor import PositionsMonitor
 from gui.statistics_dialog import StatisticsDialog
+from gui.signal_analysis_dialog import SignalAnalysisDialog
 
 
 class MainWindow(QMainWindow):
@@ -216,6 +217,12 @@ class MainWindow(QMainWindow):
         tp_hits_btn.clicked.connect(self.show_tp_hits)
         tp_hits_btn.setMinimumHeight(40)
         layout.addWidget(tp_hits_btn)
+
+        # Signal Analysis button (Backtest)
+        signal_analysis_btn = QPushButton("🔍 Signal Analysis")
+        signal_analysis_btn.clicked.connect(self.show_signal_analysis)
+        signal_analysis_btn.setMinimumHeight(40)
+        layout.addWidget(signal_analysis_btn)
 
         return group
 
@@ -463,6 +470,42 @@ class MainWindow(QMainWindow):
 
         from gui.tp_hits_viewer import TPHitsViewer
         dialog = TPHitsViewer(config, self)
+        dialog.exec()
+
+    def show_signal_analysis(self):
+        """Show signal analysis dialog"""
+        if not self.current_bot_id:
+            return
+
+        config = self.bot_manager.get_config(self.current_bot_id)
+        
+        # Check for supported bots: BTC/ETH (Binance) and XAUUSD/Gold (MT5)
+        bot_name_upper = config.name.upper()
+        symbol_upper = config.symbol.upper() if config.symbol else ''
+        
+        is_supported = (
+            'BTC' in bot_name_upper or 
+            'ETH' in bot_name_upper or
+            'BITCOIN' in bot_name_upper or 
+            'ETHEREUM' in bot_name_upper or
+            'XAUUSD' in bot_name_upper or
+            'GOLD' in bot_name_upper or
+            'XAU' in bot_name_upper or
+            'BTC' in symbol_upper or 
+            'ETH' in symbol_upper or
+            'XAUUSD' in symbol_upper or
+            'XAU' in symbol_upper
+        )
+        
+        if not is_supported:
+            QMessageBox.information(
+                self,
+                "Not Available",
+                "Signal Analysis is currently available for BTC, ETH, and XAUUSD bots only."
+            )
+            return
+
+        dialog = SignalAnalysisDialog(config, self)
         dialog.exec()
 
     def refresh_bot_list(self):
