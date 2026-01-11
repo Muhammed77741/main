@@ -596,10 +596,21 @@ class SignalAnalysisDialog(QDialog):
             avg_win = signals_df[signals_df['outcome'].str.contains('Win', na=False)]['profit_pct'].mean()
             avg_loss = signals_df[signals_df['outcome'].str.contains('Loss', na=False)]['profit_pct'].mean()
             
+            # Calculate P&L metrics
+            total_profit_pct = signals_df['profit_pct'].sum()
+            completed_trades = wins + losses
+            avg_pnl = signals_df[signals_df['outcome'].str.contains('Win|Loss', na=False)]['profit_pct'].mean()
+            
+            # Calculate profit factor (gross profit / gross loss)
+            gross_profit = signals_df[signals_df['profit_pct'] > 0]['profit_pct'].sum()
+            gross_loss = abs(signals_df[signals_df['profit_pct'] < 0]['profit_pct'].sum())
+            profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
+            
             summary_text = (
                 f"<b>Total Signals:</b> {total_signals}<br>"
                 f"<b>BUY Signals:</b> {buy_signals} 📈<br>"
                 f"<b>SELL Signals:</b> {sell_signals} 📉<br><br>"
+                f"<b>═══ P&L SUMMARY ═══</b><br>"
                 f"<b style='color: green;'>Wins:</b> {wins} ({win_rate:.1f}%)<br>"
                 f"<b style='color: red;'>Losses:</b> {losses}<br>"
                 f"<b>Other (Open/Timeout):</b> {other}<br><br>"
@@ -610,7 +621,18 @@ class SignalAnalysisDialog(QDialog):
             if losses > 0:
                 summary_text += f"<b>Avg Loss:</b> <span style='color: red;'>{avg_loss:.2f}%</span><br>"
             
-            summary_text += f"<br><b>First Signal:</b> {first_signal.strftime('%Y-%m-%d %H:%M')}<br>"
+            if completed_trades > 0:
+                summary_text += f"<b>Expectancy:</b> {avg_pnl:+.2f}% per trade<br>"
+                
+            if profit_factor > 0:
+                pf_color = 'green' if profit_factor > 1 else 'red'
+                summary_text += f"<b>Profit Factor:</b> <span style='color: {pf_color};'>{profit_factor:.2f}</span><br>"
+            
+            # Total P&L with color coding
+            pnl_color = 'green' if total_profit_pct > 0 else 'red' if total_profit_pct < 0 else 'gray'
+            summary_text += f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-size: 14pt;'>{total_profit_pct:+.2f}%</span><br><br>"
+            
+            summary_text += f"<b>First Signal:</b> {first_signal.strftime('%Y-%m-%d %H:%M')}<br>"
             summary_text += f"<b>Last Signal:</b> {last_signal.strftime('%Y-%m-%d %H:%M')}<br><br>"
             
             # Check last 2 days
