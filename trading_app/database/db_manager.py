@@ -217,11 +217,11 @@ class DatabaseManager:
         if row:
             # Parse datetime strings to datetime objects
             last_signal_time = row['last_signal_time']
-            if isinstance(last_signal_time, str):
+            if last_signal_time is not None and isinstance(last_signal_time, str):
                 last_signal_time = datetime.fromisoformat(last_signal_time)
             
             last_update = row['last_update']
-            if isinstance(last_update, str):
+            if last_update is not None and isinstance(last_update, str):
                 last_update = datetime.fromisoformat(last_update)
             
             return BotStatus(
@@ -291,7 +291,7 @@ class DatabaseManager:
                 open_time = datetime.fromisoformat(open_time)
             
             close_time = row['close_time']
-            if isinstance(close_time, str):
+            if close_time is not None and isinstance(close_time, str):
                 close_time = datetime.fromisoformat(close_time)
             
             trades.append(TradeRecord(
@@ -333,7 +333,7 @@ class DatabaseManager:
                 open_time = datetime.fromisoformat(open_time)
             
             close_time = row['close_time']
-            if isinstance(close_time, str):
+            if close_time is not None and isinstance(close_time, str):
                 close_time = datetime.fromisoformat(close_time)
             
             trades.append(TradeRecord(
