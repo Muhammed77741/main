@@ -678,8 +678,28 @@ class LiveBotBinanceFullAuto:
 
             # Get minimum trade size
             markets = self.exchange.load_markets()
-            market = markets[self.symbol]
-            min_amount = market['limits']['amount']['min']
+            
+            # Try to find the correct symbol format
+            # Binance futures uses format like ETH/USDT:USDT
+            market_symbol = self.symbol
+            if self.symbol not in markets:
+                # Try futures format: SYMBOL:USDT
+                futures_symbol = f"{self.symbol}:USDT"
+                if futures_symbol in markets:
+                    market_symbol = futures_symbol
+                else:
+                    print(f"⚠️ Symbol {self.symbol} not found in exchange markets")
+                    print(f"   Available symbols: {', '.join(list(markets.keys())[:5])}...")
+                    # Use default minimum for this asset type
+                    min_amount = 0.001 if 'BTC' in self.symbol else 0.01
+                    market_symbol = None
+            
+            if market_symbol and market_symbol in markets:
+                market = markets[market_symbol]
+                min_amount = market['limits']['amount']['min']
+            else:
+                # Fallback to defaults
+                min_amount = 0.001 if 'BTC' in self.symbol else 0.01
 
             # Round to market precision
             position_size = max(min_amount, position_size)
@@ -692,8 +712,14 @@ class LiveBotBinanceFullAuto:
 
             return position_size
 
+        except KeyError as e:
+            print(f"❌ KeyError calculating position size: {e}")
+            print(f"   Symbol: {self.symbol}")
+            print(f"   Returning minimum fallback position size")
+            return 0.001  # Minimum fallback
         except Exception as e:
             print(f"❌ Error calculating position size: {e}")
+            print(f"   Error type: {type(e).__name__}")
             return 0.001  # Minimum fallback
 
     def get_open_positions(self):

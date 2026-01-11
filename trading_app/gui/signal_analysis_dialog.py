@@ -26,6 +26,13 @@ except ImportError as e:
     DEPENDENCIES_AVAILABLE = False
     IMPORT_ERROR = str(e)
 
+# Multi-TP Configuration Constants
+MULTI_TP_LEVELS = {
+    'TP1': {'ratio': 1.0, 'close_pct': 0.5, 'name': 'TP1'},      # 1R, close 50%
+    'TP2': {'ratio': 1.618, 'close_pct': 0.3, 'name': 'TP2'},    # 1.618R, close 30%
+    'TP3': {'ratio': 2.618, 'close_pct': 0.2, 'name': 'TP3'}     # 2.618R, close 20%
+}
+
 
 class SignalAnalysisWorker(QThread):
     """Background worker for signal analysis"""
@@ -35,7 +42,7 @@ class SignalAnalysisWorker(QThread):
     error = Signal(str)  # Error message
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
-                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h'):
+                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -46,6 +53,7 @@ class SignalAnalysisWorker(QThread):
         self.use_trailing = use_trailing
         self.trailing_pct = trailing_pct / 100.0  # Convert to decimal (50 -> 0.5)
         self.timeframe = timeframe
+        self.use_multi_tp = use_multi_tp
         
     def run(self):
         """Run signal analysis in background"""
@@ -126,11 +134,16 @@ class SignalAnalysisWorker(QThread):
         Calculate trade outcome for each signal
         Check if price hit TP or SL in the following candles
         Applies custom TP/SL multipliers and trailing stop if configured
+        Supports both single-TP and multi-TP modes
         """
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
         signals_df['profit_pct'] = 0.0
         signals_df['bars_held'] = 0
+        
+        # Add multi-TP column if enabled
+        if self.use_multi_tp:
+            signals_df['tp_levels_hit'] = 'None'
         
         for idx, signal_row in signals_df.iterrows():
             signal_type = signal_row['signal']
@@ -160,94 +173,245 @@ class SignalAnalysisWorker(QThread):
                 signals_df.loc[idx, 'outcome'] = 'No Data'
                 continue
             
-            # Check each candle to see if TP or SL was hit
-            outcome = 'Open'
-            profit_pct = 0.0
-            bars = 0
-            trailing_active = False
-            trailing_stop = stop_loss
-            max_profit_price = entry_price
+            # Route to appropriate calculation method
+            if self.use_multi_tp:
+                result = self._calculate_multi_tp_outcome(
+                    signal_type, entry_price, stop_loss, risk, future_candles
+                )
+                signals_df.loc[idx, 'outcome'] = result['outcome']
+                signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
+                signals_df.loc[idx, 'bars_held'] = result['bars']
+                signals_df.loc[idx, 'tp_levels_hit'] = result['tp_levels_hit']
+            else:
+                result = self._calculate_single_tp_outcome(
+                    signal_type, entry_price, stop_loss, take_profit, future_candles
+                )
+                signals_df.loc[idx, 'outcome'] = result['outcome']
+                signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
+                signals_df.loc[idx, 'bars_held'] = result['bars']
+    
+    def _calculate_multi_tp_outcome(self, signal_type, entry_price, stop_loss, risk, future_candles):
+        """
+        Calculate outcome with multiple TP levels and partial closes
+        TP1: close 50%, TP2: close 30%, TP3: close 20%
+        SL moves to breakeven after TP1
+        """
+        # Define TP levels using Fibonacci ratios
+        if signal_type == 1:  # BUY
+            tp1_price = entry_price + (risk * 1.0)   # 1R
+            tp2_price = entry_price + (risk * 1.618) # 1.618R  
+            tp3_price = entry_price + (risk * 2.618) # 2.618R
+        else:  # SELL
+            tp1_price = entry_price - (risk * 1.0)
+            tp2_price = entry_price - (risk * 1.618)
+            tp3_price = entry_price - (risk * 2.618)
+        
+        # Track position and outcomes
+        remaining_position = 1.0
+        total_pnl_pct = 0.0
+        tps_hit = []
+        outcome = 'Timeout'
+        bars = 0
+        
+        # Track which TPs have been hit
+        tp1_hit = False
+        tp2_hit = False
+        tp3_hit = False
+        
+        # Check each candle
+        for future_idx, future_candle in future_candles.iterrows():
+            bars += 1
             
-            for future_idx, future_candle in future_candles.iterrows():
-                bars += 1
+            if signal_type == 1:  # BUY signal
+                # Check SL first
+                if future_candle['low'] <= stop_loss:
+                    # Hit stop loss
+                    pnl = ((stop_loss - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * remaining_position
+                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                    break
                 
-                if signal_type == 1:  # BUY signal
-                    # Update trailing stop if enabled and in profit
-                    if self.use_trailing and future_candle['high'] >= take_profit:
-                        trailing_active = True
-                        # Track highest price
-                        if future_candle['high'] > max_profit_price:
-                            max_profit_price = future_candle['high']
-                            # Trail at configured % of profit
-                            profit_distance = max_profit_price - entry_price
-                            trailing_stop = entry_price + (profit_distance * self.trailing_pct)
-                    
-                    # Check if hit SL or trailing stop
-                    active_stop = trailing_stop if trailing_active else stop_loss
-                    if future_candle['low'] <= active_stop:
-                        outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
-                        profit_pct = ((active_stop - entry_price) / entry_price) * 100
-                        break
-                    # Check if hit TP (only if trailing not active)
-                    elif not trailing_active and future_candle['high'] >= take_profit:
-                        if self.use_trailing:
-                            # TP hit, activate trailing
-                            trailing_active = True
-                            max_profit_price = future_candle['high']
-                            profit_distance = max_profit_price - entry_price
-                            trailing_stop = entry_price + (profit_distance * self.trailing_pct)
-                        else:
-                            # No trailing, close at TP
-                            outcome = 'Win ✅'
-                            profit_pct = ((take_profit - entry_price) / entry_price) * 100
-                            break
-                        
-                elif signal_type == -1:  # SELL signal
-                    # Update trailing stop if enabled and in profit
-                    if self.use_trailing and future_candle['low'] <= take_profit:
-                        trailing_active = True
-                        # Track lowest price
-                        if future_candle['low'] < max_profit_price or max_profit_price == entry_price:
-                            max_profit_price = future_candle['low']
-                            # Trail at configured % of profit
-                            profit_distance = entry_price - max_profit_price
-                            trailing_stop = entry_price - (profit_distance * self.trailing_pct)
-                    
-                    # Check if hit SL or trailing stop
-                    active_stop = trailing_stop if trailing_active else stop_loss
-                    if future_candle['high'] >= active_stop:
-                        outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
-                        profit_pct = ((entry_price - active_stop) / entry_price) * 100
-                        break
-                    # Check if hit TP (only if trailing not active)
-                    elif not trailing_active and future_candle['low'] <= take_profit:
-                        if self.use_trailing:
-                            # TP hit, activate trailing
-                            trailing_active = True
-                            max_profit_price = future_candle['low']
-                            profit_distance = entry_price - max_profit_price
-                            trailing_stop = entry_price - (profit_distance * self.trailing_pct)
-                        else:
-                            # No trailing, close at TP
-                            outcome = 'Win ✅'
-                            profit_pct = ((entry_price - take_profit) / entry_price) * 100
-                            break
-                        break
+                # Check TP levels in order
+                if not tp1_hit and future_candle['high'] >= tp1_price:
+                    # TP1 hit - close 50%
+                    pnl = ((tp1_price - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.5
+                    remaining_position -= 0.5
+                    tps_hit.append('TP1')
+                    tp1_hit = True
+                    # Move SL to breakeven
+                    stop_loss = entry_price
                 
-                # Limit check to 100 bars
-                if bars >= 100:
-                    outcome = 'Timeout'
-                    # Calculate current P&L at timeout
-                    current_price = future_candle['close']
-                    if signal_type == 1:
-                        profit_pct = ((current_price - entry_price) / entry_price) * 100
-                    else:
-                        profit_pct = ((entry_price - current_price) / entry_price) * 100
+                if tp1_hit and not tp2_hit and future_candle['high'] >= tp2_price:
+                    # TP2 hit - close 30%
+                    pnl = ((tp2_price - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.3
+                    remaining_position -= 0.3
+                    tps_hit.append('TP2')
+                    tp2_hit = True
+                
+                if tp2_hit and not tp3_hit and future_candle['high'] >= tp3_price:
+                    # TP3 hit - close 20%
+                    pnl = ((tp3_price - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.2
+                    remaining_position -= 0.2
+                    tps_hit.append('TP3')
+                    tp3_hit = True
+                    outcome = 'Win ✅'
                     break
             
-            signals_df.loc[idx, 'outcome'] = outcome
-            signals_df.loc[idx, 'profit_pct'] = profit_pct
-            signals_df.loc[idx, 'bars_held'] = bars
+            else:  # SELL signal
+                # Check SL first
+                if future_candle['high'] >= stop_loss:
+                    # Hit stop loss
+                    pnl = ((entry_price - stop_loss) / entry_price) * 100
+                    total_pnl_pct += pnl * remaining_position
+                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                    break
+                
+                # Check TP levels in order
+                if not tp1_hit and future_candle['low'] <= tp1_price:
+                    # TP1 hit - close 50%
+                    pnl = ((entry_price - tp1_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.5
+                    remaining_position -= 0.5
+                    tps_hit.append('TP1')
+                    tp1_hit = True
+                    # Move SL to breakeven
+                    stop_loss = entry_price
+                
+                if tp1_hit and not tp2_hit and future_candle['low'] <= tp2_price:
+                    # TP2 hit - close 30%
+                    pnl = ((entry_price - tp2_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.3
+                    remaining_position -= 0.3
+                    tps_hit.append('TP2')
+                    tp2_hit = True
+                
+                if tp2_hit and not tp3_hit and future_candle['low'] <= tp3_price:
+                    # TP3 hit - close 20%
+                    pnl = ((entry_price - tp3_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.2
+                    remaining_position -= 0.2
+                    tps_hit.append('TP3')
+                    tp3_hit = True
+                    outcome = 'Win ✅'
+                    break
+            
+            # Limit check to 100 bars
+            if bars >= 100:
+                outcome = 'Timeout'
+                # Calculate current P&L for remaining position at timeout
+                current_price = future_candle['close']
+                if signal_type == 1:
+                    pnl = ((current_price - entry_price) / entry_price) * 100
+                else:
+                    pnl = ((entry_price - current_price) / entry_price) * 100
+                total_pnl_pct += pnl * remaining_position
+                break
+        
+        return {
+            'outcome': outcome,
+            'profit_pct': total_pnl_pct,
+            'bars': bars,
+            'tp_levels_hit': '+'.join(tps_hit) if tps_hit else 'None'
+        }
+    
+    
+    def _calculate_single_tp_outcome(self, signal_type, entry_price, stop_loss, take_profit, future_candles):
+        """
+        Calculate outcome with single TP level (original behavior)
+        """
+        # Check each candle to see if TP or SL was hit
+        outcome = 'Open'
+        profit_pct = 0.0
+        bars = 0
+        trailing_active = False
+        trailing_stop = stop_loss
+        max_profit_price = entry_price
+        
+        for future_idx, future_candle in future_candles.iterrows():
+            bars += 1
+            
+            if signal_type == 1:  # BUY signal
+                # Update trailing stop if enabled and in profit
+                if self.use_trailing and future_candle['high'] >= take_profit:
+                    trailing_active = True
+                    # Track highest price
+                    if future_candle['high'] > max_profit_price:
+                        max_profit_price = future_candle['high']
+                        # Trail at configured % of profit
+                        profit_distance = max_profit_price - entry_price
+                        trailing_stop = entry_price + (profit_distance * self.trailing_pct)
+                
+                # Check if hit SL or trailing stop
+                active_stop = trailing_stop if trailing_active else stop_loss
+                if future_candle['low'] <= active_stop:
+                    outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
+                    profit_pct = ((active_stop - entry_price) / entry_price) * 100
+                    break
+                # Check if hit TP (only if trailing not active)
+                elif not trailing_active and future_candle['high'] >= take_profit:
+                    if self.use_trailing:
+                        # TP hit, activate trailing
+                        trailing_active = True
+                        max_profit_price = future_candle['high']
+                        profit_distance = max_profit_price - entry_price
+                        trailing_stop = entry_price + (profit_distance * self.trailing_pct)
+                    else:
+                        # No trailing, close at TP
+                        outcome = 'Win ✅'
+                        profit_pct = ((take_profit - entry_price) / entry_price) * 100
+                        break
+                    
+            elif signal_type == -1:  # SELL signal
+                # Update trailing stop if enabled and in profit
+                if self.use_trailing and future_candle['low'] <= take_profit:
+                    trailing_active = True
+                    # Track lowest price
+                    if future_candle['low'] < max_profit_price or max_profit_price == entry_price:
+                        max_profit_price = future_candle['low']
+                        # Trail at configured % of profit
+                        profit_distance = entry_price - max_profit_price
+                        trailing_stop = entry_price - (profit_distance * self.trailing_pct)
+                
+                # Check if hit SL or trailing stop
+                active_stop = trailing_stop if trailing_active else stop_loss
+                if future_candle['high'] >= active_stop:
+                    outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
+                    profit_pct = ((entry_price - active_stop) / entry_price) * 100
+                    break
+                # Check if hit TP (only if trailing not active)
+                elif not trailing_active and future_candle['low'] <= take_profit:
+                    if self.use_trailing:
+                        # TP hit, activate trailing
+                        trailing_active = True
+                        max_profit_price = future_candle['low']
+                        profit_distance = entry_price - max_profit_price
+                        trailing_stop = entry_price - (profit_distance * self.trailing_pct)
+                    else:
+                        # No trailing, close at TP
+                        outcome = 'Win ✅'
+                        profit_pct = ((entry_price - take_profit) / entry_price) * 100
+                        break
+            
+            # Limit check to 100 bars
+            if bars >= 100:
+                outcome = 'Timeout'
+                # Calculate current P&L at timeout
+                current_price = future_candle['close']
+                if signal_type == 1:
+                    profit_pct = ((current_price - entry_price) / entry_price) * 100
+                else:
+                    profit_pct = ((entry_price - current_price) / entry_price) * 100
+                break
+        
+        return {
+            'outcome': outcome,
+            'profit_pct': profit_pct,
+            'bars': bars
+        }
+
 
 
 class SignalAnalysisWorkerMT5(QThread):
@@ -258,7 +422,7 @@ class SignalAnalysisWorkerMT5(QThread):
     error = Signal(str)  # Error message
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
-                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h'):
+                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -269,6 +433,7 @@ class SignalAnalysisWorkerMT5(QThread):
         self.use_trailing = use_trailing
         self.trailing_pct = trailing_pct / 100.0  # Convert to decimal (50 -> 0.5)
         self.timeframe = timeframe
+        self.use_multi_tp = use_multi_tp
         
     def run(self):
         """Run signal analysis in background using MT5"""
@@ -384,12 +549,17 @@ class SignalAnalysisWorkerMT5(QThread):
     def _calculate_signal_outcomes(self, signals_df, full_df):
         """
         Calculate trade outcome for each signal
-        (Same logic as SignalAnalysisWorker - reusing the calculation method)
+        Supports both single-TP and multi-TP modes
+        (Same logic as SignalAnalysisWorker)
         """
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
         signals_df['profit_pct'] = 0.0
         signals_df['bars_held'] = 0
+        
+        # Add multi-TP column if enabled
+        if self.use_multi_tp:
+            signals_df['tp_levels_hit'] = 'None'
         
         for idx, signal_row in signals_df.iterrows():
             signal_type = signal_row['signal']
@@ -419,94 +589,244 @@ class SignalAnalysisWorkerMT5(QThread):
                 signals_df.loc[idx, 'outcome'] = 'No Data'
                 continue
             
-            # Check each candle to see if TP or SL was hit
-            outcome = 'Open'
-            profit_pct = 0.0
-            bars = 0
-            trailing_active = False
-            trailing_stop = stop_loss
-            max_profit_price = entry_price
+            # Route to appropriate calculation method
+            if self.use_multi_tp:
+                result = self._calculate_multi_tp_outcome(
+                    signal_type, entry_price, stop_loss, risk, future_candles
+                )
+                signals_df.loc[idx, 'outcome'] = result['outcome']
+                signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
+                signals_df.loc[idx, 'bars_held'] = result['bars']
+                signals_df.loc[idx, 'tp_levels_hit'] = result['tp_levels_hit']
+            else:
+                result = self._calculate_single_tp_outcome(
+                    signal_type, entry_price, stop_loss, take_profit, future_candles
+                )
+                signals_df.loc[idx, 'outcome'] = result['outcome']
+                signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
+                signals_df.loc[idx, 'bars_held'] = result['bars']
+    
+    def _calculate_multi_tp_outcome(self, signal_type, entry_price, stop_loss, risk, future_candles):
+        """
+        Calculate outcome with multiple TP levels and partial closes
+        TP1: close 50%, TP2: close 30%, TP3: close 20%
+        SL moves to breakeven after TP1
+        """
+        # Define TP levels using Fibonacci ratios
+        if signal_type == 1:  # BUY
+            tp1_price = entry_price + (risk * 1.0)   # 1R
+            tp2_price = entry_price + (risk * 1.618) # 1.618R  
+            tp3_price = entry_price + (risk * 2.618) # 2.618R
+        else:  # SELL
+            tp1_price = entry_price - (risk * 1.0)
+            tp2_price = entry_price - (risk * 1.618)
+            tp3_price = entry_price - (risk * 2.618)
+        
+        # Track position and outcomes
+        remaining_position = 1.0
+        total_pnl_pct = 0.0
+        tps_hit = []
+        outcome = 'Timeout'
+        bars = 0
+        
+        # Track which TPs have been hit
+        tp1_hit = False
+        tp2_hit = False
+        tp3_hit = False
+        
+        # Check each candle
+        for future_idx, future_candle in future_candles.iterrows():
+            bars += 1
             
-            for future_idx, future_candle in future_candles.iterrows():
-                bars += 1
+            if signal_type == 1:  # BUY signal
+                # Check SL first
+                if future_candle['low'] <= stop_loss:
+                    # Hit stop loss
+                    pnl = ((stop_loss - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * remaining_position
+                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                    break
                 
-                if signal_type == 1:  # BUY signal
-                    # Update trailing stop if enabled and in profit
-                    if self.use_trailing and future_candle['high'] >= take_profit:
-                        trailing_active = True
-                        # Track highest price
-                        if future_candle['high'] > max_profit_price:
-                            max_profit_price = future_candle['high']
-                            # Trail at configured % of profit
-                            profit_distance = max_profit_price - entry_price
-                            trailing_stop = entry_price + (profit_distance * self.trailing_pct)
-                    
-                    # Check if hit SL or trailing stop
-                    active_stop = trailing_stop if trailing_active else stop_loss
-                    if future_candle['low'] <= active_stop:
-                        outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
-                        profit_pct = ((active_stop - entry_price) / entry_price) * 100
-                        break
-                    # Check if hit TP (only if trailing not active)
-                    elif not trailing_active and future_candle['high'] >= take_profit:
-                        if self.use_trailing:
-                            # TP hit, activate trailing
-                            trailing_active = True
-                            max_profit_price = future_candle['high']
-                            profit_distance = max_profit_price - entry_price
-                            trailing_stop = entry_price + (profit_distance * self.trailing_pct)
-                        else:
-                            # No trailing, close at TP
-                            outcome = 'Win ✅'
-                            profit_pct = ((take_profit - entry_price) / entry_price) * 100
-                            break
-                        
-                elif signal_type == -1:  # SELL signal
-                    # Update trailing stop if enabled and in profit
-                    if self.use_trailing and future_candle['low'] <= take_profit:
-                        trailing_active = True
-                        # Track lowest price
-                        if future_candle['low'] < max_profit_price or max_profit_price == entry_price:
-                            max_profit_price = future_candle['low']
-                            # Trail at configured % of profit
-                            profit_distance = entry_price - max_profit_price
-                            trailing_stop = entry_price - (profit_distance * self.trailing_pct)
-                    
-                    # Check if hit SL or trailing stop
-                    active_stop = trailing_stop if trailing_active else stop_loss
-                    if future_candle['high'] >= active_stop:
-                        outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
-                        profit_pct = ((entry_price - active_stop) / entry_price) * 100
-                        break
-                    # Check if hit TP (only if trailing not active)
-                    elif not trailing_active and future_candle['low'] <= take_profit:
-                        if self.use_trailing:
-                            # TP hit, activate trailing
-                            trailing_active = True
-                            max_profit_price = future_candle['low']
-                            profit_distance = entry_price - max_profit_price
-                            trailing_stop = entry_price - (profit_distance * self.trailing_pct)
-                        else:
-                            # No trailing, close at TP
-                            outcome = 'Win ✅'
-                            profit_pct = ((entry_price - take_profit) / entry_price) * 100
-                            break
-                        break
+                # Check TP levels in order
+                if not tp1_hit and future_candle['high'] >= tp1_price:
+                    # TP1 hit - close 50%
+                    pnl = ((tp1_price - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.5
+                    remaining_position -= 0.5
+                    tps_hit.append('TP1')
+                    tp1_hit = True
+                    # Move SL to breakeven
+                    stop_loss = entry_price
                 
-                # Limit check to 100 bars
-                if bars >= 100:
-                    outcome = 'Timeout'
-                    # Calculate current P&L at timeout
-                    current_price = future_candle['close']
-                    if signal_type == 1:
-                        profit_pct = ((current_price - entry_price) / entry_price) * 100
-                    else:
-                        profit_pct = ((entry_price - current_price) / entry_price) * 100
+                if tp1_hit and not tp2_hit and future_candle['high'] >= tp2_price:
+                    # TP2 hit - close 30%
+                    pnl = ((tp2_price - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.3
+                    remaining_position -= 0.3
+                    tps_hit.append('TP2')
+                    tp2_hit = True
+                
+                if tp2_hit and not tp3_hit and future_candle['high'] >= tp3_price:
+                    # TP3 hit - close 20%
+                    pnl = ((tp3_price - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.2
+                    remaining_position -= 0.2
+                    tps_hit.append('TP3')
+                    tp3_hit = True
+                    outcome = 'Win ✅'
                     break
             
-            signals_df.loc[idx, 'outcome'] = outcome
-            signals_df.loc[idx, 'profit_pct'] = profit_pct
-            signals_df.loc[idx, 'bars_held'] = bars
+            else:  # SELL signal
+                # Check SL first
+                if future_candle['high'] >= stop_loss:
+                    # Hit stop loss
+                    pnl = ((entry_price - stop_loss) / entry_price) * 100
+                    total_pnl_pct += pnl * remaining_position
+                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                    break
+                
+                # Check TP levels in order
+                if not tp1_hit and future_candle['low'] <= tp1_price:
+                    # TP1 hit - close 50%
+                    pnl = ((entry_price - tp1_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.5
+                    remaining_position -= 0.5
+                    tps_hit.append('TP1')
+                    tp1_hit = True
+                    # Move SL to breakeven
+                    stop_loss = entry_price
+                
+                if tp1_hit and not tp2_hit and future_candle['low'] <= tp2_price:
+                    # TP2 hit - close 30%
+                    pnl = ((entry_price - tp2_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.3
+                    remaining_position -= 0.3
+                    tps_hit.append('TP2')
+                    tp2_hit = True
+                
+                if tp2_hit and not tp3_hit and future_candle['low'] <= tp3_price:
+                    # TP3 hit - close 20%
+                    pnl = ((entry_price - tp3_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.2
+                    remaining_position -= 0.2
+                    tps_hit.append('TP3')
+                    tp3_hit = True
+                    outcome = 'Win ✅'
+                    break
+            
+            # Limit check to 100 bars
+            if bars >= 100:
+                outcome = 'Timeout'
+                # Calculate current P&L for remaining position at timeout
+                current_price = future_candle['close']
+                if signal_type == 1:
+                    pnl = ((current_price - entry_price) / entry_price) * 100
+                else:
+                    pnl = ((entry_price - current_price) / entry_price) * 100
+                total_pnl_pct += pnl * remaining_position
+                break
+        
+        return {
+            'outcome': outcome,
+            'profit_pct': total_pnl_pct,
+            'bars': bars,
+            'tp_levels_hit': '+'.join(tps_hit) if tps_hit else 'None'
+        }
+    
+    def _calculate_single_tp_outcome(self, signal_type, entry_price, stop_loss, take_profit, future_candles):
+        """
+        Calculate outcome with single TP level (original behavior)
+        """
+        # Check each candle to see if TP or SL was hit
+        outcome = 'Open'
+        profit_pct = 0.0
+        bars = 0
+        trailing_active = False
+        trailing_stop = stop_loss
+        max_profit_price = entry_price
+        
+        for future_idx, future_candle in future_candles.iterrows():
+            bars += 1
+            
+            if signal_type == 1:  # BUY signal
+                # Update trailing stop if enabled and in profit
+                if self.use_trailing and future_candle['high'] >= take_profit:
+                    trailing_active = True
+                    # Track highest price
+                    if future_candle['high'] > max_profit_price:
+                        max_profit_price = future_candle['high']
+                        # Trail at configured % of profit
+                        profit_distance = max_profit_price - entry_price
+                        trailing_stop = entry_price + (profit_distance * self.trailing_pct)
+                
+                # Check if hit SL or trailing stop
+                active_stop = trailing_stop if trailing_active else stop_loss
+                if future_candle['low'] <= active_stop:
+                    outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
+                    profit_pct = ((active_stop - entry_price) / entry_price) * 100
+                    break
+                # Check if hit TP (only if trailing not active)
+                elif not trailing_active and future_candle['high'] >= take_profit:
+                    if self.use_trailing:
+                        # TP hit, activate trailing
+                        trailing_active = True
+                        max_profit_price = future_candle['high']
+                        profit_distance = max_profit_price - entry_price
+                        trailing_stop = entry_price + (profit_distance * self.trailing_pct)
+                    else:
+                        # No trailing, close at TP
+                        outcome = 'Win ✅'
+                        profit_pct = ((take_profit - entry_price) / entry_price) * 100
+                        break
+                    
+            elif signal_type == -1:  # SELL signal
+                # Update trailing stop if enabled and in profit
+                if self.use_trailing and future_candle['low'] <= take_profit:
+                    trailing_active = True
+                    # Track lowest price
+                    if future_candle['low'] < max_profit_price or max_profit_price == entry_price:
+                        max_profit_price = future_candle['low']
+                        # Trail at configured % of profit
+                        profit_distance = entry_price - max_profit_price
+                        trailing_stop = entry_price - (profit_distance * self.trailing_pct)
+                
+                # Check if hit SL or trailing stop
+                active_stop = trailing_stop if trailing_active else stop_loss
+                if future_candle['high'] >= active_stop:
+                    outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
+                    profit_pct = ((entry_price - active_stop) / entry_price) * 100
+                    break
+                # Check if hit TP (only if trailing not active)
+                elif not trailing_active and future_candle['low'] <= take_profit:
+                    if self.use_trailing:
+                        # TP hit, activate trailing
+                        trailing_active = True
+                        max_profit_price = future_candle['low']
+                        profit_distance = entry_price - max_profit_price
+                        trailing_stop = entry_price - (profit_distance * self.trailing_pct)
+                    else:
+                        # No trailing, close at TP
+                        outcome = 'Win ✅'
+                        profit_pct = ((entry_price - take_profit) / entry_price) * 100
+                        break
+            
+            # Limit check to 100 bars
+            if bars >= 100:
+                outcome = 'Timeout'
+                # Calculate current P&L at timeout
+                current_price = future_candle['close']
+                if signal_type == 1:
+                    profit_pct = ((current_price - entry_price) / entry_price) * 100
+                else:
+                    profit_pct = ((entry_price - current_price) / entry_price) * 100
+                break
+        
+        return {
+            'outcome': outcome,
+            'profit_pct': profit_pct,
+            'bars': bars
+        }
+
 
 
 class SignalAnalysisDialog(QDialog):
@@ -713,6 +1033,21 @@ class SignalAnalysisDialog(QDialog):
         row4.addStretch()
         layout.addLayout(row4)
         
+        # Multi-TP mode
+        row5 = QHBoxLayout()
+        
+        self.use_multi_tp_check = QCheckBox("Use Multiple TP Levels")
+        self.use_multi_tp_check.setChecked(False)
+        self.use_multi_tp_check.setToolTip(
+            "Enable partial position closing at multiple TP levels:\n"
+            "TP1: Close 50%, TP2: Close 30%, TP3: Close 20%\n"
+            "SL moves to breakeven after TP1"
+        )
+        row5.addWidget(self.use_multi_tp_check)
+        
+        row5.addStretch()
+        layout.addLayout(row5)
+        
         # Note about default strategy
         note_label = QLabel("<i>Leave at defaults to use bot's configured strategy settings</i>")
         note_label.setStyleSheet("color: gray;")
@@ -725,12 +1060,18 @@ class SignalAnalysisDialog(QDialog):
         self.trailing_pct_spin.setEnabled(state == 2)  # 2 = Qt.Checked
         
     def create_summary_section(self):
-        """Create summary section"""
+        """Create summary section - compact layout"""
         group = QGroupBox("Summary")
         layout = QVBoxLayout(group)
         
+        # Use more compact spacing
+        layout.setSpacing(2)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
         self.summary_label = QLabel("Run analysis to see summary")
         self.summary_label.setWordWrap(True)
+        # Set maximum height to prevent summary from taking too much space
+        self.summary_label.setMaximumHeight(120)
         layout.addWidget(self.summary_label)
         
         return group
@@ -808,6 +1149,7 @@ class SignalAnalysisDialog(QDialog):
         sl_multiplier = self.sl_multiplier_spin.value()
         use_trailing = self.use_trailing_check.isChecked()
         trailing_pct = self.trailing_pct_spin.value()
+        use_multi_tp = self.use_multi_tp_check.isChecked()
         
         # Clear previous results
         self.results_table.setRowCount(0)
@@ -825,13 +1167,13 @@ class SignalAnalysisDialog(QDialog):
             # Use MT5 worker for XAUUSD
             self.worker = SignalAnalysisWorkerMT5(
                 symbol, days, start, end,
-                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe
+                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp
             )
         else:
             # Use Binance worker for BTC/ETH
             self.worker = SignalAnalysisWorker(
                 symbol, days, start, end,
-                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe
+                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp
             )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)
@@ -891,47 +1233,72 @@ class SignalAnalysisDialog(QDialog):
             gross_loss = abs(signals_df[signals_df['profit_pct'] < 0]['profit_pct'].sum())
             profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
             
-            summary_text = (
-                f"<b>Total Signals:</b> {total_signals}<br>"
-                f"<b>BUY Signals:</b> {buy_signals} 📈<br>"
-                f"<b>SELL Signals:</b> {sell_signals} 📉<br><br>"
-                f"<b>═══ P&L SUMMARY ═══</b><br>"
-                f"<b style='color: green;'>Wins:</b> {wins} ({win_rate:.1f}%)<br>"
-                f"<b style='color: red;'>Losses:</b> {losses}<br>"
-                f"<b>Other (Open/Timeout):</b> {other}<br><br>"
-            )
-            
-            if wins > 0:
-                summary_text += f"<b>Avg Win:</b> <span style='color: green;'>+{avg_win:.2f}%</span><br>"
-            if losses > 0:
-                summary_text += f"<b>Avg Loss:</b> <span style='color: red;'>{avg_loss:.2f}%</span><br>"
-            
-            if completed_trades > 0:
-                summary_text += f"<b>Expectancy:</b> {avg_pnl:+.2f}% per trade<br>"
-                
-            if profit_factor > 0:
-                pf_color = 'green' if profit_factor > 1 else 'red'
-                summary_text += f"<b>Profit Factor:</b> <span style='color: {pf_color};'>{profit_factor:.2f}</span><br>"
-            
             # Total P&L with color coding
             pnl_color = 'green' if total_profit_pct > 0 else 'red' if total_profit_pct < 0 else 'gray'
-            summary_text += f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-size: 14pt;'>{total_profit_pct:+.2f}%</span><br><br>"
             
-            summary_text += f"<b>First Signal:</b> {first_signal.strftime('%Y-%m-%d %H:%M')}<br>"
-            summary_text += f"<b>Last Signal:</b> {last_signal.strftime('%Y-%m-%d %H:%M')}<br><br>"
+            # Compact summary - key metrics in horizontal layout
+            summary_text = (
+                f"<b>Signals:</b> {total_signals} (📈{buy_signals} / 📉{sell_signals})  |  "
+                f"<b style='color: green;'>Wins:</b> {wins} ({win_rate:.1f}%)  |  "
+                f"<b style='color: red;'>Losses:</b> {losses}  |  "
+                f"<b>PF:</b> <span style='color: {'green' if profit_factor > 1 else 'red'};'>{profit_factor:.2f}</span>  |  "
+                f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold;'>{total_profit_pct:+.2f}%</span><br>"
+            )
             
-            # Check last 2 days
+            # Second line with additional metrics
+            if wins > 0 or losses > 0:
+                summary_text += f"<b>Avg:</b> "
+                if wins > 0:
+                    summary_text += f"<span style='color: green;'>Win +{avg_win:.2f}%</span>"
+                if wins > 0 and losses > 0:
+                    summary_text += " / "
+                if losses > 0:
+                    summary_text += f"<span style='color: red;'>Loss {avg_loss:.2f}%</span>"
+                if completed_trades > 0:
+                    summary_text += f"  |  <b>Exp:</b> {avg_pnl:+.2f}%"
+                summary_text += "<br>"
+            
+            # Add multi-TP statistics if enabled (compact format)
+            if 'tp_levels_hit' in signals_df.columns:
+                # Calculate TP hit rates
+                tp1_hit = len(signals_df[signals_df['tp_levels_hit'].str.contains('TP1', na=False)])
+                tp2_hit = len(signals_df[signals_df['tp_levels_hit'].str.contains('TP2', na=False)])
+                tp3_hit = len(signals_df[signals_df['tp_levels_hit'].str.contains('TP3', na=False)])
+                
+                tp1_rate = (tp1_hit / total_signals * 100) if total_signals > 0 else 0
+                tp2_rate = (tp2_hit / total_signals * 100) if total_signals > 0 else 0
+                tp3_rate = (tp3_hit / total_signals * 100) if total_signals > 0 else 0
+                
+                summary_text += (
+                    f"<b>Multi-TP:</b> "
+                    f"TP1 {tp1_rate:.0f}% | TP2 {tp2_rate:.0f}% | TP3 {tp3_rate:.0f}%"
+                )
+                
+                # Calculate average TPs hit per trade (for completed trades)
+                completed_signals = signals_df[signals_df['tp_levels_hit'] != 'None']
+                if len(completed_signals) > 0:
+                    total_tps = 0
+                    for tp_str in completed_signals['tp_levels_hit']:
+                        if pd.notna(tp_str):
+                            total_tps += str(tp_str).count('TP')
+                    avg_tps = total_tps / len(completed_signals)
+                    summary_text += f" | <b>Avg:</b> {avg_tps:.2f} TPs"
+                
+                summary_text += "<br>"
+            
+            # Date range and status (compact, single line)
+            summary_text += f"<small>{first_signal.strftime('%Y-%m-%d')} to {last_signal.strftime('%Y-%m-%d')}"
+            
+            # Check last 2 days - compact status
             two_days_ago = datetime.now() - timedelta(days=2)
             recent_signals = signals_df[signals_df.index >= two_days_ago]
             
             if len(recent_signals) > 0:
-                summary_text += f"<b>✅ Signals in last 2 days:</b> {len(recent_signals)}<br>"
-                summary_text += "<span style='color: green;'>Bot is generating signals normally!</span>"
+                summary_text += f" | ✅ Active ({len(recent_signals)} recent)"
             else:
                 days_since = (datetime.now() - last_signal).days
-                summary_text += f"<b>⚠️ No signals in last 2 days</b><br>"
-                summary_text += f"Last signal was {days_since} days ago<br>"
-                summary_text += "<span style='color: orange;'>Market may be in consolidation</span>"
+                summary_text += f" | ⚠️ Last: {days_since}d ago"
+            summary_text += "</small>"
         else:
             summary_text = "No signals found"
             
@@ -959,12 +1326,37 @@ class SignalAnalysisDialog(QDialog):
         
     def populate_results_table(self, signals_df):
         """Populate results table with signals"""
+        # Check if multi-TP mode was used
+        has_tp_levels = 'tp_levels_hit' in signals_df.columns
+        
+        # Update table columns dynamically
+        if has_tp_levels:
+            self.results_table.setColumnCount(11)
+            self.results_table.setHorizontalHeaderLabels([
+                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
+            ])
+        else:
+            self.results_table.setColumnCount(10)
+            self.results_table.setHorizontalHeaderLabels([
+                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
+            ])
+        
+        # Configure table header
+        header = self.results_table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        
         self.results_table.setRowCount(len(signals_df))
         
         for row_idx, (timestamp, row) in enumerate(signals_df.iterrows()):
+            col_idx = 0
+            
             # Date/Time
             date_item = QTableWidgetItem(timestamp.strftime('%Y-%m-%d %H:%M'))
-            self.results_table.setItem(row_idx, 0, date_item)
+            self.results_table.setItem(row_idx, col_idx, date_item)
+            col_idx += 1
             
             # Type
             signal_type = "BUY 📈" if row['signal'] == 1 else "SELL 📉"
@@ -973,25 +1365,29 @@ class SignalAnalysisDialog(QDialog):
                 type_item.setForeground(Qt.darkGreen)
             else:
                 type_item.setForeground(Qt.darkRed)
-            self.results_table.setItem(row_idx, 1, type_item)
+            self.results_table.setItem(row_idx, col_idx, type_item)
+            col_idx += 1
             
             # Price
             price_item = QTableWidgetItem(f"${row['close']:.2f}")
-            self.results_table.setItem(row_idx, 2, price_item)
+            self.results_table.setItem(row_idx, col_idx, price_item)
+            col_idx += 1
             
             # Stop Loss
             sl_value = row.get('stop_loss', 0)
             if pd.isna(sl_value):
                 sl_value = 0
             sl_item = QTableWidgetItem(f"${sl_value:.2f}" if sl_value else "N/A")
-            self.results_table.setItem(row_idx, 3, sl_item)
+            self.results_table.setItem(row_idx, col_idx, sl_item)
+            col_idx += 1
             
             # Take Profit
             tp_value = row.get('take_profit', 0)
             if pd.isna(tp_value):
                 tp_value = 0
             tp_item = QTableWidgetItem(f"${tp_value:.2f}" if tp_value else "N/A")
-            self.results_table.setItem(row_idx, 4, tp_item)
+            self.results_table.setItem(row_idx, col_idx, tp_item)
+            col_idx += 1
             
             # Result (Win/Loss)
             outcome = row.get('outcome', 'Unknown')
@@ -1000,7 +1396,8 @@ class SignalAnalysisDialog(QDialog):
                 result_item.setForeground(Qt.darkGreen)
             elif 'Loss' in str(outcome):
                 result_item.setForeground(Qt.darkRed)
-            self.results_table.setItem(row_idx, 5, result_item)
+            self.results_table.setItem(row_idx, col_idx, result_item)
+            col_idx += 1
             
             # Profit %
             profit_pct = row.get('profit_pct', 0)
@@ -1011,28 +1408,46 @@ class SignalAnalysisDialog(QDialog):
                 profit_item.setForeground(Qt.darkGreen)
             elif profit_pct < 0:
                 profit_item.setForeground(Qt.darkRed)
-            self.results_table.setItem(row_idx, 6, profit_item)
+            self.results_table.setItem(row_idx, col_idx, profit_item)
+            col_idx += 1
+            
+            # TP Levels Hit (only in multi-TP mode)
+            if has_tp_levels:
+                tp_levels = row.get('tp_levels_hit', 'None')
+                if pd.isna(tp_levels) or not tp_levels:
+                    tp_levels = 'None'
+                tp_levels_item = QTableWidgetItem(str(tp_levels))
+                # Color code based on TPs hit
+                if tp_levels == 'TP1+TP2+TP3':
+                    tp_levels_item.setForeground(Qt.darkGreen)
+                elif 'TP' in str(tp_levels):
+                    # Use blue for better contrast than yellow
+                    tp_levels_item.setForeground(Qt.darkBlue)
+                self.results_table.setItem(row_idx, col_idx, tp_levels_item)
+                col_idx += 1
             
             # Bars Held
             bars = row.get('bars_held', 0)
             if pd.isna(bars):
                 bars = 0
             bars_item = QTableWidgetItem(f"{int(bars)}" if bars > 0 else "-")
-            self.results_table.setItem(row_idx, 7, bars_item)
+            self.results_table.setItem(row_idx, col_idx, bars_item)
+            col_idx += 1
             
             # Entry Reason
             reason = row.get('signal_reason', 'N/A')
             if pd.isna(reason) or not reason:
                 reason = 'N/A'
             reason_item = QTableWidgetItem(str(reason))
-            self.results_table.setItem(row_idx, 8, reason_item)
+            self.results_table.setItem(row_idx, col_idx, reason_item)
+            col_idx += 1
             
             # Regime
             regime = row.get('regime', 'N/A')
             if pd.isna(regime) or not regime:
                 regime = 'N/A'
             regime_item = QTableWidgetItem(str(regime))
-            self.results_table.setItem(row_idx, 9, regime_item)
+            self.results_table.setItem(row_idx, col_idx, regime_item)
             
     def export_csv(self):
         """Export results to CSV"""
