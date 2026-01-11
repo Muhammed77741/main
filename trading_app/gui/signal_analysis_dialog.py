@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QGroupBox, QHeaderView, QDateEdit, QComboBox,
-    QSpinBox, QProgressBar, QTextEdit, QMessageBox
+    QSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QDate
 from models import BotConfig
@@ -34,12 +34,17 @@ class SignalAnalysisWorker(QThread):
     finished = Signal(object)  # DataFrame with results
     error = Signal(str)  # Error message
     
-    def __init__(self, symbol, days, start_date=None, end_date=None):
+    def __init__(self, symbol, days, start_date=None, end_date=None, 
+                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50):
         super().__init__()
         self.symbol = symbol
         self.days = days
         self.start_date = start_date
         self.end_date = end_date
+        self.tp_multiplier = tp_multiplier / 100.0  # Convert to decimal (162 -> 1.62)
+        self.sl_multiplier = sl_multiplier / 100.0  # Convert to decimal (100 -> 1.0)
+        self.use_trailing = use_trailing
+        self.trailing_pct = trailing_pct / 100.0  # Convert to decimal (50 -> 0.5)
         
     def run(self):
         """Run signal analysis in background"""
@@ -119,6 +124,7 @@ class SignalAnalysisWorker(QThread):
         """
         Calculate trade outcome for each signal
         Check if price hit TP or SL in the following candles
+        Applies custom TP/SL multipliers and trailing stop if configured
         """
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
@@ -128,13 +134,23 @@ class SignalAnalysisWorker(QThread):
         for idx, signal_row in signals_df.iterrows():
             signal_type = signal_row['signal']
             entry_price = signal_row['close']
-            stop_loss = signal_row.get('stop_loss', 0)
-            take_profit = signal_row.get('take_profit', 0)
+            original_stop_loss = signal_row.get('stop_loss', 0)
+            original_take_profit = signal_row.get('take_profit', 0)
             
             # Skip if SL or TP not set
-            if pd.isna(stop_loss) or pd.isna(take_profit) or stop_loss == 0 or take_profit == 0:
+            if pd.isna(original_stop_loss) or pd.isna(original_take_profit) or original_stop_loss == 0 or original_take_profit == 0:
                 signals_df.loc[idx, 'outcome'] = 'No SL/TP'
                 continue
+            
+            # Apply custom multipliers
+            if signal_type == 1:  # BUY
+                risk = entry_price - original_stop_loss
+                stop_loss = entry_price - (risk * self.sl_multiplier)
+                take_profit = entry_price + (risk * self.tp_multiplier)
+            else:  # SELL
+                risk = original_stop_loss - entry_price
+                stop_loss = entry_price + (risk * self.sl_multiplier)
+                take_profit = entry_price - (risk * self.tp_multiplier)
             
             # Get future candles after this signal
             future_candles = full_df[full_df.index > idx]
@@ -147,32 +163,74 @@ class SignalAnalysisWorker(QThread):
             outcome = 'Open'
             profit_pct = 0.0
             bars = 0
+            trailing_active = False
+            trailing_stop = stop_loss
+            max_profit_price = entry_price
             
             for future_idx, future_candle in future_candles.iterrows():
                 bars += 1
                 
                 if signal_type == 1:  # BUY signal
-                    # Check if hit SL (low went below stop loss)
-                    if future_candle['low'] <= stop_loss:
-                        outcome = 'Loss ❌'
-                        profit_pct = ((stop_loss - entry_price) / entry_price) * 100
+                    # Update trailing stop if enabled and in profit
+                    if self.use_trailing and future_candle['high'] >= take_profit:
+                        trailing_active = True
+                        # Track highest price
+                        if future_candle['high'] > max_profit_price:
+                            max_profit_price = future_candle['high']
+                            # Trail at configured % of profit
+                            profit_distance = max_profit_price - entry_price
+                            trailing_stop = entry_price + (profit_distance * self.trailing_pct)
+                    
+                    # Check if hit SL or trailing stop
+                    active_stop = trailing_stop if trailing_active else stop_loss
+                    if future_candle['low'] <= active_stop:
+                        outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
+                        profit_pct = ((active_stop - entry_price) / entry_price) * 100
                         break
-                    # Check if hit TP (high went above take profit)
-                    elif future_candle['high'] >= take_profit:
-                        outcome = 'Win ✅'
-                        profit_pct = ((take_profit - entry_price) / entry_price) * 100
-                        break
+                    # Check if hit TP (only if trailing not active)
+                    elif not trailing_active and future_candle['high'] >= take_profit:
+                        if self.use_trailing:
+                            # TP hit, activate trailing
+                            trailing_active = True
+                            max_profit_price = future_candle['high']
+                            profit_distance = max_profit_price - entry_price
+                            trailing_stop = entry_price + (profit_distance * self.trailing_pct)
+                        else:
+                            # No trailing, close at TP
+                            outcome = 'Win ✅'
+                            profit_pct = ((take_profit - entry_price) / entry_price) * 100
+                            break
                         
                 elif signal_type == -1:  # SELL signal
-                    # Check if hit SL (high went above stop loss)
-                    if future_candle['high'] >= stop_loss:
-                        outcome = 'Loss ❌'
-                        profit_pct = ((entry_price - stop_loss) / entry_price) * 100
+                    # Update trailing stop if enabled and in profit
+                    if self.use_trailing and future_candle['low'] <= take_profit:
+                        trailing_active = True
+                        # Track lowest price
+                        if future_candle['low'] < max_profit_price or max_profit_price == entry_price:
+                            max_profit_price = future_candle['low']
+                            # Trail at configured % of profit
+                            profit_distance = entry_price - max_profit_price
+                            trailing_stop = entry_price - (profit_distance * self.trailing_pct)
+                    
+                    # Check if hit SL or trailing stop
+                    active_stop = trailing_stop if trailing_active else stop_loss
+                    if future_candle['high'] >= active_stop:
+                        outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
+                        profit_pct = ((entry_price - active_stop) / entry_price) * 100
                         break
-                    # Check if hit TP (low went below take profit)
-                    elif future_candle['low'] <= take_profit:
-                        outcome = 'Win ✅'
-                        profit_pct = ((entry_price - take_profit) / entry_price) * 100
+                    # Check if hit TP (only if trailing not active)
+                    elif not trailing_active and future_candle['low'] <= take_profit:
+                        if self.use_trailing:
+                            # TP hit, activate trailing
+                            trailing_active = True
+                            max_profit_price = future_candle['low']
+                            profit_distance = entry_price - max_profit_price
+                            trailing_stop = entry_price - (profit_distance * self.trailing_pct)
+                        else:
+                            # No trailing, close at TP
+                            outcome = 'Win ✅'
+                            profit_pct = ((entry_price - take_profit) / entry_price) * 100
+                            break
                         break
                 
                 # Limit check to 100 bars
@@ -333,7 +391,64 @@ class SignalAnalysisDialog(QDialog):
         row2.addStretch()
         layout.addLayout(row2)
         
+        # Row 3: Backtest Parameters (expandable)
+        params_label = QLabel("<b>Backtest Parameters</b> (optional - override strategy defaults):")
+        layout.addWidget(params_label)
+        
+        # TP/SL parameters
+        row3 = QHBoxLayout()
+        
+        # TP Multiplier
+        row3.addWidget(QLabel("TP Multiplier:"))
+        self.tp_multiplier_spin = QSpinBox()
+        self.tp_multiplier_spin.setRange(10, 500)
+        self.tp_multiplier_spin.setValue(162)  # Default 1.618
+        self.tp_multiplier_spin.setSuffix("% (x1.62)")
+        self.tp_multiplier_spin.setToolTip("Take Profit as % of risk. 162% = 1.618 R:R, 262% = 2.618 R:R")
+        row3.addWidget(self.tp_multiplier_spin)
+        
+        # SL Multiplier  
+        row3.addWidget(QLabel("  SL Multiplier:"))
+        self.sl_multiplier_spin = QSpinBox()
+        self.sl_multiplier_spin.setRange(50, 200)
+        self.sl_multiplier_spin.setValue(100)  # Default 100% = 1.0x
+        self.sl_multiplier_spin.setSuffix("% (x1.0)")
+        self.sl_multiplier_spin.setToolTip("Stop Loss multiplier. 100% = default, 150% = wider SL")
+        row3.addWidget(self.sl_multiplier_spin)
+        
+        row3.addStretch()
+        layout.addLayout(row3)
+        
+        # Trailing stop
+        row4 = QHBoxLayout()
+        
+        self.use_trailing_check = QCheckBox("Use Trailing Stop")
+        self.use_trailing_check.setChecked(False)
+        self.use_trailing_check.stateChanged.connect(self.on_trailing_changed)
+        row4.addWidget(self.use_trailing_check)
+        
+        row4.addWidget(QLabel("  Trailing %:"))
+        self.trailing_pct_spin = QSpinBox()
+        self.trailing_pct_spin.setRange(10, 100)
+        self.trailing_pct_spin.setValue(50)  # Default 50% of profit
+        self.trailing_pct_spin.setSuffix("% of profit")
+        self.trailing_pct_spin.setEnabled(False)
+        self.trailing_pct_spin.setToolTip("When profit reaches TP, trail stop at this % of profit")
+        row4.addWidget(self.trailing_pct_spin)
+        
+        row4.addStretch()
+        layout.addLayout(row4)
+        
+        # Note about default strategy
+        note_label = QLabel("<i>Leave at defaults to use bot's configured strategy settings</i>")
+        note_label.setStyleSheet("color: gray;")
+        layout.addWidget(note_label)
+        
         return group
+    
+    def on_trailing_changed(self, state):
+        """Enable/disable trailing percentage when checkbox changes"""
+        self.trailing_pct_spin.setEnabled(state == 2)  # 2 = Qt.Checked
         
     def create_summary_section(self):
         """Create summary section"""
@@ -413,6 +528,12 @@ class SignalAnalysisDialog(QDialog):
         start = self.start_date.date().toPython()
         end = self.end_date.date().toPython()
         
+        # Get backtest parameters
+        tp_multiplier = self.tp_multiplier_spin.value()
+        sl_multiplier = self.sl_multiplier_spin.value()
+        use_trailing = self.use_trailing_check.isChecked()
+        trailing_pct = self.trailing_pct_spin.value()
+        
         # Clear previous results
         self.results_table.setRowCount(0)
         self.summary_label.setText("Analyzing...")
@@ -423,7 +544,10 @@ class SignalAnalysisDialog(QDialog):
         self.analyze_btn.setEnabled(False)
         
         # Create and start worker
-        self.worker = SignalAnalysisWorker(symbol, days, start, end)
+        self.worker = SignalAnalysisWorker(
+            symbol, days, start, end,
+            tp_multiplier, sl_multiplier, use_trailing, trailing_pct
+        )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)
         self.worker.error.connect(self.on_analysis_error)
