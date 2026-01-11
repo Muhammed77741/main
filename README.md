@@ -68,6 +68,8 @@ pip show python-telegram-bot
 
 **Note:** You need `python-telegram-bot`, NOT the `telegram` package (version 0.0.1).
 
+📱 **For detailed Telegram setup instructions, see [TELEGRAM_SETUP_GUIDE.md](TELEGRAM_SETUP_GUIDE.md)**
+
 ### 3. Configure Environment
 
 Create `.env` file in project root:
@@ -141,6 +143,11 @@ Trading involves significant risk. This software is provided as-is for education
 pip uninstall telegram
 pip uninstall python-telegram-bot
 pip install python-telegram-bot>=20.0
+```
+
+**Test your setup:**
+```bash
+python test_telegram_setup.py
 ```
 
 You need `python-telegram-bot`, NOT the `telegram` package.

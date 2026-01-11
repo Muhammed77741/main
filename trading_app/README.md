@@ -163,6 +163,8 @@ python main.py
 3. Enter Token and Chat ID in settings
 4. Enable notifications
 
+📱 **For detailed setup and troubleshooting, see [TELEGRAM_SETUP_GUIDE.md](../TELEGRAM_SETUP_GUIDE.md)**
+
 ---
 
 ## 📈 Monitoring

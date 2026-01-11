@@ -44,6 +44,22 @@ TELEGRAM_CHAT_ID=your_chat_id_here
 
 ### 4. Test the Connection
 
+**Quick Test:**
+```bash
+python test_telegram_setup.py YOUR_BOT_TOKEN YOUR_CHAT_ID
+```
+
+Or with `.env` file configured:
+```bash
+python test_telegram_setup.py
+```
+
+This will verify:
+- ✅ python-telegram-bot is installed correctly
+- ✅ Bot token is valid
+- ✅ Connection works
+- ✅ Messages can be sent
+
 **Command-Line:**
 ```bash
 python run_xauusd_bot.py --dry-run
