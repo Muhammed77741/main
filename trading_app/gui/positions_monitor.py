@@ -46,15 +46,27 @@ class PositionFetcherThread(QThread):
                 try:
                     if self.config.exchange == 'Binance':
                         import ccxt
+                        # Use public data (no credentials needed for ticker)
                         exchange = ccxt.binance({
                             'enableRateLimit': True,
                             'options': {'defaultType': 'future'}
                         })
                         ticker = exchange.fetch_ticker(self.config.symbol)
-                        current_price = ticker['last']
-                        print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
+                        current_price = ticker.get('last')
+                        if current_price:
+                            print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
+                    elif self.config.exchange == 'MT5':
+                        import MetaTrader5 as mt5
+                        if mt5.initialize():
+                            try:
+                                tick = mt5.symbol_info_tick(self.config.symbol)
+                                if tick:
+                                    current_price = tick.last
+                                    print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
+                            finally:
+                                mt5.shutdown()
                 except Exception as e:
-                    print(f"⚠️  Could not fetch current price: {e}")
+                    print(f"⚠️  Could not fetch current price for P&L: {e}")
                 
                 for trade in open_trades:
                     # Calculate unrealized P&L if we have current price
@@ -64,7 +76,7 @@ class PositionFetcherThread(QThread):
                     if current_price:
                         if trade.trade_type.upper() == 'BUY':
                             unrealized_pnl = (current_price - trade.entry_price) * trade.amount
-                        else:  # SELL
+                        elif trade.trade_type.upper() == 'SELL':
                             unrealized_pnl = (trade.entry_price - current_price) * trade.amount
                     
                     # Convert database trade record to position format
