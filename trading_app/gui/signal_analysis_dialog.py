@@ -1060,12 +1060,18 @@ class SignalAnalysisDialog(QDialog):
         self.trailing_pct_spin.setEnabled(state == 2)  # 2 = Qt.Checked
         
     def create_summary_section(self):
-        """Create summary section"""
+        """Create summary section - compact layout"""
         group = QGroupBox("Summary")
         layout = QVBoxLayout(group)
         
+        # Use more compact spacing
+        layout.setSpacing(2)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
         self.summary_label = QLabel("Run analysis to see summary")
         self.summary_label.setWordWrap(True)
+        # Set maximum height to prevent summary from taking too much space
+        self.summary_label.setMaximumHeight(120)
         layout.addWidget(self.summary_label)
         
         return group
@@ -1227,36 +1233,33 @@ class SignalAnalysisDialog(QDialog):
             gross_loss = abs(signals_df[signals_df['profit_pct'] < 0]['profit_pct'].sum())
             profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
             
-            summary_text = (
-                f"<b>Total Signals:</b> {total_signals}<br>"
-                f"<b>BUY Signals:</b> {buy_signals} 📈<br>"
-                f"<b>SELL Signals:</b> {sell_signals} 📉<br><br>"
-                f"<b>═══ P&L SUMMARY ═══</b><br>"
-                f"<b style='color: green;'>Wins:</b> {wins} ({win_rate:.1f}%)<br>"
-                f"<b style='color: red;'>Losses:</b> {losses}<br>"
-                f"<b>Other (Open/Timeout):</b> {other}<br><br>"
-            )
-            
-            if wins > 0:
-                summary_text += f"<b>Avg Win:</b> <span style='color: green;'>+{avg_win:.2f}%</span><br>"
-            if losses > 0:
-                summary_text += f"<b>Avg Loss:</b> <span style='color: red;'>{avg_loss:.2f}%</span><br>"
-            
-            if completed_trades > 0:
-                summary_text += f"<b>Expectancy:</b> {avg_pnl:+.2f}% per trade<br>"
-                
-            if profit_factor > 0:
-                pf_color = 'green' if profit_factor > 1 else 'red'
-                summary_text += f"<b>Profit Factor:</b> <span style='color: {pf_color};'>{profit_factor:.2f}</span><br>"
-            
             # Total P&L with color coding
             pnl_color = 'green' if total_profit_pct > 0 else 'red' if total_profit_pct < 0 else 'gray'
-            summary_text += f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-size: 14pt;'>{total_profit_pct:+.2f}%</span><br><br>"
             
-            # Add multi-TP statistics if enabled
+            # Compact summary - key metrics in horizontal layout
+            summary_text = (
+                f"<b>Signals:</b> {total_signals} (📈{buy_signals} / 📉{sell_signals})  |  "
+                f"<b style='color: green;'>Wins:</b> {wins} ({win_rate:.1f}%)  |  "
+                f"<b style='color: red;'>Losses:</b> {losses}  |  "
+                f"<b>PF:</b> <span style='color: {'green' if profit_factor > 1 else 'red'};'>{profit_factor:.2f}</span>  |  "
+                f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold;'>{total_profit_pct:+.2f}%</span><br>"
+            )
+            
+            # Second line with additional metrics
+            if wins > 0 or losses > 0:
+                summary_text += f"<b>Avg:</b> "
+                if wins > 0:
+                    summary_text += f"<span style='color: green;'>Win +{avg_win:.2f}%</span>"
+                if wins > 0 and losses > 0:
+                    summary_text += " / "
+                if losses > 0:
+                    summary_text += f"<span style='color: red;'>Loss {avg_loss:.2f}%</span>"
+                if completed_trades > 0:
+                    summary_text += f"  |  <b>Exp:</b> {avg_pnl:+.2f}%"
+                summary_text += "<br>"
+            
+            # Add multi-TP statistics if enabled (compact format)
             if 'tp_levels_hit' in signals_df.columns:
-                summary_text += f"<b>═══ MULTI-TP STATISTICS ═══</b><br>"
-                
                 # Calculate TP hit rates
                 tp1_hit = len(signals_df[signals_df['tp_levels_hit'].str.contains('TP1', na=False)])
                 tp2_hit = len(signals_df[signals_df['tp_levels_hit'].str.contains('TP2', na=False)])
@@ -1266,9 +1269,10 @@ class SignalAnalysisDialog(QDialog):
                 tp2_rate = (tp2_hit / total_signals * 100) if total_signals > 0 else 0
                 tp3_rate = (tp3_hit / total_signals * 100) if total_signals > 0 else 0
                 
-                summary_text += f"<b>TP1 Hit Rate:</b> {tp1_hit}/{total_signals} ({tp1_rate:.1f}%)<br>"
-                summary_text += f"<b>TP2 Hit Rate:</b> {tp2_hit}/{total_signals} ({tp2_rate:.1f}%)<br>"
-                summary_text += f"<b>TP3 Hit Rate:</b> {tp3_hit}/{total_signals} ({tp3_rate:.1f}%)<br>"
+                summary_text += (
+                    f"<b>Multi-TP:</b> "
+                    f"TP1 {tp1_rate:.0f}% | TP2 {tp2_rate:.0f}% | TP3 {tp3_rate:.0f}%"
+                )
                 
                 # Calculate average TPs hit per trade (for completed trades)
                 completed_signals = signals_df[signals_df['tp_levels_hit'] != 'None']
@@ -1278,25 +1282,23 @@ class SignalAnalysisDialog(QDialog):
                         if pd.notna(tp_str):
                             total_tps += str(tp_str).count('TP')
                     avg_tps = total_tps / len(completed_signals)
-                    summary_text += f"<b>Avg TPs Hit:</b> {avg_tps:.2f} per trade<br>"
+                    summary_text += f" | <b>Avg:</b> {avg_tps:.2f} TPs"
                 
                 summary_text += "<br>"
             
-            summary_text += f"<b>First Signal:</b> {first_signal.strftime('%Y-%m-%d %H:%M')}<br>"
-            summary_text += f"<b>Last Signal:</b> {last_signal.strftime('%Y-%m-%d %H:%M')}<br><br>"
+            # Date range and status (compact, single line)
+            summary_text += f"<small>{first_signal.strftime('%Y-%m-%d')} to {last_signal.strftime('%Y-%m-%d')}"
             
-            # Check last 2 days
+            # Check last 2 days - compact status
             two_days_ago = datetime.now() - timedelta(days=2)
             recent_signals = signals_df[signals_df.index >= two_days_ago]
             
             if len(recent_signals) > 0:
-                summary_text += f"<b>✅ Signals in last 2 days:</b> {len(recent_signals)}<br>"
-                summary_text += "<span style='color: green;'>Bot is generating signals normally!</span>"
+                summary_text += f" | ✅ Active ({len(recent_signals)} recent)"
             else:
                 days_since = (datetime.now() - last_signal).days
-                summary_text += f"<b>⚠️ No signals in last 2 days</b><br>"
-                summary_text += f"Last signal was {days_since} days ago<br>"
-                summary_text += "<span style='color: orange;'>Market may be in consolidation</span>"
+                summary_text += f" | ⚠️ Last: {days_since}d ago"
+            summary_text += "</small>"
         else:
             summary_text = "No signals found"
             
