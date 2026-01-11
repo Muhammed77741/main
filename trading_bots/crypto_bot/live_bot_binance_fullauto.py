@@ -107,12 +107,16 @@ class LiveBotBinanceFullAuto:
         if telegram_token and telegram_chat_id:
             try:
                 success, Bot, error_msg = check_telegram_bot_import()
-                if success:
-                    self.telegram_bot = Bot(token=telegram_token)
-                else:
+                if not success:
                     print(error_msg)
+                else:
+                    try:
+                        self.telegram_bot = Bot(token=telegram_token)
+                    except Exception as bot_error:
+                        print(f"⚠️  Failed to initialize Telegram bot: {bot_error}")
+                        print("     Check your bot token is valid.")
             except Exception as e:
-                print(f"⚠️  Telegram init failed: {e}")
+                print(f"⚠️  Unexpected error during Telegram initialization: {e}")
 
         # Exchange connection
         self.exchange = None
