@@ -35,7 +35,7 @@ class SignalAnalysisWorker(QThread):
     error = Signal(str)  # Error message
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
-                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50):
+                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h'):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -45,6 +45,7 @@ class SignalAnalysisWorker(QThread):
         self.sl_multiplier = sl_multiplier / 100.0  # Convert to decimal (100 -> 1.0)
         self.use_trailing = use_trailing
         self.trailing_pct = trailing_pct / 100.0  # Convert to decimal (50 -> 0.5)
+        self.timeframe = timeframe
         
     def run(self):
         """Run signal analysis in background"""
@@ -72,7 +73,7 @@ class SignalAnalysisWorker(QThread):
             all_candles = []
             
             while True:
-                candles = exchange.fetch_ohlcv(self.symbol, '1h', since=since, limit=1000)
+                candles = exchange.fetch_ohlcv(self.symbol, self.timeframe, since=since, limit=1000)
                 if not candles:
                     break
                 
@@ -360,6 +361,12 @@ class SignalAnalysisDialog(QDialog):
             self.symbol_combo.addItems(['BTC/USDT', 'ETH/USDT'])
         row1.addWidget(self.symbol_combo)
         
+        row1.addWidget(QLabel("  Timeframe:"))
+        self.timeframe_combo = QComboBox()
+        self.timeframe_combo.addItems(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'])
+        self.timeframe_combo.setCurrentText('1h')  # Default to 1h
+        row1.addWidget(self.timeframe_combo)
+        
         row1.addWidget(QLabel("  Days:"))
         self.days_spin = QSpinBox()
         self.days_spin.setRange(1, 365)
@@ -522,6 +529,7 @@ class SignalAnalysisDialog(QDialog):
             
         # Get parameters
         symbol = self.symbol_combo.currentText()
+        timeframe = self.timeframe_combo.currentText()
         days = self.days_spin.value()
         
         # Get date range
@@ -546,7 +554,7 @@ class SignalAnalysisDialog(QDialog):
         # Create and start worker
         self.worker = SignalAnalysisWorker(
             symbol, days, start, end,
-            tp_multiplier, sl_multiplier, use_trailing, trailing_pct
+            tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe
         )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)
