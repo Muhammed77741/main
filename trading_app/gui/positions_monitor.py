@@ -15,9 +15,10 @@ class PositionFetcherThread(QThread):
     positions_fetched = Signal(list)  # Signal with positions data
     error_occurred = Signal(str)  # Signal with error message
 
-    def __init__(self, config: BotConfig):
+    def __init__(self, config: BotConfig, db_manager=None):
         super().__init__()
         self.config = config
+        self.db_manager = db_manager
 
     def run(self):
         """Fetch positions in background thread"""
@@ -28,10 +29,60 @@ class PositionFetcherThread(QThread):
             self.error_occurred.emit(str(e))
 
     def _fetch_positions(self):
-        """Get open positions from exchange"""
+        """Get open positions from exchange or database (dry_run)"""
         positions = []
 
         try:
+            # Check if in dry_run mode - fetch from database instead
+            if self.config.dry_run and self.db_manager:
+                print(f"🧪 DRY RUN: Fetching positions from database for {self.config.symbol}...")
+                
+                open_trades = self.db_manager.get_open_trades(self.config.bot_id)
+                
+                print(f"📊 Found {len(open_trades)} open trades in database")
+                
+                # Try to get current price for P&L calculation
+                current_price = None
+                try:
+                    if self.config.exchange == 'Binance':
+                        import ccxt
+                        exchange = ccxt.binance({
+                            'enableRateLimit': True,
+                            'options': {'defaultType': 'future'}
+                        })
+                        ticker = exchange.fetch_ticker(self.config.symbol)
+                        current_price = ticker['last']
+                        print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
+                except Exception as e:
+                    print(f"⚠️  Could not fetch current price: {e}")
+                
+                for trade in open_trades:
+                    # Calculate unrealized P&L if we have current price
+                    mark_price = current_price if current_price else trade.entry_price
+                    unrealized_pnl = 0.0
+                    
+                    if current_price:
+                        if trade.trade_type.upper() == 'BUY':
+                            unrealized_pnl = (current_price - trade.entry_price) * trade.amount
+                        else:  # SELL
+                            unrealized_pnl = (trade.entry_price - current_price) * trade.amount
+                    
+                    # Convert database trade record to position format
+                    positions.append({
+                        'id': trade.order_id or f"DRY-{trade.trade_id}",
+                        'side': trade.trade_type.lower(),
+                        'contracts': trade.amount,
+                        'entryPrice': trade.entry_price,
+                        'markPrice': mark_price,
+                        'stopLoss': trade.stop_loss,
+                        'takeProfit': trade.take_profit,
+                        'unrealizedPnl': unrealized_pnl
+                    })
+                    print(f"   ✅ Loaded: {trade.trade_type} {trade.amount} @ ${trade.entry_price:.2f} | P&L: ${unrealized_pnl:+.2f}")
+                
+                return positions
+            
+            # Not dry_run - fetch from exchange
             if self.config.exchange == 'MT5':
                 import MetaTrader5 as mt5
 
@@ -122,9 +173,10 @@ class PositionFetcherThread(QThread):
 class PositionsMonitor(QDialog):
     """Monitor open positions"""
 
-    def __init__(self, config: BotConfig, parent=None):
+    def __init__(self, config: BotConfig, db_manager=None, parent=None):
         super().__init__(parent)
         self.config = config
+        self.db_manager = db_manager
         self.fetcher_thread = None
         self.is_fetching = False
         self.is_closing = False  # Flag to prevent operations during close
@@ -202,7 +254,7 @@ class PositionsMonitor(QDialog):
 
         # Start fetcher thread
         self.is_fetching = True
-        self.fetcher_thread = PositionFetcherThread(self.config)
+        self.fetcher_thread = PositionFetcherThread(self.config, self.db_manager)
         self.fetcher_thread.positions_fetched.connect(self._on_positions_fetched)
         self.fetcher_thread.error_occurred.connect(self._on_fetch_error)
         self.fetcher_thread.finished.connect(self._on_fetch_finished)

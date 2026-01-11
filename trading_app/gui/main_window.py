@@ -453,7 +453,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            dialog = PositionsMonitor(config, self)
+            dialog = PositionsMonitor(config, self.db, self)
             dialog.exec()
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to open positions monitor:\n{str(e)}')
