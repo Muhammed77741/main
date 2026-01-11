@@ -923,6 +923,34 @@ class LiveBotBinanceFullAuto:
         print(f"   RANGE Mode: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%")
         print(f"{'='*80}\n")
 
+        # Send startup notification to Telegram
+        if self.telegram_bot and self.telegram_chat_id:
+            startup_message = f"""
+🤖 <b>CRYPTO BOT STARTED</b>
+
+📊 <b>Configuration:</b>
+Symbol: {self.symbol}
+Timeframe: {self.timeframe}
+Strategy: V3 Adaptive (TREND/RANGE)
+Risk per trade: {self.risk_percent}%
+Max positions: {self.max_positions}
+Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}
+Exchange: {'TESTNET' if self.testnet else 'PRODUCTION'}
+
+🎯 <b>TP Levels:</b>
+TREND: {self.trend_tp1_pct}% / {self.trend_tp2_pct}% / {self.trend_tp3_pct}%
+RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
+
+⏰ <b>Started at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+✅ Bot is now active and monitoring the market!
+"""
+            try:
+                asyncio.run(self.send_telegram(startup_message))
+                print("📱 Startup notification sent to Telegram")
+            except Exception as e:
+                print(f"⚠️  Failed to send startup notification: {e}")
+
         # Wait until next hour before starting
         print("⏰ Bot will start checking at the next full hour...")
         self._wait_until_next_hour()
@@ -1030,6 +1058,26 @@ class LiveBotBinanceFullAuto:
                 print("   Remember to close them manually if needed.")
             else:
                 print("\n✅ No open positions")
+
+            # Send shutdown notification to Telegram
+            if self.telegram_bot and self.telegram_chat_id:
+                shutdown_message = f"""
+⏹️ <b>CRYPTO BOT STOPPED</b>
+
+📊 <b>Summary:</b>
+Symbol: {self.symbol}
+Total iterations: {iteration}
+Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+{"⚠️ <b>WARNING:</b> " + str(len(open_positions)) + " position(s) still open!" if len(open_positions) > 0 else "✅ No open positions"}
+
+🛑 Bot has been stopped by user.
+"""
+                try:
+                    asyncio.run(self.send_telegram(shutdown_message))
+                    print("📱 Shutdown notification sent to Telegram")
+                except Exception as e:
+                    print(f"⚠️  Failed to send shutdown notification: {e}")
 
             print(f"{'='*80}\n")
 
