@@ -479,24 +479,29 @@ class MainWindow(QMainWindow):
 
         config = self.bot_manager.get_config(self.current_bot_id)
         
-        # Only show for BTC/ETH bots (check both name and symbol)
+        # Check for supported bots: BTC/ETH (Binance) and XAUUSD/Gold (MT5)
         bot_name_upper = config.name.upper()
         symbol_upper = config.symbol.upper() if config.symbol else ''
         
-        is_btc_or_eth = (
+        is_supported = (
             'BTC' in bot_name_upper or 
             'ETH' in bot_name_upper or
             'BITCOIN' in bot_name_upper or 
             'ETHEREUM' in bot_name_upper or
+            'XAUUSD' in bot_name_upper or
+            'GOLD' in bot_name_upper or
+            'XAU' in bot_name_upper or
             'BTC' in symbol_upper or 
-            'ETH' in symbol_upper
+            'ETH' in symbol_upper or
+            'XAUUSD' in symbol_upper or
+            'XAU' in symbol_upper
         )
         
-        if not is_btc_or_eth:
+        if not is_supported:
             QMessageBox.information(
                 self,
                 "Not Available",
-                "Signal Analysis is currently available for BTC and ETH bots only."
+                "Signal Analysis is currently available for BTC, ETH, and XAUUSD bots only."
             )
             return
 
