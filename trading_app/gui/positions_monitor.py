@@ -35,23 +35,29 @@ class PositionFetcherThread(QThread):
             if self.config.exchange == 'MT5':
                 import MetaTrader5 as mt5
 
+                # Initialize MT5
                 if not mt5.initialize():
+                    print(f"⚠️  MT5 initialization failed: {mt5.last_error()}")
                     return positions
 
-                mt5_positions = mt5.positions_get(symbol=self.config.symbol)
+                try:
+                    mt5_positions = mt5.positions_get(symbol=self.config.symbol)
 
-                if mt5_positions:
-                    for pos in mt5_positions:
-                        positions.append({
-                            'id': pos.ticket,
-                            'side': 'buy' if pos.type == 0 else 'sell',
-                            'contracts': pos.volume,
-                            'entryPrice': pos.price_open,
-                            'markPrice': pos.price_current,
-                            'stopLoss': pos.sl,
-                            'takeProfit': pos.tp,
-                            'unrealizedPnl': pos.profit
-                        })
+                    if mt5_positions:
+                        for pos in mt5_positions:
+                            positions.append({
+                                'id': pos.ticket,
+                                'side': 'buy' if pos.type == 0 else 'sell',
+                                'contracts': pos.volume,
+                                'entryPrice': pos.price_open,
+                                'markPrice': pos.price_current,
+                                'stopLoss': pos.sl,
+                                'takeProfit': pos.tp,
+                                'unrealizedPnl': pos.profit
+                            })
+                finally:
+                    # Always shutdown MT5 to avoid resource leaks
+                    mt5.shutdown()
 
             elif self.config.exchange == 'Binance':
                 import ccxt
@@ -207,6 +213,8 @@ class PositionsMonitor(QDialog):
         # Skip if dialog is closing
         if self.is_closing:
             return
+        
+        print(f"📥 Positions fetched callback: {len(positions)} positions")
             
         try:
             # Clear table
@@ -214,8 +222,11 @@ class PositionsMonitor(QDialog):
 
             if not positions:
                 self.summary_label.setText("No open positions")
+                print("ℹ️  No positions to display")
                 return
 
+            print(f"📋 Displaying {len(positions)} positions in GUI...")
+            
             # Add positions to table
             total_pnl = 0.0
 
@@ -262,6 +273,8 @@ class PositionsMonitor(QDialog):
                 self.table.setItem(i, 7, pnl_item)
 
                 total_pnl += pnl
+                
+                print(f"   ✅ Row {i+1}: {pos_type} {amount:.4f} @ ${entry:.2f} | P&L: ${pnl:+.2f}")
 
             # Update summary
             summary_color = "green" if total_pnl >= 0 else "red"
@@ -269,10 +282,16 @@ class PositionsMonitor(QDialog):
                 f"<b>{len(positions)} position(s) | "
                 f"<span style='color: {summary_color};'>Total P&L: ${total_pnl:+.2f}</span></b>"
             )
+            
+            print(f"✅ GUI updated successfully with {len(positions)} positions")
 
         except Exception as e:
+            error_msg = f"Error displaying positions: {str(e)}"
+            print(f"❌ {error_msg}")
+            import traceback
+            traceback.print_exc()
             if not self.is_closing:
-                self.summary_label.setText(f"Error displaying positions: {str(e)}")
+                self.summary_label.setText(error_msg)
 
     def _on_fetch_error(self, error_msg):
         """Handle fetch error"""
