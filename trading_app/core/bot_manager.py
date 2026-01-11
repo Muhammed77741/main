@@ -77,7 +77,7 @@ class BotManager(QObject):
                 return False
 
         # Create bot thread
-        bot_thread = BotThread(config)
+        bot_thread = BotThread(config, self.db)
 
         # Connect signals
         bot_thread.log_signal.connect(lambda msg: self.bot_log.emit(bot_id, msg))
