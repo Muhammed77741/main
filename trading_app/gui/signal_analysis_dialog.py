@@ -250,6 +250,264 @@ class SignalAnalysisWorker(QThread):
             signals_df.loc[idx, 'bars_held'] = bars
 
 
+class SignalAnalysisWorkerMT5(QThread):
+    """Background worker for signal analysis using MetaTrader5"""
+    
+    progress = Signal(str)  # Progress message
+    finished = Signal(object)  # DataFrame with results
+    error = Signal(str)  # Error message
+    
+    def __init__(self, symbol, days, start_date=None, end_date=None, 
+                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h'):
+        super().__init__()
+        self.symbol = symbol
+        self.days = days
+        self.start_date = start_date
+        self.end_date = end_date
+        self.tp_multiplier = tp_multiplier / 100.0  # Convert to decimal (162 -> 1.62)
+        self.sl_multiplier = sl_multiplier / 100.0  # Convert to decimal (100 -> 1.0)
+        self.use_trailing = use_trailing
+        self.trailing_pct = trailing_pct / 100.0  # Convert to decimal (50 -> 0.5)
+        self.timeframe = timeframe
+        
+    def run(self):
+        """Run signal analysis in background using MT5"""
+        try:
+            # Try to import MetaTrader5
+            try:
+                import MetaTrader5 as mt5
+            except ImportError:
+                self.error.emit(
+                    "MetaTrader5 module not installed.\n\n"
+                    "Please install it with: pip install MetaTrader5\n\n"
+                    "Also ensure MetaTrader 5 terminal is installed and running."
+                )
+                return
+            
+            self.progress.emit(f"📊 Connecting to MetaTrader5 for {self.symbol}...")
+            
+            # Initialize MT5
+            if not mt5.initialize():
+                self.error.emit(
+                    "Failed to initialize MetaTrader5.\n\n"
+                    "Please ensure:\n"
+                    "  • MT5 terminal is running\n"
+                    "  • You are logged into your account\n"
+                    "  • No other instances are using MT5 API"
+                )
+                return
+            
+            try:
+                # Calculate time range
+                if self.start_date and self.end_date:
+                    start_time = datetime.combine(self.start_date, datetime.min.time())
+                    end_time = datetime.combine(self.end_date, datetime.max.time())
+                else:
+                    end_time = datetime.now()
+                    start_time = end_time - timedelta(days=self.days)
+                
+                self.progress.emit(f"   Period: {start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')}")
+                
+                # Convert timeframe to MT5 format
+                timeframe_map = {
+                    '1m': mt5.TIMEFRAME_M1,
+                    '5m': mt5.TIMEFRAME_M5,
+                    '15m': mt5.TIMEFRAME_M15,
+                    '30m': mt5.TIMEFRAME_M30,
+                    '1h': mt5.TIMEFRAME_H1,
+                    '4h': mt5.TIMEFRAME_H4,
+                    '1d': mt5.TIMEFRAME_D1,
+                    '1w': mt5.TIMEFRAME_W1,
+                }
+                mt5_timeframe = timeframe_map.get(self.timeframe, mt5.TIMEFRAME_H1)
+                
+                # Download data from MT5
+                rates = mt5.copy_rates_range(self.symbol, mt5_timeframe, start_time, end_time)
+                
+                if rates is None or len(rates) == 0:
+                    self.error.emit(
+                        f"No data received from MT5 for {self.symbol}.\n\n"
+                        f"Please ensure:\n"
+                        f"  • {self.symbol} is available in Market Watch\n"
+                        f"  • You have historical data for this period\n"
+                        f"  • The symbol name is correct"
+                    )
+                    return
+                
+                self.progress.emit(f"✅ Downloaded {len(rates)} candles from MT5")
+                
+                # Convert to DataFrame
+                df = pd.DataFrame(rates)
+                df['timestamp'] = pd.to_datetime(df['time'], unit='s')
+                df.set_index('timestamp', inplace=True)
+                
+                # Rename columns to match expected format
+                df.rename(columns={
+                    'open': 'open',
+                    'high': 'high',
+                    'low': 'low',
+                    'close': 'close',
+                    'tick_volume': 'volume'
+                }, inplace=True)
+                
+                # Select only needed columns
+                df = df[['open', 'high', 'low', 'close', 'volume']]
+                
+                self.progress.emit(f"🔍 Analyzing signals using PatternRecognitionStrategy...")
+                
+                # Initialize strategy (same as live bot)
+                strategy = PatternRecognitionStrategy(fib_mode='standard')
+                
+                # Run strategy
+                df_signals = strategy.run_strategy(df)
+                
+                # Find signals
+                signals_df = df_signals[df_signals['signal'] != 0].copy()
+                
+                self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals...")
+                
+                # Calculate outcomes for each signal (reuse the same logic)
+                self._calculate_signal_outcomes(signals_df, df_signals)
+                
+                self.progress.emit(f"✅ Analysis complete! Found {len(signals_df)} signals")
+                
+                # Return results
+                self.finished.emit(signals_df)
+                
+            finally:
+                # Always shutdown MT5
+                mt5.shutdown()
+                
+        except Exception as e:
+            self.error.emit(f"Error: {str(e)}")
+    
+    def _calculate_signal_outcomes(self, signals_df, full_df):
+        """
+        Calculate trade outcome for each signal
+        (Same logic as SignalAnalysisWorker - reusing the calculation method)
+        """
+        # Add outcome columns
+        signals_df['outcome'] = 'Unknown'
+        signals_df['profit_pct'] = 0.0
+        signals_df['bars_held'] = 0
+        
+        for idx, signal_row in signals_df.iterrows():
+            signal_type = signal_row['signal']
+            entry_price = signal_row['close']
+            original_stop_loss = signal_row.get('stop_loss', 0)
+            original_take_profit = signal_row.get('take_profit', 0)
+            
+            # Skip if SL or TP not set
+            if pd.isna(original_stop_loss) or pd.isna(original_take_profit) or original_stop_loss == 0 or original_take_profit == 0:
+                signals_df.loc[idx, 'outcome'] = 'No SL/TP'
+                continue
+            
+            # Apply custom multipliers
+            if signal_type == 1:  # BUY
+                risk = entry_price - original_stop_loss
+                stop_loss = entry_price - (risk * self.sl_multiplier)
+                take_profit = entry_price + (risk * self.tp_multiplier)
+            else:  # SELL
+                risk = original_stop_loss - entry_price
+                stop_loss = entry_price + (risk * self.sl_multiplier)
+                take_profit = entry_price - (risk * self.tp_multiplier)
+            
+            # Get future candles after this signal
+            future_candles = full_df[full_df.index > idx]
+            
+            if len(future_candles) == 0:
+                signals_df.loc[idx, 'outcome'] = 'No Data'
+                continue
+            
+            # Check each candle to see if TP or SL was hit
+            outcome = 'Open'
+            profit_pct = 0.0
+            bars = 0
+            trailing_active = False
+            trailing_stop = stop_loss
+            max_profit_price = entry_price
+            
+            for future_idx, future_candle in future_candles.iterrows():
+                bars += 1
+                
+                if signal_type == 1:  # BUY signal
+                    # Update trailing stop if enabled and in profit
+                    if self.use_trailing and future_candle['high'] >= take_profit:
+                        trailing_active = True
+                        # Track highest price
+                        if future_candle['high'] > max_profit_price:
+                            max_profit_price = future_candle['high']
+                            # Trail at configured % of profit
+                            profit_distance = max_profit_price - entry_price
+                            trailing_stop = entry_price + (profit_distance * self.trailing_pct)
+                    
+                    # Check if hit SL or trailing stop
+                    active_stop = trailing_stop if trailing_active else stop_loss
+                    if future_candle['low'] <= active_stop:
+                        outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
+                        profit_pct = ((active_stop - entry_price) / entry_price) * 100
+                        break
+                    # Check if hit TP (only if trailing not active)
+                    elif not trailing_active and future_candle['high'] >= take_profit:
+                        if self.use_trailing:
+                            # TP hit, activate trailing
+                            trailing_active = True
+                            max_profit_price = future_candle['high']
+                            profit_distance = max_profit_price - entry_price
+                            trailing_stop = entry_price + (profit_distance * self.trailing_pct)
+                        else:
+                            # No trailing, close at TP
+                            outcome = 'Win ✅'
+                            profit_pct = ((take_profit - entry_price) / entry_price) * 100
+                            break
+                        
+                elif signal_type == -1:  # SELL signal
+                    # Update trailing stop if enabled and in profit
+                    if self.use_trailing and future_candle['low'] <= take_profit:
+                        trailing_active = True
+                        # Track lowest price
+                        if future_candle['low'] < max_profit_price or max_profit_price == entry_price:
+                            max_profit_price = future_candle['low']
+                            # Trail at configured % of profit
+                            profit_distance = entry_price - max_profit_price
+                            trailing_stop = entry_price - (profit_distance * self.trailing_pct)
+                    
+                    # Check if hit SL or trailing stop
+                    active_stop = trailing_stop if trailing_active else stop_loss
+                    if future_candle['high'] >= active_stop:
+                        outcome = 'Loss ❌' if not trailing_active else 'Trailing Win ✅'
+                        profit_pct = ((entry_price - active_stop) / entry_price) * 100
+                        break
+                    # Check if hit TP (only if trailing not active)
+                    elif not trailing_active and future_candle['low'] <= take_profit:
+                        if self.use_trailing:
+                            # TP hit, activate trailing
+                            trailing_active = True
+                            max_profit_price = future_candle['low']
+                            profit_distance = entry_price - max_profit_price
+                            trailing_stop = entry_price - (profit_distance * self.trailing_pct)
+                        else:
+                            # No trailing, close at TP
+                            outcome = 'Win ✅'
+                            profit_pct = ((entry_price - take_profit) / entry_price) * 100
+                            break
+                        break
+                
+                # Limit check to 100 bars
+                if bars >= 100:
+                    outcome = 'Timeout'
+                    # Calculate current P&L at timeout
+                    current_price = future_candle['close']
+                    if signal_type == 1:
+                        profit_pct = ((current_price - entry_price) / entry_price) * 100
+                    else:
+                        profit_pct = ((entry_price - current_price) / entry_price) * 100
+                    break
+            
+            signals_df.loc[idx, 'outcome'] = outcome
+            signals_df.loc[idx, 'profit_pct'] = profit_pct
+            signals_df.loc[idx, 'bars_held'] = bars
+
 
 class SignalAnalysisDialog(QDialog):
     """Show backtest signal analysis"""
@@ -560,11 +818,21 @@ class SignalAnalysisDialog(QDialog):
         self.progress_label.setText("Starting analysis...")
         self.analyze_btn.setEnabled(False)
         
-        # Create and start worker
-        self.worker = SignalAnalysisWorker(
-            symbol, days, start, end,
-            tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe
-        )
+        # Create and start worker (use MT5 worker for XAUUSD, Binance worker for others)
+        is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+        
+        if is_xauusd:
+            # Use MT5 worker for XAUUSD
+            self.worker = SignalAnalysisWorkerMT5(
+                symbol, days, start, end,
+                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe
+            )
+        else:
+            # Use Binance worker for BTC/ETH
+            self.worker = SignalAnalysisWorker(
+                symbol, days, start, end,
+                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe
+            )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)
         self.worker.error.connect(self.on_analysis_error)
