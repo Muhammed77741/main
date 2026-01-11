@@ -20,6 +20,7 @@ import asyncio
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.pattern_recognition_strategy import PatternRecognitionStrategy
+from shared.telegram_helper import check_telegram_bot_import
 
 
 class LiveBotMT5FullAuto:
@@ -88,8 +89,11 @@ class LiveBotMT5FullAuto:
         self.telegram_bot = None
         if telegram_token and telegram_chat_id:
             try:
-                from telegram import Bot
-                self.telegram_bot = Bot(token=telegram_token)
+                success, Bot, error_msg = check_telegram_bot_import()
+                if success:
+                    self.telegram_bot = Bot(token=telegram_token)
+                else:
+                    print(error_msg)
             except Exception as e:
                 print(f"⚠️  Telegram init failed: {e}")
         
