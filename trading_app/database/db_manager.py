@@ -16,6 +16,13 @@ class DatabaseManager:
         self.conn = None
         self.init_database()
 
+    @staticmethod
+    def _parse_datetime(value) -> Optional[datetime]:
+        """Parse a datetime value from SQLite, handling both strings and None"""
+        if value is not None and isinstance(value, str):
+            return datetime.fromisoformat(value)
+        return value
+
     def init_database(self):
         """Initialize database with tables"""
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -215,15 +222,6 @@ class DatabaseManager:
         row = cursor.fetchone()
 
         if row:
-            # Parse datetime strings to datetime objects
-            last_signal_time = row['last_signal_time']
-            if last_signal_time is not None and isinstance(last_signal_time, str):
-                last_signal_time = datetime.fromisoformat(last_signal_time)
-            
-            last_update = row['last_update']
-            if last_update is not None and isinstance(last_update, str):
-                last_update = datetime.fromisoformat(last_update)
-            
             return BotStatus(
                 bot_id=row['bot_id'],
                 status=row['status'],
@@ -237,8 +235,8 @@ class DatabaseManager:
                 win_rate=row['win_rate'],
                 profit_factor=row['profit_factor'],
                 current_regime=row['current_regime'],
-                last_signal_time=last_signal_time,
-                last_update=last_update,
+                last_signal_time=self._parse_datetime(row['last_signal_time']),
+                last_update=self._parse_datetime(row['last_update']),
                 error_message=row['error_message']
             )
         return None
@@ -285,21 +283,12 @@ class DatabaseManager:
 
         trades = []
         for row in cursor.fetchall():
-            # Parse datetime strings to datetime objects
-            open_time = row['open_time']
-            if isinstance(open_time, str):
-                open_time = datetime.fromisoformat(open_time)
-            
-            close_time = row['close_time']
-            if close_time is not None and isinstance(close_time, str):
-                close_time = datetime.fromisoformat(close_time)
-            
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
                 order_id=row['order_id'],
-                open_time=open_time,
-                close_time=close_time,
+                open_time=self._parse_datetime(row['open_time']),
+                close_time=self._parse_datetime(row['close_time']),
                 duration_hours=row['duration_hours'],
                 trade_type=row['trade_type'],
                 amount=row['amount'],
@@ -327,21 +316,12 @@ class DatabaseManager:
 
         trades = []
         for row in cursor.fetchall():
-            # Parse datetime strings to datetime objects
-            open_time = row['open_time']
-            if isinstance(open_time, str):
-                open_time = datetime.fromisoformat(open_time)
-            
-            close_time = row['close_time']
-            if close_time is not None and isinstance(close_time, str):
-                close_time = datetime.fromisoformat(close_time)
-            
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
                 order_id=row['order_id'],
-                open_time=open_time,
-                close_time=close_time,
+                open_time=self._parse_datetime(row['open_time']),
+                close_time=self._parse_datetime(row['close_time']),
                 duration_hours=row['duration_hours'],
                 trade_type=row['trade_type'],
                 amount=row['amount'],
