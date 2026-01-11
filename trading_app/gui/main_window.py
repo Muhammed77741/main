@@ -479,8 +479,20 @@ class MainWindow(QMainWindow):
 
         config = self.bot_manager.get_config(self.current_bot_id)
         
-        # Only show for BTC/ETH bots
-        if 'BTC' not in config.name.upper() and 'ETH' not in config.name.upper():
+        # Only show for BTC/ETH bots (check both name and symbol)
+        bot_name_upper = config.name.upper()
+        symbol_upper = config.symbol.upper() if config.symbol else ''
+        
+        is_btc_or_eth = (
+            'BTC' in bot_name_upper or 
+            'ETH' in bot_name_upper or
+            'BITCOIN' in bot_name_upper or 
+            'ETHEREUM' in bot_name_upper or
+            'BTC' in symbol_upper or 
+            'ETH' in symbol_upper
+        )
+        
+        if not is_btc_or_eth:
             QMessageBox.information(
                 self,
                 "Not Available",
