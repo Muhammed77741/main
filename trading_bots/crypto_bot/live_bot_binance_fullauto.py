@@ -679,15 +679,27 @@ class LiveBotBinanceFullAuto:
             # Get minimum trade size
             markets = self.exchange.load_markets()
             
-            # Check if symbol exists in markets
+            # Try to find the correct symbol format
+            # Binance futures uses format like ETH/USDT:USDT
+            market_symbol = self.symbol
             if self.symbol not in markets:
-                print(f"⚠️ Symbol {self.symbol} not found in exchange markets")
-                print(f"   Available symbols: {', '.join(list(markets.keys())[:5])}...")
-                # Use default minimum for this asset type
-                min_amount = 0.001 if 'BTC' in self.symbol else 0.01
-            else:
-                market = markets[self.symbol]
+                # Try futures format: SYMBOL:USDT
+                futures_symbol = f"{self.symbol}:USDT"
+                if futures_symbol in markets:
+                    market_symbol = futures_symbol
+                else:
+                    print(f"⚠️ Symbol {self.symbol} not found in exchange markets")
+                    print(f"   Available symbols: {', '.join(list(markets.keys())[:5])}...")
+                    # Use default minimum for this asset type
+                    min_amount = 0.001 if 'BTC' in self.symbol else 0.01
+                    market_symbol = None
+            
+            if market_symbol and market_symbol in markets:
+                market = markets[market_symbol]
                 min_amount = market['limits']['amount']['min']
+            else:
+                # Fallback to defaults
+                min_amount = 0.001 if 'BTC' in self.symbol else 0.01
 
             # Round to market precision
             position_size = max(min_amount, position_size)
