@@ -215,6 +215,15 @@ class DatabaseManager:
         row = cursor.fetchone()
 
         if row:
+            # Parse datetime strings to datetime objects
+            last_signal_time = row['last_signal_time']
+            if isinstance(last_signal_time, str):
+                last_signal_time = datetime.fromisoformat(last_signal_time)
+            
+            last_update = row['last_update']
+            if isinstance(last_update, str):
+                last_update = datetime.fromisoformat(last_update)
+            
             return BotStatus(
                 bot_id=row['bot_id'],
                 status=row['status'],
@@ -228,8 +237,8 @@ class DatabaseManager:
                 win_rate=row['win_rate'],
                 profit_factor=row['profit_factor'],
                 current_regime=row['current_regime'],
-                last_signal_time=row['last_signal_time'],
-                last_update=row['last_update'],
+                last_signal_time=last_signal_time,
+                last_update=last_update,
                 error_message=row['error_message']
             )
         return None
@@ -276,12 +285,21 @@ class DatabaseManager:
 
         trades = []
         for row in cursor.fetchall():
+            # Parse datetime strings to datetime objects
+            open_time = row['open_time']
+            if isinstance(open_time, str):
+                open_time = datetime.fromisoformat(open_time)
+            
+            close_time = row['close_time']
+            if isinstance(close_time, str):
+                close_time = datetime.fromisoformat(close_time)
+            
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
                 order_id=row['order_id'],
-                open_time=row['open_time'],
-                close_time=row['close_time'],
+                open_time=open_time,
+                close_time=close_time,
                 duration_hours=row['duration_hours'],
                 trade_type=row['trade_type'],
                 amount=row['amount'],
@@ -309,12 +327,21 @@ class DatabaseManager:
 
         trades = []
         for row in cursor.fetchall():
+            # Parse datetime strings to datetime objects
+            open_time = row['open_time']
+            if isinstance(open_time, str):
+                open_time = datetime.fromisoformat(open_time)
+            
+            close_time = row['close_time']
+            if isinstance(close_time, str):
+                close_time = datetime.fromisoformat(close_time)
+            
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
                 order_id=row['order_id'],
-                open_time=row['open_time'],
-                close_time=row['close_time'],
+                open_time=open_time,
+                close_time=close_time,
                 duration_hours=row['duration_hours'],
                 trade_type=row['trade_type'],
                 amount=row['amount'],
