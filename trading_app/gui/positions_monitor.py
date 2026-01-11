@@ -2,8 +2,8 @@
 Positions Monitor - monitor open positions
 """
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem,
-    QPushButton, QLabel, QHeaderView
+    QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
+    QPushButton, QLabel, QHeaderView, QCheckBox
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from models import BotConfig
@@ -199,10 +199,10 @@ class PositionsMonitor(QDialog):
 
         self.init_ui()
 
-        # Auto-refresh timer
+        # Auto-refresh timer (30 seconds, disabled by default)
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_positions)
-        self.refresh_timer.start(5000)  # Refresh every 5 seconds
+        # Don't start automatically - user can enable via checkbox
 
         # Initial load
         self.refresh_positions()
@@ -245,15 +245,39 @@ class PositionsMonitor(QDialog):
         self.summary_label = QLabel("No positions")
         layout.addWidget(self.summary_label)
 
+        # Control buttons layout
+        controls_layout = QHBoxLayout()
+        
         # Refresh button
-        refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn = QPushButton("🔄 Refresh Now")
         refresh_btn.clicked.connect(self.refresh_positions)
-        layout.addWidget(refresh_btn)
+        controls_layout.addWidget(refresh_btn)
+        
+        # Auto-refresh checkbox
+        self.auto_refresh_checkbox = QCheckBox("Auto-refresh every 30s")
+        self.auto_refresh_checkbox.setChecked(False)
+        self.auto_refresh_checkbox.stateChanged.connect(self.toggle_auto_refresh)
+        controls_layout.addWidget(self.auto_refresh_checkbox)
+        
+        controls_layout.addStretch()
+        
+        layout.addLayout(controls_layout)
 
         # Close button
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
+
+    def toggle_auto_refresh(self, state):
+        """Toggle auto-refresh timer"""
+        if state == Qt.Checked:
+            # Enable auto-refresh every 30 seconds
+            self.refresh_timer.start(30000)  # 30 seconds
+            print("✅ Auto-refresh enabled (every 30 seconds)")
+        else:
+            # Disable auto-refresh
+            self.refresh_timer.stop()
+            print("⏸️  Auto-refresh disabled")
 
     def refresh_positions(self):
         """Refresh positions from exchange - non-blocking"""
