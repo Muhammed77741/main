@@ -298,6 +298,39 @@ class DatabaseManager:
 
         return trades
 
+    def get_open_trades(self, bot_id: str) -> List[TradeRecord]:
+        """Get currently open trades for a bot"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM trades
+            WHERE bot_id = ? AND status = 'OPEN'
+            ORDER BY open_time DESC
+        """, (bot_id,))
+
+        trades = []
+        for row in cursor.fetchall():
+            trades.append(TradeRecord(
+                trade_id=row['id'],
+                bot_id=row['bot_id'],
+                order_id=row['order_id'],
+                open_time=row['open_time'],
+                close_time=row['close_time'],
+                duration_hours=row['duration_hours'],
+                trade_type=row['trade_type'],
+                amount=row['amount'],
+                entry_price=row['entry_price'],
+                close_price=row['close_price'],
+                stop_loss=row['stop_loss'],
+                take_profit=row['take_profit'],
+                profit=row['profit'],
+                profit_percent=row['profit_percent'],
+                status=row['status'],
+                market_regime=row['market_regime'],
+                comment=row['comment']
+            ))
+
+        return trades
+
     def log(self, level: str, message: str, bot_id: str = None):
         """Add a log entry"""
         # Check if connection is still valid

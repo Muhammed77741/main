@@ -309,7 +309,7 @@ class MainWindow(QMainWindow):
             return
 
         # Check if widgets still exist
-        if not hasattr(self, 'status_display') or self.status_display is None:
+        if not hasattr(self, 'status_label') or self.status_label is None:
             return
 
         try:
@@ -447,9 +447,16 @@ class MainWindow(QMainWindow):
             return
 
         config = self.bot_manager.get_config(self.current_bot_id)
+        
+        if not config:
+            QMessageBox.warning(self, 'Error', 'Bot configuration not found.')
+            return
 
-        dialog = PositionsMonitor(config, self)
-        dialog.exec()
+        try:
+            dialog = PositionsMonitor(config, self.db, self)
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Failed to open positions monitor:\n{str(e)}')
 
     def show_statistics(self):
         """Show statistics dialog"""

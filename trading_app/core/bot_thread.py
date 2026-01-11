@@ -11,7 +11,7 @@ import traceback
 # Add trading_bots to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_bots'))
 
-from models import BotConfig, BotStatus
+from models import BotConfig, BotStatus, TradeRecord
 
 
 class BotThread(QThread):
@@ -22,9 +22,10 @@ class BotThread(QThread):
     status_signal = Signal(BotStatus)  # Status update
     error_signal = Signal(str)  # Error message
 
-    def __init__(self, config: BotConfig):
+    def __init__(self, config: BotConfig, db=None):
         super().__init__()
         self.config = config
+        self.db = db
         self.running = False
         self.bot = None
         self._stop_requested = False
@@ -149,6 +150,10 @@ class BotThread(QThread):
                     success = self.bot.open_position(signal)
                     if success:
                         self.log_signal.emit(f"[{self.config.bot_id}] Position opened")
+                        
+                        # Save DRY RUN trade to database
+                        if self.config.dry_run and self.db:
+                            self._save_dry_run_trade(signal)
 
                 # Wait until next check (1 hour or until stopped)
                 wait_time = 3600  # 1 hour
@@ -236,6 +241,52 @@ class BotThread(QThread):
             '1d': mt5.TIMEFRAME_D1,
         }
         return tf_map.get(tf_str.lower(), mt5.TIMEFRAME_H1)
+
+    def _save_dry_run_trade(self, signal):
+        """Save DRY RUN trade to database"""
+        try:
+            from datetime import datetime
+            
+            # Get current timestamp for consistency
+            now = datetime.now()
+            
+            # Calculate position size
+            if hasattr(self.bot, 'calculate_position_size'):
+                position_size = self.bot.calculate_position_size(signal['entry'], signal['sl'])
+            else:
+                # Fallback estimate
+                position_size = 0.01
+            
+            # Determine trade type
+            trade_type = 'BUY' if signal['direction'] == 1 else 'SELL'
+            
+            # Determine take profit (prefer TP2, fallback to TP, then 0)
+            take_profit = signal.get('tp2') or signal.get('tp') or 0
+            
+            # Create trade record
+            trade = TradeRecord(
+                trade_id=0,  # Will be assigned by database
+                bot_id=self.config.bot_id,
+                order_id=f"DRY-{now.strftime('%Y%m%d%H%M%S')}",
+                open_time=now,
+                trade_type=trade_type,
+                amount=position_size,
+                entry_price=signal['entry'],
+                stop_loss=signal['sl'],
+                take_profit=take_profit,
+                status='OPEN',
+                market_regime=signal.get('regime', 'UNKNOWN'),
+                comment='DRY RUN'
+            )
+            
+            # Save to database
+            self.db.add_trade(trade)
+            self.log_signal.emit(f"[{self.config.bot_id}] DRY RUN trade saved to database")
+            print(f"💾 Saved DRY RUN trade to database: {trade_type} {position_size} @ ${signal['entry']:.2f}")
+            
+        except Exception as e:
+            self.log_signal.emit(f"[{self.config.bot_id}] Warning: Could not save DRY RUN trade: {str(e)}")
+            print(f"⚠️  Could not save DRY RUN trade: {e}")
 
     def stop(self):
         """Request bot to stop"""
