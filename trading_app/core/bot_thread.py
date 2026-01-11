@@ -247,6 +247,9 @@ class BotThread(QThread):
         try:
             from datetime import datetime
             
+            # Get current timestamp for consistency
+            now = datetime.now()
+            
             # Calculate position size
             if hasattr(self.bot, 'calculate_position_size'):
                 position_size = self.bot.calculate_position_size(signal['entry'], signal['sl'])
@@ -257,17 +260,20 @@ class BotThread(QThread):
             # Determine trade type
             trade_type = 'BUY' if signal['direction'] == 1 else 'SELL'
             
+            # Determine take profit (prefer TP2, fallback to TP, then 0)
+            take_profit = signal.get('tp2') or signal.get('tp') or 0
+            
             # Create trade record
             trade = TradeRecord(
                 trade_id=0,  # Will be assigned by database
                 bot_id=self.config.bot_id,
-                order_id=f"DRY-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                open_time=datetime.now(),
+                order_id=f"DRY-{now.strftime('%Y%m%d%H%M%S')}",
+                open_time=now,
                 trade_type=trade_type,
                 amount=position_size,
                 entry_price=signal['entry'],
                 stop_loss=signal['sl'],
-                take_profit=signal.get('tp2', signal.get('tp', 0)),  # Use TP2 as primary target
+                take_profit=take_profit,
                 status='OPEN',
                 market_regime=signal.get('regime', 'UNKNOWN'),
                 comment='DRY RUN'
