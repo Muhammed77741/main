@@ -26,6 +26,13 @@ except ImportError as e:
     DEPENDENCIES_AVAILABLE = False
     IMPORT_ERROR = str(e)
 
+# Multi-TP Configuration Constants
+MULTI_TP_LEVELS = {
+    'TP1': {'ratio': 1.0, 'close_pct': 0.5, 'name': 'TP1'},      # 1R, close 50%
+    'TP2': {'ratio': 1.618, 'close_pct': 0.3, 'name': 'TP2'},    # 1.618R, close 30%
+    'TP3': {'ratio': 2.618, 'close_pct': 0.2, 'name': 'TP3'}     # 2.618R, close 20%
+}
+
 
 class SignalAnalysisWorker(QThread):
     """Background worker for signal analysis"""
@@ -1412,7 +1419,8 @@ class SignalAnalysisDialog(QDialog):
                 if tp_levels == 'TP1+TP2+TP3':
                     tp_levels_item.setForeground(Qt.darkGreen)
                 elif 'TP' in str(tp_levels):
-                    tp_levels_item.setForeground(Qt.darkYellow)
+                    # Use blue for better contrast than yellow
+                    tp_levels_item.setForeground(Qt.darkBlue)
                 self.results_table.setItem(row_idx, col_idx, tp_levels_item)
                 col_idx += 1
             
