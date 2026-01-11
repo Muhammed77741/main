@@ -121,6 +121,7 @@ class PositionsMonitor(QDialog):
         self.config = config
         self.fetcher_thread = None
         self.is_fetching = False
+        self.is_closing = False  # Flag to prevent operations during close
 
         self.setWindowTitle(f"Open Positions - {config.name}")
         self.setMinimumSize(1000, 600)  # Increased width for better column visibility
@@ -186,8 +187,8 @@ class PositionsMonitor(QDialog):
 
     def refresh_positions(self):
         """Refresh positions from exchange - non-blocking"""
-        # Skip if already fetching
-        if self.is_fetching:
+        # Skip if already fetching or closing
+        if self.is_fetching or self.is_closing:
             return
 
         # Show loading state
@@ -203,6 +204,10 @@ class PositionsMonitor(QDialog):
 
     def _on_positions_fetched(self, positions):
         """Handle positions data received from thread"""
+        # Skip if dialog is closing
+        if self.is_closing:
+            return
+            
         try:
             # Clear table
             self.table.setRowCount(0)
@@ -266,24 +271,52 @@ class PositionsMonitor(QDialog):
             )
 
         except Exception as e:
-            self.summary_label.setText(f"Error displaying positions: {str(e)}")
+            if not self.is_closing:
+                self.summary_label.setText(f"Error displaying positions: {str(e)}")
 
     def _on_fetch_error(self, error_msg):
         """Handle fetch error"""
-        self.summary_label.setText(f"❌ Error: {error_msg}")
+        if not self.is_closing:
+            self.summary_label.setText(f"❌ Error: {error_msg}")
 
     def _on_fetch_finished(self):
         """Handle thread finished"""
         self.is_fetching = False
+        # Disconnect signals to avoid memory leaks
+        if self.fetcher_thread:
+            try:
+                self.fetcher_thread.positions_fetched.disconnect()
+                self.fetcher_thread.error_occurred.disconnect()
+                self.fetcher_thread.finished.disconnect()
+            except:
+                pass  # Ignore if already disconnected
 
     def closeEvent(self, event):
         """Handle close event"""
+        # Set closing flag to prevent new operations
+        self.is_closing = True
+        
         # Stop refresh timer
-        self.refresh_timer.stop()
+        if hasattr(self, 'refresh_timer'):
+            self.refresh_timer.stop()
 
         # Stop fetcher thread if running
         if self.fetcher_thread and self.fetcher_thread.isRunning():
+            # Disconnect signals first to avoid callbacks during shutdown
+            try:
+                self.fetcher_thread.positions_fetched.disconnect()
+                self.fetcher_thread.error_occurred.disconnect()
+                self.fetcher_thread.finished.disconnect()
+            except:
+                pass  # Ignore if already disconnected
+            
+            # Request thread to quit
             self.fetcher_thread.quit()
-            self.fetcher_thread.wait(1000)  # Wait max 1 second
+            
+            # Wait for thread to finish (with timeout)
+            if not self.fetcher_thread.wait(2000):  # Wait max 2 seconds
+                # Force terminate if thread doesn't quit gracefully
+                self.fetcher_thread.terminate()
+                self.fetcher_thread.wait(1000)  # Wait for termination
 
         event.accept()

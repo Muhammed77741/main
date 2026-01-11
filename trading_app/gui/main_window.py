@@ -309,7 +309,7 @@ class MainWindow(QMainWindow):
             return
 
         # Check if widgets still exist
-        if not hasattr(self, 'status_display') or self.status_display is None:
+        if not hasattr(self, 'status_label') or self.status_label is None:
             return
 
         try:
