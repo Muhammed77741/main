@@ -49,6 +49,27 @@ cd trading_app
 pip install -r requirements.txt
 ```
 
+**⚠️ IMPORTANT - Telegram Package Issue:**
+
+If you get an error like `cannot import name 'Bot' from 'telegram'` when using Telegram notifications:
+
+**Fix:**
+```bash
+# Remove the wrong package
+pip uninstall telegram
+
+# Remove any existing python-telegram-bot
+pip uninstall python-telegram-bot
+
+# Install the correct package
+pip install python-telegram-bot>=20.0
+
+# Verify installation
+pip show python-telegram-bot
+```
+
+**Note:** You need `python-telegram-bot`, NOT the `telegram` package (version 0.0.1).
+
 ---
 
 ## 🎯 Quick Start
@@ -142,6 +163,8 @@ python main.py
 3. Enter Token and Chat ID in settings
 4. Enable notifications
 
+📱 **For detailed setup and troubleshooting, see [TELEGRAM_SETUP_GUIDE.md](../TELEGRAM_SETUP_GUIDE.md)**
+
 ---
 
 ## 📈 Monitoring
@@ -205,6 +228,21 @@ The app uses SQLite to store:
 ---
 
 ## 🛠️ Troubleshooting
+
+### Telegram Notifications Not Working
+
+**Error:** `cannot import name 'Bot' from 'telegram'`
+
+**Cause:** Wrong `telegram` package installed (version 0.0.1 instead of `python-telegram-bot`)
+
+**Solution:**
+```bash
+pip uninstall telegram
+pip uninstall python-telegram-bot
+pip install python-telegram-bot>=20.0
+```
+
+After fixing, restart the application and try enabling Telegram notifications again.
 
 ### Bot won't start
 

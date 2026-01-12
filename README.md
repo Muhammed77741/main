@@ -47,6 +47,29 @@ pip install -r trading_bots/crypto_bot/requirements.txt
 pip install -r trading_app/requirements.txt
 ```
 
+**⚠️ IMPORTANT - Telegram Package Issue:**
+
+If you get an error like `cannot import name 'Bot' from 'telegram'`, you have the wrong `telegram` package installed.
+
+**Fix:**
+```bash
+# Remove the wrong package
+pip uninstall telegram
+
+# Remove any existing python-telegram-bot
+pip uninstall python-telegram-bot
+
+# Install the correct package
+pip install python-telegram-bot>=20.0
+
+# Verify installation
+pip show python-telegram-bot
+```
+
+**Note:** You need `python-telegram-bot`, NOT the `telegram` package (version 0.0.1).
+
+📱 **For detailed Telegram setup instructions, see [TELEGRAM_SETUP_GUIDE.md](TELEGRAM_SETUP_GUIDE.md)**
+
 ### 3. Configure Environment
 
 Create `.env` file in project root:
@@ -108,6 +131,32 @@ The GUI allows you to:
 ## ⚠️ Disclaimer
 
 Trading involves significant risk. This software is provided as-is for educational purposes. Always test on demo/testnet accounts first. The developers are not responsible for any financial losses.
+
+## 🔧 Troubleshooting
+
+### Telegram Import Error
+
+**Error:** `cannot import name 'Bot' from 'telegram'`
+
+**Solution:**
+```bash
+pip uninstall telegram
+pip uninstall python-telegram-bot
+pip install python-telegram-bot>=20.0
+```
+
+**Test your setup:**
+```bash
+python test_telegram_setup.py
+```
+
+You need `python-telegram-bot`, NOT the `telegram` package.
+
+### Other Common Issues
+
+- **MT5 connection failed:** Make sure MetaTrader 5 is running and logged in
+- **Binance API error:** Check your API keys and permissions
+- **Module not found:** Make sure all dependencies are installed
 
 ---
 

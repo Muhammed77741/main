@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'trading_bots'))
 try:
     from dotenv import load_dotenv
     import ccxt
+    from shared.telegram_helper import check_telegram_bot_import
 except ImportError as e:
     print(f"❌ Missing dependency: {e}")
     print("\n📝 Please install required packages:")
@@ -218,8 +219,12 @@ def test_telegram_connection():
         return False
 
     try:
-        from telegram import Bot
         import asyncio
+        
+        success, Bot, error_msg = check_telegram_bot_import()
+        if not success:
+            print(error_msg)
+            return False
 
         async def test_bot():
             bot = Bot(token=telegram_token)

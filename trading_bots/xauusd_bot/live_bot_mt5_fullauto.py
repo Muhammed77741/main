@@ -20,6 +20,7 @@ import asyncio
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.pattern_recognition_strategy import PatternRecognitionStrategy
+from shared.telegram_helper import check_telegram_bot_import
 
 
 class LiveBotMT5FullAuto:
@@ -88,10 +89,17 @@ class LiveBotMT5FullAuto:
         self.telegram_bot = None
         if telegram_token and telegram_chat_id:
             try:
-                from telegram import Bot
-                self.telegram_bot = Bot(token=telegram_token)
+                success, Bot, error_msg = check_telegram_bot_import()
+                if not success:
+                    print(error_msg)
+                else:
+                    try:
+                        self.telegram_bot = Bot(token=telegram_token)
+                    except Exception as bot_error:
+                        print(f"⚠️  Failed to initialize Telegram bot: {bot_error}")
+                        print("     Check your bot token is valid.")
             except Exception as e:
-                print(f"⚠️  Telegram init failed: {e}")
+                print(f"⚠️  Unexpected error during Telegram initialization: {e}")
         
         self.mt5_connected = False
     
@@ -923,6 +931,33 @@ class LiveBotMT5FullAuto:
             print("   ⚠️  Monitor your account regularly")
             print("   ⚠️  Stop the bot with Ctrl+C\n")
         
+        # Send startup notification to Telegram
+        if self.telegram_bot and self.telegram_chat_id:
+            startup_message = f"""
+🤖 <b>BOT STARTED</b>
+
+📊 <b>Configuration:</b>
+Symbol: {self.symbol}
+Timeframe: H1
+Strategy: V3 Adaptive (TREND/RANGE)
+Risk per trade: {self.risk_percent}%
+Max positions: {self.max_positions}
+Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}
+
+🎯 <b>TP Levels:</b>
+TREND: {self.trend_tp1}p / {self.trend_tp2}p / {self.trend_tp3}p
+RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
+
+⏰ <b>Started at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+✅ Bot is now active and monitoring the market!
+"""
+            try:
+                asyncio.run(self.send_telegram(startup_message))
+                print("📱 Startup notification sent to Telegram")
+            except Exception as e:
+                print(f"⚠️  Failed to send startup notification: {e}")
+        
         # Wait until the next hour before starting
         print("⏰ Bot will start checking at the next full hour...")
         self._wait_until_next_hour()
@@ -1028,6 +1063,25 @@ class LiveBotMT5FullAuto:
                 print("   Remember to close them manually if needed.")
             else:
                 print("\n✅ No open positions")
+            
+            # Send shutdown notification to Telegram
+            if self.telegram_bot and self.telegram_chat_id:
+                shutdown_message = f"""
+⏹️ <b>BOT STOPPED</b>
+
+📊 <b>Summary:</b>
+Total iterations: {iteration}
+Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+{"⚠️ <b>WARNING:</b> " + str(len(open_positions)) + " position(s) still open!" if len(open_positions) > 0 else "✅ No open positions"}
+
+🛑 Bot has been stopped by user.
+"""
+                try:
+                    asyncio.run(self.send_telegram(shutdown_message))
+                    print("📱 Shutdown notification sent to Telegram")
+                except Exception as e:
+                    print(f"⚠️  Failed to send shutdown notification: {e}")
             
             # Generate trading report
             self.generate_report()
