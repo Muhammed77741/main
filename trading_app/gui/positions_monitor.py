@@ -14,17 +14,22 @@ class PositionFetcherThread(QThread):
 
     positions_fetched = Signal(list)  # Signal with positions data
     error_occurred = Signal(str)  # Signal with error message
+    current_price_fetched = Signal(float)  # Signal with current price
 
     def __init__(self, config: BotConfig, db_manager=None):
         super().__init__()
         self.config = config
         self.db_manager = db_manager
+        self.current_price = None
 
     def run(self):
         """Fetch positions in background thread"""
         try:
             positions = self._fetch_positions()
             self.positions_fetched.emit(positions)
+            # Emit current price if available
+            if self.current_price and self.current_price > 0:
+                self.current_price_fetched.emit(self.current_price)
         except Exception as e:
             self.error_occurred.emit(str(e))
 
@@ -53,20 +58,38 @@ class PositionFetcherThread(QThread):
                         })
                         ticker = exchange.fetch_ticker(self.config.symbol)
                         current_price = ticker.get('last')
-                        if current_price:
+                        if current_price and current_price > 0:
                             print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
+                        else:
+                            print(f"⚠️  Invalid price received: {current_price}")
                     elif self.config.exchange == 'MT5':
                         import MetaTrader5 as mt5
                         if mt5.initialize():
                             try:
                                 tick = mt5.symbol_info_tick(self.config.symbol)
-                                if tick:
+                                if tick and tick.last > 0:
                                     current_price = tick.last
                                     print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
+                                elif tick:
+                                    # Try bid/ask if last is not available
+                                    current_price = (tick.bid + tick.ask) / 2 if tick.bid > 0 and tick.ask > 0 else None
+                                    if current_price:
+                                        print(f"💰 Current {self.config.symbol} price: ${current_price:.2f} (from bid/ask)")
+                                    else:
+                                        print(f"⚠️  MT5 tick data invalid: last={tick.last}, bid={tick.bid}, ask={tick.ask}")
+                                else:
+                                    print(f"⚠️  MT5 symbol_info_tick returned None for {self.config.symbol}")
                             finally:
                                 mt5.shutdown()
+                        else:
+                            print(f"⚠️  MT5 initialization failed: {mt5.last_error()}")
                 except Exception as e:
                     print(f"⚠️  Could not fetch current price for P&L: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                # Store current price for signal emission
+                self.current_price = current_price
                 
                 for trade in open_trades:
                     # Calculate unrealized P&L if we have current price
@@ -192,6 +215,7 @@ class PositionsMonitor(QDialog):
         self.fetcher_thread = None
         self.is_fetching = False
         self.is_closing = False  # Flag to prevent operations during close
+        self.current_price = None  # Store current price
 
         self.setWindowTitle(f"Open Positions - {config.name}")
         self.setMinimumSize(1000, 600)  # Increased width for better column visibility
@@ -199,7 +223,7 @@ class PositionsMonitor(QDialog):
 
         self.init_ui()
 
-        # Auto-refresh timer (30 seconds, disabled by default)
+        # Auto-refresh timer (10 seconds as requested)
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_positions)
         # Don't start automatically - user can enable via checkbox
@@ -211,9 +235,14 @@ class PositionsMonitor(QDialog):
         """Initialize UI"""
         layout = QVBoxLayout(self)
 
-        # Info label
+        # Info label with symbol and current price
         self.info_label = QLabel(f"Monitoring positions for {self.config.symbol}")
         layout.addWidget(self.info_label)
+        
+        # Current price label (prominently displayed)
+        self.price_label = QLabel("💰 Current Price: Loading...")
+        self.price_label.setStyleSheet("font-size: 14pt; font-weight: bold; padding: 5px;")
+        layout.addWidget(self.price_label)
 
         # Positions table
         self.table = QTableWidget()
@@ -254,7 +283,7 @@ class PositionsMonitor(QDialog):
         controls_layout.addWidget(refresh_btn)
         
         # Auto-refresh checkbox
-        self.auto_refresh_checkbox = QCheckBox("Auto-refresh every 30s")
+        self.auto_refresh_checkbox = QCheckBox("Auto-refresh every 10s")
         self.auto_refresh_checkbox.setChecked(False)
         self.auto_refresh_checkbox.stateChanged.connect(self.toggle_auto_refresh)
         controls_layout.addWidget(self.auto_refresh_checkbox)
@@ -271,9 +300,9 @@ class PositionsMonitor(QDialog):
     def toggle_auto_refresh(self, state):
         """Toggle auto-refresh timer"""
         if state == Qt.Checked:
-            # Enable auto-refresh every 30 seconds
-            self.refresh_timer.start(30000)  # 30 seconds
-            print("✅ Auto-refresh enabled (every 30 seconds)")
+            # Enable auto-refresh every 10 seconds
+            self.refresh_timer.start(10000)  # 10 seconds
+            print("✅ Auto-refresh enabled (every 10 seconds)")
         else:
             # Disable auto-refresh
             self.refresh_timer.stop()
@@ -292,10 +321,21 @@ class PositionsMonitor(QDialog):
         self.is_fetching = True
         self.fetcher_thread = PositionFetcherThread(self.config, self.db_manager)
         self.fetcher_thread.positions_fetched.connect(self._on_positions_fetched)
+        self.fetcher_thread.current_price_fetched.connect(self._on_current_price_fetched)
         self.fetcher_thread.error_occurred.connect(self._on_fetch_error)
         self.fetcher_thread.finished.connect(self._on_fetch_finished)
         self.fetcher_thread.start()
 
+    def _on_current_price_fetched(self, price):
+        """Handle current price received from thread"""
+        if self.is_closing:
+            return
+        
+        self.current_price = price
+        # Update price label
+        self.price_label.setText(f"💰 Current {self.config.symbol} Price: ${price:.2f}")
+        self.price_label.setStyleSheet("font-size: 14pt; font-weight: bold; padding: 5px; color: blue;")
+    
     def _on_positions_fetched(self, positions):
         """Handle positions data received from thread"""
         # Skip if dialog is closing
@@ -366,8 +406,9 @@ class PositionsMonitor(QDialog):
 
             # Update summary
             summary_color = "green" if total_pnl >= 0 else "red"
+            price_display = f" | Price: ${self.current_price:.2f}" if self.current_price and self.current_price > 0 else ""
             self.summary_label.setText(
-                f"<b>{len(positions)} position(s) | "
+                f"<b>{len(positions)} position(s){price_display} | "
                 f"<span style='color: {summary_color};'>Total P&L: ${total_pnl:+.2f}</span></b>"
             )
             
@@ -393,6 +434,7 @@ class PositionsMonitor(QDialog):
         if self.fetcher_thread:
             try:
                 self.fetcher_thread.positions_fetched.disconnect()
+                self.fetcher_thread.current_price_fetched.disconnect()
                 self.fetcher_thread.error_occurred.disconnect()
                 self.fetcher_thread.finished.disconnect()
             except:
@@ -412,6 +454,7 @@ class PositionsMonitor(QDialog):
             # Disconnect signals first to avoid callbacks during shutdown
             try:
                 self.fetcher_thread.positions_fetched.disconnect()
+                self.fetcher_thread.current_price_fetched.disconnect()
                 self.fetcher_thread.error_occurred.disconnect()
                 self.fetcher_thread.finished.disconnect()
             except:
