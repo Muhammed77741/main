@@ -453,25 +453,25 @@ class LiveBotMT5FullAuto:
             elif 'TP3' in tracked_pos['comment']:
                 tp_level = 'TP3'
             
-            # Check if TP or SL is hit based on bar high/low
+            # Check if TP or SL is hit based on bar high/low OR current price
             tp_hit = False
             sl_hit = False
             
             if tracked_pos['type'] == 'BUY':
                 # For BUY: TP is above entry, SL is below entry
-                # Check if bar high reached TP
-                if bar_high and bar_high >= tp_target:
+                # Check if bar high reached TP OR current price is already at/past TP
+                if (bar_high and bar_high >= tp_target) or (current_price >= tp_target):
                     tp_hit = True
-                # Check if bar low reached SL
-                if bar_low and bar_low <= sl_target:
+                # Check if bar low reached SL OR current price is already at/past SL
+                if (bar_low and bar_low <= sl_target) or (current_price <= sl_target):
                     sl_hit = True
             else:  # SELL
                 # For SELL: TP is below entry, SL is above entry
-                # Check if bar low reached TP
-                if bar_low and bar_low <= tp_target:
+                # Check if bar low reached TP OR current price is already at/past TP
+                if (bar_low and bar_low <= tp_target) or (current_price <= tp_target):
                     tp_hit = True
-                # Check if bar high reached SL
-                if bar_high and bar_high >= sl_target:
+                # Check if bar high reached SL OR current price is already at/past SL
+                if (bar_high and bar_high >= sl_target) or (current_price >= sl_target):
                     sl_hit = True
             
             # If TP or SL is hit
