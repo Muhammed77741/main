@@ -330,6 +330,61 @@ class LiveBotMT5FullAuto:
         
         print(f"🎯 TP HIT LOGGED: Ticket={ticket}, Level={tp_level}, Price={current_price:.2f}, Pips={pips:.1f}")
     
+    def _sync_positions_with_exchange(self):
+        """Sync database positions with actual exchange positions
+        
+        Detects positions that were manually closed on exchange but still show as OPEN in database
+        """
+        if not self.use_database or not self.db or self.dry_run or not self.mt5_connected:
+            return
+        
+        try:
+            # Get all OPEN positions from database
+            db_trades = self.db.get_open_trades(self.bot_id)
+            if not db_trades:
+                return
+            
+            # Get current open positions from MT5
+            open_positions = mt5.positions_get(symbol=self.symbol)
+            mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+            
+            # Check each database position
+            for trade in db_trades:
+                try:
+                    ticket = int(trade.order_id)
+                except (ValueError, TypeError):
+                    continue
+                
+                # If position is in database but not on MT5, it was closed manually
+                if ticket not in mt5_position_tickets:
+                    print(f"📊 Position #{ticket} manually closed on MT5 - syncing database...")
+                    
+                    # Get current price for profit calculation
+                    tick = mt5.symbol_info_tick(self.symbol)
+                    if tick:
+                        close_price = tick.bid if trade.trade_type == 'BUY' else tick.ask
+                        
+                        # Calculate profit
+                        if trade.trade_type == 'BUY':
+                            profit = (close_price - trade.entry_price) * trade.amount
+                        else:
+                            profit = (trade.entry_price - close_price) * trade.amount
+                    else:
+                        close_price = trade.entry_price
+                        profit = 0.0
+                    
+                    # Log the close
+                    self._log_position_closed(
+                        ticket=ticket,
+                        close_price=close_price,
+                        profit=profit,
+                        status='CLOSED'
+                    )
+                    
+                    print(f"✅ Database synced for position #{ticket}")
+        except Exception as e:
+            print(f"⚠️  Error syncing positions with exchange: {e}")
+    
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
         
@@ -1233,6 +1288,9 @@ class LiveBotMT5FullAuto:
                 time.sleep(sleep_time)
                 elapsed += sleep_time
                 
+                # Sync positions with exchange first
+                self._sync_positions_with_exchange()
+                
                 # Check TP/SL levels in real-time
                 self._check_tp_sl_realtime()
                 
@@ -1324,6 +1382,9 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 
                 # Check current positions
                 open_positions = self.get_open_positions()
+                
+                # Sync positions with exchange first
+                self._sync_positions_with_exchange()
                 
                 # Check TP/SL levels in real-time
                 self._check_tp_sl_realtime()

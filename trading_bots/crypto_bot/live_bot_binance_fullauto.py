@@ -612,6 +612,61 @@ class LiveBotBinanceFullAuto:
         except Exception as e:
             print(f"⚠️  Error updating trailing stops: {e}")
     
+    def _sync_positions_with_exchange(self):
+        """Sync database positions with actual exchange positions
+        
+        Detects positions that were manually closed on exchange but still show as OPEN in database
+        """
+        if not self.use_database or not self.db or self.dry_run or not self.exchange_connected:
+            return
+        
+        try:
+            # Get all OPEN positions from database
+            db_trades = self.db.get_open_trades(self.bot_id)
+            if not db_trades:
+                return
+            
+            # Get current open positions from exchange
+            positions = self.exchange.fetch_positions([self.symbol])
+            exchange_order_ids = set()
+            for pos in positions:
+                if pos['contracts'] > 0:  # Position is open
+                    # Extract order ID from position info
+                    if 'info' in pos and 'positionId' in pos['info']:
+                        exchange_order_ids.add(str(pos['info']['positionId']))
+                    elif 'id' in pos:
+                        exchange_order_ids.add(str(pos['id']))
+            
+            # Check each database position
+            for trade in db_trades:
+                order_id = trade.order_id
+                
+                # If position is in database but not on exchange, it was closed manually
+                if order_id not in exchange_order_ids:
+                    print(f"📊 Position {order_id} manually closed on exchange - syncing database...")
+                    
+                    # Get current price for profit calculation
+                    ticker = self.exchange.fetch_ticker(self.symbol)
+                    close_price = ticker['last']
+                    
+                    # Calculate profit
+                    if trade.trade_type == 'BUY':
+                        profit = (close_price - trade.entry_price) * trade.amount
+                    else:
+                        profit = (trade.entry_price - close_price) * trade.amount
+                    
+                    # Log the close
+                    self._log_position_closed(
+                        order_id=order_id,
+                        close_price=close_price,
+                        profit=profit,
+                        status='CLOSED'
+                    )
+                    
+                    print(f"✅ Database synced for position {order_id}")
+        except Exception as e:
+            print(f"⚠️  Error syncing positions with exchange: {e}")
+    
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
         
@@ -1301,6 +1356,9 @@ class LiveBotBinanceFullAuto:
                 time.sleep(sleep_time)
                 elapsed += sleep_time
 
+                # Sync positions with exchange first
+                self._sync_positions_with_exchange()
+
                 # Check TP/SL levels in real-time
                 self._check_tp_sl_realtime()
 
@@ -1379,6 +1437,9 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
 
                 # Check current positions
                 open_positions = self.get_open_positions()
+                
+                # Sync positions with exchange first
+                self._sync_positions_with_exchange()
                 
                 # Check TP/SL levels in real-time
                 self._check_tp_sl_realtime()
