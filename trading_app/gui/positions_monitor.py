@@ -457,11 +457,6 @@ class PositionsMonitor(QDialog):
             if not exchange_positions:
                 # No exchange positions to close
                 pass
-            elif
-            # Close exchange positions normally
-            if not exchange_positions:
-                # No exchange positions to close
-                pass
             elif self.config.exchange == 'MT5':
                 import MetaTrader5 as mt5
                 
