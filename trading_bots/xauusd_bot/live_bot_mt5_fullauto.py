@@ -333,14 +333,15 @@ class LiveBotMT5FullAuto:
                 hit_type = tp_level if tp_hit else 'SL'
                 target_price = tp_target if tp_hit else sl_target
                 
-                # Mark as hit in tracker
-                tracked_pos['status'] = f'{hit_type}_HIT_DETECTED'
+                # Mark as being processed in tracker
+                tracked_pos['status'] = f'{hit_type}_PROCESSING'
                 tracked_pos['hit_time'] = datetime.now()
                 
                 # Log the hit
                 self._log_tp_hit(ticket, hit_type, current_price)
                 
                 # Close the position at current price
+                close_successful = False
                 if not self.dry_run:
                     try:
                         # Close position using MT5
@@ -366,18 +367,44 @@ class LiveBotMT5FullAuto:
                         
                         if result and result.retcode == mt5.TRADE_RETCODE_DONE:
                             print(f"✅ Position closed: Order #{result.order}")
+                            close_successful = True
                         else:
                             error_msg = result.comment if result else "No result"
                             print(f"❌ Failed to close position #{ticket}: {error_msg}")
+                            # Revert status back to OPEN if close failed
+                            tracked_pos['status'] = 'OPEN'
                     except Exception as e:
                         print(f"❌ Failed to close position #{ticket}: {e}")
+                        # Revert status back to OPEN if close failed
+                        tracked_pos['status'] = 'OPEN'
                 else:
                     print(f"🧪 DRY RUN: Would close position #{ticket} at ${current_price:.2f} ({hit_type} hit)")
+                    close_successful = True  # Simulate successful close in dry run
+                
+                # If close was successful, properly log the position as closed
+                if close_successful:
+                    # Calculate profit in pips
+                    if tracked_pos['type'] == 'BUY':
+                        pips = (current_price - tracked_pos['entry_price']) * 10
+                    else:
+                        pips = (tracked_pos['entry_price'] - current_price) * 10
+                    
+                    # Estimate profit in dollars (approximate)
+                    point_value = 100.0  # For XAUUSD, 1 lot = $100 per point
+                    profit = pips / 10 * tracked_pos['volume'] * point_value
+                    
+                    # Log position as closed with proper status
+                    self._log_position_closed(
+                        ticket=ticket,
+                        close_price=current_price,
+                        profit=profit,
+                        status=hit_type  # Status will be 'TP1', 'TP2', 'TP3', or 'SL'
+                    )
                 
                 # Send Telegram notification
-                if self.telegram_bot:
+                if self.telegram_bot and close_successful:
                     emoji = "🎯" if tp_hit else "🛑"
-                    message = f"{emoji} <b>{hit_type} HIT!</b>\n\n"
+                    message = f"{emoji} <b>{hit_type} HIT & CLOSED!</b>\n\n"
                     message += f"Ticket: #{ticket}\n"
                     message += f"Type: {tracked_pos['type']}\n"
                     message += f"Entry: ${tracked_pos['entry_price']:.2f}\n"
@@ -393,6 +420,7 @@ class LiveBotMT5FullAuto:
                     
                     sign = "+" if pips >= 0 else ""
                     message += f"Pips: {sign}{pips:.1f}\n"
+                    message += f"Status: CLOSED"
                     
                     try:
                         asyncio.run(self.send_telegram(message))
@@ -1093,6 +1121,13 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                     for i, pos in enumerate(open_positions, 1):
                         direction = "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT"
                         profit = pos.profit if pos.profit is not None else 0.0
+                        ticket = pos.ticket
+                        
+                        # Get status from tracker if available
+                        status = 'OPEN'
+                        if ticket in self.positions_tracker:
+                            status = self.positions_tracker[ticket].get('status', 'OPEN')
+                        
                         # Calculate profit percentage
                         profit_pct = 0.0
                         if pos.price_open and pos.price_open > 0:
@@ -1106,7 +1141,8 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                         
                         print(f"   Position #{i}: {direction} @ {pos.price_open:.2f}, "
                               f"SL={pos.sl:.2f}, TP={pos.tp:.2f}, "
-                              f"P&L: ${profit:.2f} ({profit_pct:+.2f}%)")
+                              f"P&L: ${profit:.2f} ({profit_pct:+.2f}%), "
+                              f"Status: {status}")
                 
                 # Analyze market
                 print(f"\n🔍 Analyzing market...")

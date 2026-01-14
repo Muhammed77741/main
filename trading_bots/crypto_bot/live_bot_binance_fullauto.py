@@ -609,14 +609,15 @@ class LiveBotBinanceFullAuto:
                     hit_type = 'TP' if tp_hit else 'SL'
                     target_price = tp_target if tp_hit else sl_target
                     
-                    # Mark as hit in tracker
-                    tracked_pos['status'] = f'{hit_type}_HIT_DETECTED'
+                    # Mark as being processed in tracker
+                    tracked_pos['status'] = f'{hit_type}_PROCESSING'
                     tracked_pos['hit_time'] = datetime.now()
                     
                     # Log the hit
                     self._log_tp_hit(order_id, hit_type, current_price)
                     
                     # Close the position at current price
+                    close_successful = False
                     if not self.dry_run:
                         try:
                             # Close position by placing opposite order
@@ -631,15 +632,37 @@ class LiveBotBinanceFullAuto:
                                 amount=amount
                             )
                             print(f"✅ Position closed: Order ID {close_order['id']}")
+                            close_successful = True
                         except Exception as e:
                             print(f"❌ Failed to close position {order_id}: {e}")
+                            # Revert status back to OPEN if close failed
+                            tracked_pos['status'] = 'OPEN'
                     else:
                         print(f"🧪 DRY RUN: Would close position {order_id} at ${current_price:.2f} ({hit_type} hit)")
+                        close_successful = True  # Simulate successful close in dry run
+                    
+                    # If close was successful, properly log the position as closed
+                    if close_successful:
+                        # Calculate profit
+                        if tracked_pos['type'] == 'BUY':
+                            profit_pct = ((current_price - tracked_pos['entry_price']) / tracked_pos['entry_price']) * 100
+                        else:
+                            profit_pct = ((tracked_pos['entry_price'] - current_price) / tracked_pos['entry_price']) * 100
+                        
+                        profit_usdt = profit_pct / 100 * tracked_pos['entry_price'] * tracked_pos['amount']
+                        
+                        # Log position as closed with proper status
+                        self._log_position_closed(
+                            order_id=order_id,
+                            close_price=current_price,
+                            profit=profit_usdt,
+                            status=hit_type  # Status will be 'TP' or 'SL'
+                        )
                     
                     # Send Telegram notification
-                    if self.telegram_bot:
+                    if self.telegram_bot and close_successful:
                         emoji = "🎯" if tp_hit else "🛑"
-                        message = f"{emoji} <b>{hit_type} HIT!</b>\n\n"
+                        message = f"{emoji} <b>{hit_type} HIT & CLOSED!</b>\n\n"
                         message += f"Order ID: {order_id}\n"
                         message += f"Symbol: {self.symbol}\n"
                         message += f"Type: {tracked_pos['type']}\n"
@@ -656,6 +679,7 @@ class LiveBotBinanceFullAuto:
                         
                         sign = "+" if profit_pct >= 0 else ""
                         message += f"Profit: {sign}{profit_pct:.2f}%\n"
+                        message += f"Status: CLOSED"
                         
                         try:
                             asyncio.run(self.send_telegram(message))
@@ -1175,6 +1199,12 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                         entry_price = pos.get('entryPrice', 0)
                         unrealized_pnl = pos.get('unrealizedPnl') if pos.get('unrealizedPnl') is not None else 0.0
                         mark_price = pos.get('markPrice', 0)
+                        order_id = str(pos.get('id', ''))
+                        
+                        # Get status from tracker if available
+                        status = 'OPEN'
+                        if order_id in self.positions_tracker:
+                            status = self.positions_tracker[order_id].get('status', 'OPEN')
                         
                         # Calculate profit percentage
                         profit_pct = 0.0
@@ -1186,7 +1216,8 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                         
                         print(f"   Position #{i}: {side.upper()} {contracts}, "
                               f"Entry=${entry_price:.2f}, Mark=${mark_price:.2f}, "
-                              f"P&L: ${unrealized_pnl:.2f} ({profit_pct:+.2f}%)")
+                              f"P&L: ${unrealized_pnl:.2f} ({profit_pct:+.2f}%), "
+                              f"Status: {status}")
 
                 # Check for closed positions
                 self._check_closed_positions()
