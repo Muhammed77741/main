@@ -206,11 +206,13 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
 
         # Title
-        title = QLabel("Trading Bots")
+        bot_count = len(self.bot_manager.get_all_bot_ids())
+        title = QLabel(f"🤖 Trading Bots ({bot_count} configured)")
         title_font = QFont()
-        title_font.setPointSize(14)
+        title_font.setPointSize(18)
         title_font.setBold(True)
         title.setFont(title_font)
+        title.setStyleSheet("color: #2196F3; padding: 5px 0px;")
         layout.addWidget(title)
 
         # Bot list
@@ -270,10 +272,6 @@ class MainWindow(QMainWindow):
         # Controls section
         controls_group = self.create_controls_section()
         layout.addWidget(controls_group)
-
-        # Active bots section
-        self.active_bots_group = self.create_active_bots_section()
-        layout.addWidget(self.active_bots_group)
 
         # Logs section
         logs_group = self.create_logs_section()
@@ -473,19 +471,7 @@ class MainWindow(QMainWindow):
 
         return group
 
-    def create_active_bots_section(self):
-        """Create active bots section"""
-        group = QGroupBox("Active Bots")
-        layout = QHBoxLayout(group)
 
-        # Active bots label
-        self.active_bots_label = QLabel("No bots running")
-        self.active_bots_label.setStyleSheet("font-weight: bold; color: #555;")
-        layout.addWidget(self.active_bots_label)
-
-        layout.addStretch()
-
-        return group
 
     def create_logs_section(self):
         """Create logs section"""
@@ -619,7 +605,7 @@ class MainWindow(QMainWindow):
                 return
             
             # Calculate total P&L
-            total_pnl = sum(trade.profit if trade.profit else 0.0 for trade in open_trades)
+            total_pnl = sum(trade.profit if trade.profit is not None else 0.0 for trade in open_trades)
             
             # Build HTML display
             positions_html = f"""
@@ -633,17 +619,23 @@ class MainWindow(QMainWindow):
             
             # Add each position
             for trade in open_trades[:5]:  # Show max 5 positions
+                # Get profit value, handle None
+                profit_value = trade.profit if trade.profit is not None else 0.0
+                
                 # Determine color based on profit
-                pnl_color = '#4CAF50' if (trade.profit or 0) >= 0 else '#F44336'
+                pnl_color = '#4CAF50' if profit_value >= 0 else '#F44336'
                 type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
                 
                 # Get current price (if available from trade data)
                 current_price = trade.close_price if trade.close_price else trade.entry_price
                 
+                # Get symbol
+                symbol = trade.symbol if hasattr(trade, 'symbol') and trade.symbol else 'N/A'
+                
                 positions_html += f"""
                 <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
                     <p style='margin: 2px 0;'>
-                        <b>{type_icon} {trade.symbol if hasattr(trade, 'symbol') else 'N/A'}</b> 
+                        <b>{type_icon} {symbol}</b> 
                         <span style='color: #666;'>{trade.trade_type}</span>
                     </p>
                     <p style='margin: 2px 0; font-size: 11px; color: #666;'>
@@ -651,7 +643,7 @@ class MainWindow(QMainWindow):
                     </p>
                     <p style='margin: 2px 0; font-size: 11px;'>
                         P&L: <span style='color: {pnl_color}; font-weight: bold;'>
-                        ${(trade.profit or 0):+,.2f}</span>
+                        ${profit_value:+,.2f}</span>
                     </p>
                 </div>
                 """
@@ -674,23 +666,7 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(not is_running)
         self.stop_btn.setEnabled(is_running)
 
-    def update_active_bots_display(self):
-        """Update active bots display"""
-        running_bots = []
 
-        for bot_id in self.bot_manager.get_all_bot_ids():
-            if self.bot_manager.is_bot_running(bot_id):
-                config = self.bot_manager.get_config(bot_id)
-                icon = self.get_bot_icon(bot_id)
-                running_bots.append(f"{icon} {config.name}")
-
-        if running_bots:
-            bots_text = ", ".join(running_bots)
-            self.active_bots_label.setText(f"🟢 Running: {bots_text}")
-            self.active_bots_label.setStyleSheet("font-weight: bold; color: green;")
-        else:
-            self.active_bots_label.setText("⚫ No bots running")
-            self.active_bots_label.setStyleSheet("font-weight: bold; color: #555;")
 
     def start_bot(self):
         """Start current bot"""
@@ -873,7 +849,6 @@ class MainWindow(QMainWindow):
     def on_bot_started(self, bot_id: str):
         """Handle bot started signal"""
         self.update_controls()
-        self.update_active_bots_display()
         self.refresh_bot_list()  # Refresh to show green indicator
         self.log(f"Bot {bot_id} started")
 
@@ -881,7 +856,6 @@ class MainWindow(QMainWindow):
         """Handle bot stopped signal"""
         self.update_controls()
         self.update_status_display()
-        self.update_active_bots_display()
         self.refresh_bot_list()  # Refresh to remove green indicator
         self.log(f"Bot {bot_id} stopped")
 
