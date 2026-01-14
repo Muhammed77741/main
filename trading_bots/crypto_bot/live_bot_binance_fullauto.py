@@ -1114,7 +1114,7 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                         side = pos.get('side', 'unknown')
                         contracts = pos.get('contracts', 0)
                         entry_price = pos.get('entryPrice', 0)
-                        unrealized_pnl = pos.get('unrealizedPnl', 0) or 0.0
+                        unrealized_pnl = pos.get('unrealizedPnl') if pos.get('unrealizedPnl') is not None else 0.0
                         mark_price = pos.get('markPrice', 0)
                         
                         # Calculate profit percentage
