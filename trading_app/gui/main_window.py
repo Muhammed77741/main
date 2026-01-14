@@ -259,13 +259,13 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
-        # Bot info section
-        self.info_group = self.create_info_section()
-        layout.addWidget(self.info_group)
+        # Combined info and status section (horizontal)
+        self.combined_info_status_group = self.create_combined_info_status_section()
+        layout.addWidget(self.combined_info_status_group)
 
-        # Status section
-        self.status_group = self.create_status_section()
-        layout.addWidget(self.status_group)
+        # Live open positions section
+        self.live_positions_group = self.create_live_positions_section()
+        layout.addWidget(self.live_positions_group)
 
         # Controls section
         controls_group = self.create_controls_section()
@@ -281,26 +281,73 @@ class MainWindow(QMainWindow):
 
         return panel
 
-    def create_info_section(self):
-        """Create bot info section"""
-        group = QGroupBox("Bot Information")
-        layout = QVBoxLayout(group)
-
+    def create_combined_info_status_section(self):
+        """Create combined bot info and status section (horizontal layout)"""
+        group = QGroupBox("Bot Information & Status")
+        main_layout = QHBoxLayout(group)
+        
+        # Left side: Bot Information
+        info_widget = QWidget()
+        info_layout = QVBoxLayout(info_widget)
+        info_layout.setContentsMargins(5, 5, 5, 5)
+        
+        info_title = QLabel("📋 Bot Configuration")
+        info_title_font = QFont()
+        info_title_font.setPointSize(11)
+        info_title_font.setBold(True)
+        info_title.setFont(info_title_font)
+        info_layout.addWidget(info_title)
+        
         self.info_label = QLabel("Select a bot from the list")
         self.info_label.setWordWrap(True)
-        layout.addWidget(self.info_label)
-
-        return group
-
-    def create_status_section(self):
-        """Create status section"""
-        group = QGroupBox("Status")
-        layout = QVBoxLayout(group)
-
+        info_layout.addWidget(self.info_label, 1)
+        
+        main_layout.addWidget(info_widget, 1)
+        
+        # Separator line
+        separator = QFrame()
+        separator.setFrameShape(QFrame.VLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("background-color: #E0E0E0;")
+        main_layout.addWidget(separator)
+        
+        # Right side: Status
+        status_widget = QWidget()
+        status_layout = QVBoxLayout(status_widget)
+        status_layout.setContentsMargins(5, 5, 5, 5)
+        
+        status_title = QLabel("📊 Live Status")
+        status_title_font = QFont()
+        status_title_font.setPointSize(11)
+        status_title_font.setBold(True)
+        status_title.setFont(status_title_font)
+        status_layout.addWidget(status_title)
+        
         self.status_label = QLabel("Status: Stopped")
         self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-
+        status_layout.addWidget(self.status_label, 1)
+        
+        main_layout.addWidget(status_widget, 1)
+        
+        return group
+    
+    def create_live_positions_section(self):
+        """Create live open positions section"""
+        group = QGroupBox("📊 Live Open Positions")
+        layout = QVBoxLayout(group)
+        
+        self.live_positions_label = QLabel("No open positions")
+        self.live_positions_label.setWordWrap(True)
+        self.live_positions_label.setStyleSheet("""
+            QLabel {
+                padding: 10px;
+                background-color: #F9F9F9;
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+            }
+        """)
+        layout.addWidget(self.live_positions_label)
+        
         return group
 
     def create_controls_section(self):
@@ -550,6 +597,75 @@ class MainWindow(QMainWindow):
             status_html += f"<p style='color: red;'><b>Error:</b> {status.error_message}</p>"
 
         self.status_label.setText(status_html)
+        
+        # Update live positions
+        self.update_live_positions_display()
+
+    def update_live_positions_display(self):
+        """Update live open positions display"""
+        if not hasattr(self, 'live_positions_label') or self.live_positions_label is None:
+            return
+            
+        if not self.current_bot_id:
+            self.live_positions_label.setText("No bot selected")
+            return
+        
+        try:
+            # Get open positions from database
+            open_trades = self.db.get_open_trades(self.current_bot_id)
+            
+            if not open_trades or len(open_trades) == 0:
+                self.live_positions_label.setText("<p style='color: #666; font-size: 12px;'>No open positions</p>")
+                return
+            
+            # Calculate total P&L
+            total_pnl = sum(trade.profit if trade.profit else 0.0 for trade in open_trades)
+            
+            # Build HTML display
+            positions_html = f"""
+            <div style='font-size: 12px;'>
+            <p style='font-weight: bold; font-size: 13px; margin-bottom: 8px;'>
+                {len(open_trades)} position{'s' if len(open_trades) != 1 else ''} open | 
+                Total P&L: <span style='color: {'#4CAF50' if total_pnl >= 0 else '#F44336'}; font-weight: bold;'>
+                ${total_pnl:+,.2f}</span>
+            </p>
+            """
+            
+            # Add each position
+            for trade in open_trades[:5]:  # Show max 5 positions
+                # Determine color based on profit
+                pnl_color = '#4CAF50' if (trade.profit or 0) >= 0 else '#F44336'
+                type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
+                
+                # Get current price (if available from trade data)
+                current_price = trade.close_price if trade.close_price else trade.entry_price
+                
+                positions_html += f"""
+                <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
+                    <p style='margin: 2px 0;'>
+                        <b>{type_icon} {trade.symbol if hasattr(trade, 'symbol') else 'N/A'}</b> 
+                        <span style='color: #666;'>{trade.trade_type}</span>
+                    </p>
+                    <p style='margin: 2px 0; font-size: 11px; color: #666;'>
+                        Entry: {trade.entry_price:,.4f} → Current: {current_price:,.4f}
+                    </p>
+                    <p style='margin: 2px 0; font-size: 11px;'>
+                        P&L: <span style='color: {pnl_color}; font-weight: bold;'>
+                        ${(trade.profit or 0):+,.2f}</span>
+                    </p>
+                </div>
+                """
+            
+            if len(open_trades) > 5:
+                positions_html += f"<p style='color: #666; font-size: 11px; margin-top: 5px;'>...and {len(open_trades) - 5} more</p>"
+            
+            positions_html += "</div>"
+            
+            self.live_positions_label.setText(positions_html)
+            
+        except Exception as e:
+            print(f"Error updating live positions: {e}")
+            self.live_positions_label.setText(f"<p style='color: #F44336;'>Error loading positions</p>")
 
     def update_controls(self):
         """Update control buttons based on bot state"""
