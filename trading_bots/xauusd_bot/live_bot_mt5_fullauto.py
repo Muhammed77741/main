@@ -1021,10 +1021,21 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 if len(open_positions) > 0:
                     for i, pos in enumerate(open_positions, 1):
                         direction = "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT"
-                        profit = pos.profit
+                        profit = pos.profit if pos.profit is not None else 0.0
+                        # Calculate profit percentage
+                        profit_pct = 0.0
+                        if pos.price_open and pos.price_open > 0:
+                            current_tick = mt5.symbol_info_tick(self.symbol)
+                            if current_tick:
+                                current_price = current_tick.bid if pos.type == mt5.ORDER_TYPE_BUY else current_tick.ask
+                                if pos.type == mt5.ORDER_TYPE_BUY:
+                                    profit_pct = ((current_price - pos.price_open) / pos.price_open) * 100
+                                else:
+                                    profit_pct = ((pos.price_open - current_price) / pos.price_open) * 100
+                        
                         print(f"   Position #{i}: {direction} @ {pos.price_open:.2f}, "
                               f"SL={pos.sl:.2f}, TP={pos.tp:.2f}, "
-                              f"P&L: ${profit:.2f}")
+                              f"P&L: ${profit:.2f} ({profit_pct:+.2f}%)")
                 
                 # Analyze market
                 print(f"\n🔍 Analyzing market...")

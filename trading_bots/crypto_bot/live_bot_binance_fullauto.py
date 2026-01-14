@@ -1117,10 +1117,20 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                         side = pos.get('side', 'unknown')
                         contracts = pos.get('contracts', 0)
                         entry_price = pos.get('entryPrice', 0)
-                        unrealized_pnl = pos.get('unrealizedPnl', 0)
+                        unrealized_pnl = pos.get('unrealizedPnl', 0) or 0.0
+                        mark_price = pos.get('markPrice', 0)
+                        
+                        # Calculate profit percentage
+                        profit_pct = 0.0
+                        if entry_price and entry_price > 0 and mark_price and mark_price > 0:
+                            if side.lower() == 'long':
+                                profit_pct = ((mark_price - entry_price) / entry_price) * 100
+                            elif side.lower() == 'short':
+                                profit_pct = ((entry_price - mark_price) / entry_price) * 100
+                        
                         print(f"   Position #{i}: {side.upper()} {contracts}, "
-                              f"Entry={entry_price:.2f}, "
-                              f"PnL: {unrealized_pnl:.2f} USDT")
+                              f"Entry=${entry_price:.2f}, Mark=${mark_price:.2f}, "
+                              f"P&L: ${unrealized_pnl:.2f} ({profit_pct:+.2f}%)")
 
                 # Check for closed positions
                 self._check_closed_positions()
