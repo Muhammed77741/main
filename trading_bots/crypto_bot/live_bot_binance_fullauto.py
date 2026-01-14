@@ -664,9 +664,16 @@ class LiveBotBinanceFullAuto:
             if not positions_to_check:
                 return
             
-            # Get current open positions from exchange
-            open_positions = self.get_open_positions()
-            exchange_position_ids = set(str(pos.get('id', '')) for pos in open_positions) if open_positions else set()
+            # Get current open positions from exchange (skip if dry_run)
+            open_positions = []
+            exchange_position_ids = set()
+            
+            if not self.dry_run:
+                open_positions = self.get_open_positions()
+                exchange_position_ids = set(str(pos.get('id', '')) for pos in open_positions) if open_positions else set()
+            else:
+                # In dry_run mode, all database positions are "valid"
+                exchange_position_ids = set(positions_to_check.keys())
             
             # Get current bar data to check high/low
             try:
@@ -690,8 +697,8 @@ class LiveBotBinanceFullAuto:
                 if tracked_pos.get('status') not in ['OPEN']:
                     continue
                 
-                # Check if position is still on exchange
-                if order_id not in exchange_position_ids:
+                # Check if position is still on exchange (skip check if dry_run)
+                if not self.dry_run and order_id not in exchange_position_ids:
                     # Position closed on exchange but still in DB as OPEN
                     # This means exchange TP/SL triggered it or manual close
                     print(f"📊 Position {order_id} closed on exchange but DB shows OPEN - syncing...")
@@ -706,15 +713,28 @@ class LiveBotBinanceFullAuto:
                         )
                     continue
                 
-                # Find the position data from exchange
-                position = next((p for p in open_positions if str(p.get('id', '')) == order_id), None)
-                if not position:
-                    continue
-                
                 # Get current price
-                current_price = float(position.get('markPrice', 0))
-                if not current_price:
-                    continue
+                current_price = None
+                if not self.dry_run:
+                    # Find the position data from exchange
+                    position = next((p for p in open_positions if str(p.get('id', '')) == order_id), None)
+                    if not position:
+                        continue
+                    
+                    current_price = float(position.get('markPrice', 0))
+                    if not current_price:
+                        continue
+                else:
+                    # In dry_run mode, get current price from ticker
+                    try:
+                        ticker = self.exchange.fetch_ticker(self.symbol)
+                        current_price = ticker.get('last', 0)
+                        if not current_price:
+                            print(f"⚠️  Could not get current price for dry_run position {order_id}")
+                            continue
+                    except Exception as e:
+                        print(f"⚠️  Error getting current price for dry_run: {e}")
+                        continue
                 
                 # Read TP/SL from tracked position (database columns or in-memory)
                 tp_target = tracked_pos['tp']

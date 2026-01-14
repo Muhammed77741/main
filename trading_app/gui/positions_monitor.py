@@ -371,7 +371,98 @@ class PositionsMonitor(QDialog):
         errors = []
         
         try:
-            if self.config.exchange == 'MT5':
+            # Check if positions are dry_run positions (start with "DRY-")
+            dry_run_positions = [p for p in selected_positions if p['order_id'].startswith('DRY-')]
+            exchange_positions = [p for p in selected_positions if not p['order_id'].startswith('DRY-')]
+            
+            # Close dry_run positions in database only
+            if dry_run_positions and self.config.dry_run and self.db_manager:
+                print(f"🧪 DRY RUN: Closing {len(dry_run_positions)} positions in database...")
+                for pos in dry_run_positions:
+                    try:
+                        # Find position in database by order_id
+                        open_trades = self.db_manager.get_open_trades(self.config.bot_id)
+                        matching_trade = None
+                        for trade in open_trades:
+                            if trade.order_id == pos['order_id']:
+                                matching_trade = trade
+                                break
+                        
+                        if not matching_trade:
+                            errors.append(f"DRY position {pos['order_id']} not found in database")
+                            error_count += 1
+                            continue
+                        
+                        # Get current price for P&L calculation
+                        current_price = None
+                        try:
+                            if self.config.exchange == 'Binance':
+                                import ccxt
+                                exchange = ccxt.binance({
+                                    'enableRateLimit': True,
+                                    'options': {'defaultType': 'future'}
+                                })
+                                ticker = exchange.fetch_ticker(self.config.symbol)
+                                current_price = ticker.get('last')
+                            elif self.config.exchange == 'MT5':
+                                import MetaTrader5 as mt5
+                                if mt5.initialize():
+                                    try:
+                                        tick = mt5.symbol_info_tick(self.config.symbol)
+                                        if tick:
+                                            current_price = tick.last if tick.last > 0 else (tick.bid + tick.ask) / 2
+                                    finally:
+                                        mt5.shutdown()
+                        except:
+                            current_price = matching_trade.entry_price  # Fallback to entry price
+                        
+                        if not current_price or current_price <= 0:
+                            current_price = matching_trade.entry_price
+                        
+                        # Calculate profit
+                        if matching_trade.trade_type.upper() == 'BUY':
+                            profit = (current_price - matching_trade.entry_price) * matching_trade.amount
+                        else:
+                            profit = (matching_trade.entry_price - current_price) * matching_trade.amount
+                        
+                        profit_percent = (profit / (matching_trade.entry_price * matching_trade.amount)) * 100 if matching_trade.entry_price > 0 else 0
+                        
+                        # Update trade in database
+                        from datetime import datetime
+                        matching_trade.close_time = datetime.now()
+                        matching_trade.close_price = current_price
+                        matching_trade.profit = profit
+                        matching_trade.profit_percent = profit_percent
+                        matching_trade.status = 'CLOSED'
+                        matching_trade.comment = (matching_trade.comment or '') + ' | Manual close from GUI'
+                        
+                        self.db_manager.update_trade(matching_trade)
+                        
+                        print(f"✅ DRY RUN: Closed position {pos['order_id']} in database (P&L: ${profit:+.2f})")
+                        success_count += 1
+                    
+                    except Exception as e:
+                        errors.append(f"DRY position {pos['order_id']}: {str(e)}")
+                        error_count += 1
+                        import traceback
+                        traceback.print_exc()
+            
+            # If no database manager but there are dry_run positions, show error
+            elif dry_run_positions and not self.db_manager:
+                for pos in dry_run_positions:
+                    errors.append(f"DRY position {pos['order_id']}: No database manager available")
+                    error_count += len(dry_run_positions)
+            
+            # Close exchange positions normally
+            if not exchange_positions:
+                # No exchange positions to close
+                pass
+            elif
+            # Close exchange positions normally
+            if not exchange_positions:
+                # No exchange positions to close
+                pass
+            elif self.config.exchange == 'MT5':
                 import MetaTrader5 as mt5
                 
                 if not mt5.initialize():
@@ -383,7 +474,7 @@ class PositionsMonitor(QDialog):
                     return
                 
                 try:
-                    for pos in selected_positions:
+                    for pos in exchange_positions:
                         try:
                             ticket = int(pos['order_id'])
                             
@@ -440,7 +531,7 @@ class PositionsMonitor(QDialog):
                 finally:
                     mt5.shutdown()
             
-            elif self.config.exchange == 'Binance':
+            elif self.config.exchange == 'Binance' and exchange_positions:
                 import ccxt
                 
                 # Create exchange instance
@@ -471,7 +562,7 @@ class PositionsMonitor(QDialog):
                         }
                     })
                 
-                for pos in selected_positions:
+                for pos in exchange_positions:
                     try:
                         # Close position by placing opposite order
                         # Binance requires us to fetch current position and close with market order
@@ -515,7 +606,7 @@ class PositionsMonitor(QDialog):
                         errors.append(f"Position {pos['order_id']}: {str(e)}")
                         error_count += 1
             
-            else:
+            elif exchange_positions:
                 QMessageBox.critical(
                     self,
                     "Error",

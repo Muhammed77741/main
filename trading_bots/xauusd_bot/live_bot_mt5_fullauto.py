@@ -387,9 +387,16 @@ class LiveBotMT5FullAuto:
         if not positions_to_check:
             return
         
-        # Get current open positions from MT5
-        open_positions = mt5.positions_get(symbol=self.symbol)
-        mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+        # Get current open positions from MT5 (skip if dry_run)
+        open_positions = []
+        mt5_position_tickets = set()
+        
+        if not self.dry_run:
+            open_positions = mt5.positions_get(symbol=self.symbol)
+            mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+        else:
+            # In dry_run mode, all database positions are "valid" (use string tickets)
+            mt5_position_tickets = set(positions_to_check.keys())
         
         # Get current bar data to check high/low
         try:
@@ -412,8 +419,8 @@ class LiveBotMT5FullAuto:
             if tracked_pos.get('status') not in ['OPEN']:
                 continue
             
-            # Check if position is still on MT5
-            if ticket not in mt5_position_tickets:
+            # Check if position is still on MT5 (skip check if dry_run)
+            if not self.dry_run and ticket not in mt5_position_tickets:
                 # Position closed on MT5 but still in DB as OPEN
                 print(f"📊 Position #{ticket} closed on MT5 but DB shows OPEN - syncing...")
                 if ticket in self.positions_tracker:
@@ -426,19 +433,37 @@ class LiveBotMT5FullAuto:
                     )
                 continue
             
-            # Find the position data from MT5
-            position = next((p for p in open_positions if p.ticket == ticket), None)
-            if not position:
-                continue
-            
             # Get current price
-            tick = mt5.symbol_info_tick(self.symbol)
-            if not tick:
-                continue
-            
-            # Use appropriate price based on position type
-            # For BUY: close at bid (sell price), For SELL: close at ask (buy price)
-            current_price = tick.bid if tracked_pos['type'] == 'BUY' else tick.ask
+            current_price = None
+            if not self.dry_run:
+                # Find the position data from MT5
+                position = next((p for p in open_positions if p.ticket == ticket), None)
+                if not position:
+                    continue
+                
+                # Get current price
+                tick = mt5.symbol_info_tick(self.symbol)
+                if not tick:
+                    continue
+                
+                # Use appropriate price based on position type
+                # For BUY: close at bid (sell price), For SELL: close at ask (buy price)
+                current_price = tick.bid if tracked_pos['type'] == 'BUY' else tick.ask
+            else:
+                # In dry_run mode, get current price from ticker
+                try:
+                    tick = mt5.symbol_info_tick(self.symbol)
+                    if tick:
+                        current_price = tick.bid if tracked_pos['type'] == 'BUY' else tick.ask
+                        if not current_price or current_price <= 0:
+                            print(f"⚠️  Could not get valid current price for dry_run position {ticket}")
+                            continue
+                    else:
+                        print(f"⚠️  Could not get tick data for dry_run position {ticket}")
+                        continue
+                except Exception as e:
+                    print(f"⚠️  Error getting current price for dry_run: {e}")
+                    continue
             
             # Read TP/SL from tracked position (database columns or in-memory)
             tp_target = tracked_pos['tp']
