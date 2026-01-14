@@ -206,8 +206,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
 
         # Title
-        bot_count = len(self.bot_manager.get_all_bot_ids())
-        title = QLabel(f"🤖 Trading Bots ({bot_count} configured)")
+        title = QLabel("🤖 Trading Bots")
         title_font = QFont()
         title_font.setPointSize(18)
         title_font.setBold(True)
