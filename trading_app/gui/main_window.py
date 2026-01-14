@@ -610,6 +610,7 @@ class MainWindow(QMainWindow):
             current_price = None
             
             # Fetch current price from exchange (same logic as positions monitor)
+            # In dry_run mode, use public ticker API (no authentication needed)
             try:
                 if config.exchange == 'Binance':
                     import ccxt
@@ -621,22 +622,32 @@ class MainWindow(QMainWindow):
                     current_price = ticker.get('last')
                 elif config.exchange == 'MT5':
                     import MetaTrader5 as mt5
-                    if mt5.initialize():
-                        tick = mt5.symbol_info_tick(config.symbol)
-                        if tick:
-                            current_price = tick.last if tick.last > 0 else (tick.bid + tick.ask) / 2 if tick.bid > 0 and tick.ask > 0 else None
-                        mt5.shutdown()
+                    # MT5 requires initialization, but dry_run may not have real MT5 connection
+                    if config.dry_run:
+                        # For dry_run, try to get last known price or use entry price
+                        # Can't fetch from MT5 in dry_run mode without real connection
+                        pass  # Will fall back to database profit below
+                    else:
+                        if mt5.initialize():
+                            tick = mt5.symbol_info_tick(config.symbol)
+                            if tick:
+                                current_price = tick.last if tick.last > 0 else (tick.bid + tick.ask) / 2 if tick.bid > 0 and tick.ask > 0 else None
+                            mt5.shutdown()
             except Exception as e:
                 print(f"Error fetching current price: {e}")
             
-            # Calculate total P&L with current price
+            # Calculate total P&L with current price or database profit
             total_pnl = 0.0
             for trade in open_trades:
+                # Try to use current price if available, otherwise use database profit
                 if current_price and current_price > 0:
                     direction = 1 if trade.trade_type == 'BUY' else -1
                     profit = (current_price - trade.entry_price) * trade.amount * direction
+                elif trade.profit is not None:
+                    # Use database profit (important for dry_run mode)
+                    profit = trade.profit
                 else:
-                    profit = trade.profit if trade.profit is not None else 0.0
+                    profit = 0.0
                 total_pnl += profit
             
             # Build HTML display
@@ -651,19 +662,27 @@ class MainWindow(QMainWindow):
             
             # Add each position
             for trade in open_trades[:5]:  # Show max 5 positions
-                # Calculate profit with current price (same as positions monitor)
+                # Calculate profit with current price or use database profit
                 if current_price and current_price > 0:
                     direction = 1 if trade.trade_type == 'BUY' else -1
                     profit_value = (current_price - trade.entry_price) * trade.amount * direction
+                elif trade.profit is not None:
+                    # Use database profit (important for dry_run mode where we can't fetch live price)
+                    profit_value = trade.profit
                 else:
-                    profit_value = trade.profit if trade.profit is not None else 0.0
+                    profit_value = 0.0
                 
                 # Determine color based on profit
                 pnl_color = '#4CAF50' if profit_value >= 0 else '#F44336'
                 type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
                 
-                # Use fetched current price or fallback
-                display_current_price = current_price if current_price and current_price > 0 else trade.entry_price
+                # Use fetched current price or fallback to close_price or entry
+                if current_price and current_price > 0:
+                    display_current_price = current_price
+                elif trade.close_price and trade.close_price > 0:
+                    display_current_price = trade.close_price
+                else:
+                    display_current_price = trade.entry_price
                 
                 # Get symbol
                 symbol = trade.symbol if hasattr(trade, 'symbol') and trade.symbol else config.symbol

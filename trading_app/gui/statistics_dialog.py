@@ -122,18 +122,63 @@ class StatisticsDialog(QDialog):
         history_group = self.create_history_section()
         layout.addWidget(history_group, 1)
 
-        # Buttons
+        # Buttons with explicit styling to ensure visibility
         button_layout = QHBoxLayout()
 
         export_btn = QPushButton("Export CSV")
+        export_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
         export_btn.clicked.connect(self.export_csv)
         button_layout.addWidget(export_btn)
 
         refresh_btn = QPushButton("Refresh")
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
         refresh_btn.clicked.connect(self.load_statistics)
         button_layout.addWidget(refresh_btn)
 
         close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #757575;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #616161;
+            }
+        """)
         close_btn.clicked.connect(self.accept)
         button_layout.addWidget(close_btn)
 
