@@ -4,10 +4,10 @@ Main Window - main GUI window for the trading app
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QPlainTextEdit, QListWidget, QListWidgetItem,
-    QGroupBox, QMessageBox, QSplitter, QApplication
+    QGroupBox, QMessageBox, QSplitter, QApplication, QFrame, QGridLayout
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont, QIcon, QColor
 from core import BotManager
 from database import DatabaseManager
 from models import BotConfig, BotStatus
@@ -54,11 +54,128 @@ class MainWindow(QMainWindow):
         # Select first bot
         if self.bot_manager.get_all_bot_ids():
             self.select_bot(self.bot_manager.get_all_bot_ids()[0])
+    
+    def get_modern_stylesheet(self):
+        """Return modern stylesheet for the application"""
+        return """
+            QMainWindow {
+                background-color: #F5F5F5;
+            }
+            QWidget {
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+            QGroupBox {
+                border: 2px solid #E0E0E0;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 20px;
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-bottom: 15px;
+                font-weight: bold;
+                font-size: 13px;
+                background-color: white;
+                color: #333;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 5px 10px;
+                color: #2196F3;
+            }
+            QPushButton {
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 600;
+                min-height: 45px;
+                font-size: 13px;
+                color: white;
+            }
+            QPushButton:hover {
+                opacity: 0.9;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            }
+            QPushButton:pressed {
+                transform: translateY(1px);
+            }
+            QPushButton:disabled {
+                background-color: #CCCCCC;
+                color: #999999;
+            }
+            QListWidget {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                background-color: white;
+                padding: 5px;
+            }
+            QListWidget::item {
+                border-radius: 4px;
+                padding: 8px;
+                margin: 2px;
+            }
+            QListWidget::item:hover {
+                background-color: #E3F2FD;
+            }
+            QListWidget::item:selected {
+                background-color: #2196F3;
+                color: white;
+            }
+            QPlainTextEdit {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                background-color: #FAFAFA;
+                padding: 8px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 11px;
+            }
+            QLabel {
+                color: #555;
+            }
+            QTableWidget {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                background-color: white;
+                gridline-color: #F0F0F0;
+            }
+            QTableWidget::item {
+                padding: 8px;
+            }
+            QTableWidget::item:selected {
+                background-color: #E3F2FD;
+                color: #333;
+            }
+            QHeaderView::section {
+                background-color: #2196F3;
+                color: white;
+                padding: 10px;
+                border: none;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QComboBox {
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+                padding: 6px;
+                background-color: white;
+                min-height: 30px;
+            }
+            QComboBox:hover {
+                border-color: #2196F3;
+            }
+            QComboBox::drop-down {
+                border: none;
+                padding-right: 10px;
+            }
+        """
 
     def init_ui(self):
         """Initialize user interface"""
         self.setWindowTitle("Trading Bot Manager")
         self.setGeometry(100, 100, 1400, 900)
+        
+        # Apply modern styling
+        self.setStyleSheet(self.get_modern_stylesheet())
 
         # Central widget
         central_widget = QWidget()
@@ -122,6 +239,16 @@ class MainWindow(QMainWindow):
 
         # Refresh button
         refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                min-height: 40px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
         refresh_btn.clicked.connect(self.refresh_bot_list)
         layout.addWidget(refresh_btn)
 
@@ -183,45 +310,118 @@ class MainWindow(QMainWindow):
 
         # Start button
         self.start_btn = QPushButton("▶ Start Bot")
+        self.start_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45A049;
+            }
+            QPushButton:disabled {
+                background-color: #CCCCCC;
+            }
+        """)
         self.start_btn.clicked.connect(self.start_bot)
-        self.start_btn.setMinimumHeight(40)
+        self.start_btn.setMinimumHeight(50)
         layout.addWidget(self.start_btn)
 
         # Stop button
         self.stop_btn = QPushButton("⏹ Stop Bot")
+        self.stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+            QPushButton:disabled {
+                background-color: #CCCCCC;
+            }
+        """)
         self.stop_btn.clicked.connect(self.stop_bot)
-        self.stop_btn.setMinimumHeight(40)
+        self.stop_btn.setMinimumHeight(50)
         self.stop_btn.setEnabled(False)
         layout.addWidget(self.stop_btn)
 
         # Settings button
         settings_btn = QPushButton("⚙ Settings")
+        settings_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
         settings_btn.clicked.connect(self.show_settings)
-        settings_btn.setMinimumHeight(40)
+        settings_btn.setMinimumHeight(50)
         layout.addWidget(settings_btn)
 
         # Positions button
         positions_btn = QPushButton("📊 Positions")
+        positions_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9C27B0;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #7B1FA2;
+            }
+        """)
         positions_btn.clicked.connect(self.show_positions)
-        positions_btn.setMinimumHeight(40)
+        positions_btn.setMinimumHeight(50)
         layout.addWidget(positions_btn)
 
         # Statistics button
         stats_btn = QPushButton("📈 Statistics")
+        stats_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+        """)
         stats_btn.clicked.connect(self.show_statistics)
-        stats_btn.setMinimumHeight(40)
+        stats_btn.setMinimumHeight(50)
         layout.addWidget(stats_btn)
 
         # TP Hits button
         tp_hits_btn = QPushButton("🎯 TP Hits")
+        tp_hits_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #00BCD4;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #0097A7;
+            }
+        """)
         tp_hits_btn.clicked.connect(self.show_tp_hits)
-        tp_hits_btn.setMinimumHeight(40)
+        tp_hits_btn.setMinimumHeight(50)
         layout.addWidget(tp_hits_btn)
 
         # Signal Analysis button (Backtest)
         signal_analysis_btn = QPushButton("🔍 Signal Analysis")
+        signal_analysis_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #607D8B;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #455A64;
+            }
+        """)
         signal_analysis_btn.clicked.connect(self.show_signal_analysis)
-        signal_analysis_btn.setMinimumHeight(40)
+        signal_analysis_btn.setMinimumHeight(50)
         layout.addWidget(signal_analysis_btn)
 
         return group
