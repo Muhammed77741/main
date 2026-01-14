@@ -666,8 +666,7 @@ class LiveBotBinanceFullAuto:
             
             # Get current open positions from exchange
             open_positions = self.get_open_positions()
-            if not open_positions:
-                return
+            exchange_position_ids = set(str(pos.get('id', '')) for pos in open_positions) if open_positions else set()
             
             # Get current bar data to check high/low
             try:
@@ -685,15 +684,32 @@ class LiveBotBinanceFullAuto:
                 bar_high = None
                 bar_low = None
             
-            for position in open_positions:
-                # Get position details
-                order_id = str(position.get('id', ''))
-                
-                # Skip if not in our positions to check
-                if order_id not in positions_to_check:
+            # Check each tracked position
+            for order_id, tracked_pos in list(positions_to_check.items()):
+                # Skip if already processing or closed
+                if tracked_pos.get('status') not in ['OPEN']:
                     continue
                 
-                tracked_pos = positions_to_check[order_id]
+                # Check if position is still on exchange
+                if order_id not in exchange_position_ids:
+                    # Position closed on exchange but still in DB as OPEN
+                    # This means exchange TP/SL triggered it or manual close
+                    print(f"📊 Position {order_id} closed on exchange but DB shows OPEN - syncing...")
+                    # We can't determine exact close price, so mark as CLOSED
+                    if order_id in self.positions_tracker:
+                        # Try to close it properly
+                        self._log_position_closed(
+                            order_id=order_id,
+                            close_price=tracked_pos['entry_price'],  # Unknown close price
+                            profit=0.0,  # Unknown profit
+                            status='CLOSED'
+                        )
+                    continue
+                
+                # Find the position data from exchange
+                position = next((p for p in open_positions if str(p.get('id', '')) == order_id), None)
+                if not position:
+                    continue
                 
                 # Get current price
                 current_price = float(position.get('markPrice', 0))
@@ -726,14 +742,40 @@ class LiveBotBinanceFullAuto:
                     if bar_high and bar_high >= sl_target:
                         sl_hit = True
                 
-                # If TP or SL is hit and we haven't processed it yet
-                if (tp_hit or sl_hit) and tracked_pos.get('status') == 'OPEN':
+                # If TP or SL is hit
+                if tp_hit or sl_hit:
                     hit_type = 'TP' if tp_hit else 'SL'
                     target_price = tp_target if tp_hit else sl_target
                     
-                    # Mark as being processed in tracker
-                    tracked_pos['status'] = f'{hit_type}_PROCESSING'
-                    tracked_pos['hit_time'] = datetime.now()
+                    # Update status in both tracker and database immediately
+                    processing_status = f'{hit_type}_PROCESSING'
+                    tracked_pos['status'] = processing_status
+                    if order_id in self.positions_tracker:
+                        self.positions_tracker[order_id]['status'] = processing_status
+                    
+                    # Update status in database immediately to prevent re-processing
+                    if self.use_database and self.db:
+                        try:
+                            sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                            from models.trade_record import TradeRecord
+                            temp_trade = TradeRecord(
+                                trade_id=0,
+                                bot_id=self.bot_id,
+                                order_id=str(order_id),
+                                open_time=tracked_pos['open_time'],
+                                trade_type=tracked_pos['type'],
+                                amount=tracked_pos['amount'],
+                                entry_price=tracked_pos['entry_price'],
+                                stop_loss=tracked_pos['sl'],
+                                take_profit=tracked_pos['tp'],
+                                status=processing_status,
+                                market_regime=tracked_pos['regime'],
+                                comment=tracked_pos['comment']
+                            )
+                            self.db.update_trade(temp_trade)
+                            print(f"📊 Updated position {order_id} status to {processing_status} in database")
+                        except Exception as e:
+                            print(f"⚠️  Failed to update status in database: {e}")
                     
                     # Log the hit
                     self._log_tp_hit(order_id, hit_type, current_price)
@@ -759,6 +801,15 @@ class LiveBotBinanceFullAuto:
                             print(f"❌ Failed to close position {order_id}: {e}")
                             # Revert status back to OPEN if close failed
                             tracked_pos['status'] = 'OPEN'
+                            if order_id in self.positions_tracker:
+                                self.positions_tracker[order_id]['status'] = 'OPEN'
+                            # Revert in database too
+                            if self.use_database and self.db:
+                                try:
+                                    temp_trade.status = 'OPEN'
+                                    self.db.update_trade(temp_trade)
+                                except:
+                                    pass
                     else:
                         print(f"🧪 DRY RUN: Would close position {order_id} at ${current_price:.2f} ({hit_type} hit)")
                         close_successful = True  # Simulate successful close in dry run

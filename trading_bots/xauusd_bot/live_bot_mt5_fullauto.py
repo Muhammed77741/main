@@ -353,7 +353,7 @@ class LiveBotMT5FullAuto:
                     # Convert order_id (stored as string) back to int for MT5 ticket
                     try:
                         ticket = int(trade.order_id)
-                    except:
+                    except (ValueError, TypeError):
                         ticket = trade.order_id
                     
                     positions_to_check[ticket] = {
@@ -389,8 +389,7 @@ class LiveBotMT5FullAuto:
         
         # Get current open positions from MT5
         open_positions = mt5.positions_get(symbol=self.symbol)
-        if not open_positions:
-            return
+        mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
         
         # Get current bar data to check high/low
         try:
@@ -407,14 +406,30 @@ class LiveBotMT5FullAuto:
             bar_high = None
             bar_low = None
         
-        for position in open_positions:
-            ticket = position.ticket
-            
-            # Skip if not in our positions to check
-            if ticket not in positions_to_check:
+        # Check each tracked position
+        for ticket, tracked_pos in list(positions_to_check.items()):
+            # Skip if already processing or closed
+            if tracked_pos.get('status') not in ['OPEN']:
                 continue
             
-            tracked_pos = positions_to_check[ticket]
+            # Check if position is still on MT5
+            if ticket not in mt5_position_tickets:
+                # Position closed on MT5 but still in DB as OPEN
+                print(f"📊 Position #{ticket} closed on MT5 but DB shows OPEN - syncing...")
+                if ticket in self.positions_tracker:
+                    # Try to close it properly
+                    self._log_position_closed(
+                        ticket=ticket,
+                        close_price=tracked_pos['entry_price'],  # Unknown close price
+                        profit=0.0,  # Unknown profit
+                        status='CLOSED'
+                    )
+                continue
+            
+            # Find the position data from MT5
+            position = next((p for p in open_positions if p.ticket == ticket), None)
+            if not position:
+                continue
             
             # Get current price
             tick = mt5.symbol_info_tick(self.symbol)
@@ -459,14 +474,40 @@ class LiveBotMT5FullAuto:
                 if bar_high and bar_high >= sl_target:
                     sl_hit = True
             
-            # If TP or SL is hit and we haven't logged it yet
-            if (tp_hit or sl_hit) and tracked_pos.get('status') == 'OPEN':
+            # If TP or SL is hit
+            if tp_hit or sl_hit:
                 hit_type = tp_level if tp_hit else 'SL'
                 target_price = tp_target if tp_hit else sl_target
                 
-                # Mark as being processed in tracker
-                tracked_pos['status'] = f'{hit_type}_PROCESSING'
-                tracked_pos['hit_time'] = datetime.now()
+                # Update status in both tracker and database immediately
+                processing_status = f'{hit_type}_PROCESSING'
+                tracked_pos['status'] = processing_status
+                if ticket in self.positions_tracker:
+                    self.positions_tracker[ticket]['status'] = processing_status
+                
+                # Update status in database immediately to prevent re-processing
+                if self.use_database and self.db:
+                    try:
+                        sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                        from models.trade_record import TradeRecord
+                        temp_trade = TradeRecord(
+                            trade_id=0,
+                            bot_id=self.bot_id,
+                            order_id=str(ticket),
+                            open_time=tracked_pos['open_time'],
+                            trade_type=tracked_pos['type'],
+                            amount=tracked_pos['volume'],
+                            entry_price=tracked_pos['entry_price'],
+                            stop_loss=tracked_pos['sl'],
+                            take_profit=tracked_pos['tp'],
+                            status=processing_status,
+                            market_regime=tracked_pos['regime'],
+                            comment=tracked_pos['comment']
+                        )
+                        self.db.update_trade(temp_trade)
+                        print(f"📊 Updated position #{ticket} status to {processing_status} in database")
+                    except Exception as e:
+                        print(f"⚠️  Failed to update status in database: {e}")
                 
                 # Log the hit
                 self._log_tp_hit(ticket, hit_type, current_price)
@@ -504,9 +545,28 @@ class LiveBotMT5FullAuto:
                             print(f"❌ Failed to close position #{ticket}: {error_msg}")
                             # Revert status back to OPEN if close failed
                             tracked_pos['status'] = 'OPEN'
+                            if ticket in self.positions_tracker:
+                                self.positions_tracker[ticket]['status'] = 'OPEN'
+                            # Revert in database too
+                            if self.use_database and self.db:
+                                try:
+                                    temp_trade.status = 'OPEN'
+                                    self.db.update_trade(temp_trade)
+                                except:
+                                    pass
                     except Exception as e:
                         print(f"❌ Failed to close position #{ticket}: {e}")
                         # Revert status back to OPEN if close failed
+                        tracked_pos['status'] = 'OPEN'
+                        if ticket in self.positions_tracker:
+                            self.positions_tracker[ticket]['status'] = 'OPEN'
+                        # Revert in database too
+                        if self.use_database and self.db:
+                            try:
+                                temp_trade.status = 'OPEN'
+                                self.db.update_trade(temp_trade)
+                            except:
+                                pass
                         tracked_pos['status'] = 'OPEN'
                 else:
                     print(f"🧪 DRY RUN: Would close position #{ticket} at ${current_price:.2f} ({hit_type} hit)")
