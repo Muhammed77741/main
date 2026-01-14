@@ -42,7 +42,8 @@ class LiveBotBinanceFullAuto:
                  symbol='BTC/USDT', timeframe='1h',
                  check_interval=3600, risk_percent=2.0, max_positions=3,
                  dry_run=False, testnet=True, api_key=None, api_secret=None,
-                 trailing_stop_enabled=True, trailing_stop_percent=1.5):
+                 trailing_stop_enabled=True, trailing_stop_percent=1.5,
+                 bot_id=None, use_database=True):
         """
         Initialize bot
 
@@ -60,6 +61,8 @@ class LiveBotBinanceFullAuto:
             api_secret: Binance API secret
             trailing_stop_enabled: Enable trailing stop
             trailing_stop_percent: Trailing stop activation threshold (%)
+            bot_id: Unique bot identifier for database tracking
+            use_database: If True, use database for position tracking
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -72,6 +75,10 @@ class LiveBotBinanceFullAuto:
         self.testnet = testnet
         self.api_key = api_key
         self.api_secret = api_secret
+        
+        # Bot identification for database
+        self.bot_id = bot_id or f"crypto_bot_{symbol.replace('/', '_')}"
+        self.use_database = use_database
 
         # Trailing stop settings
         self.trailing_stop_enabled = trailing_stop_enabled
@@ -101,6 +108,21 @@ class LiveBotBinanceFullAuto:
         self.position_peaks = {}  # Track highest profit for trailing stop
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
+        
+        # Database connection (optional)
+        self.db = None
+        if self.use_database:
+            try:
+                # Import database manager
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from database.db_manager import DatabaseManager
+                self.db = DatabaseManager()
+                print(f"✅ Database connection established for bot {self.bot_id}")
+            except Exception as e:
+                print(f"⚠️  Failed to initialize database: {e}")
+                print("     Falling back to CSV-only mode")
+                self.use_database = False
+                self.db = None
 
         # Telegram bot (optional)
         self.telegram_bot = None
@@ -149,9 +171,11 @@ class LiveBotBinanceFullAuto:
     def _log_position_opened(self, order_id, position_type, amount, entry_price,
                              sl, tp, regime, comment=''):
         """Log when position is opened"""
+        open_time = datetime.now()
+        
         self.positions_tracker[order_id] = {
             'order_id': order_id,
-            'open_time': datetime.now(),
+            'open_time': open_time,
             'close_time': None,
             'type': position_type,
             'amount': amount,
@@ -166,6 +190,32 @@ class LiveBotBinanceFullAuto:
             'status': 'OPEN',
             'comment': comment
         }
+        
+        # Also save to database if enabled
+        if self.use_database and self.db:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.trade_record import TradeRecord
+                
+                trade = TradeRecord(
+                    trade_id=0,  # Will be auto-assigned by database
+                    bot_id=self.bot_id,
+                    order_id=str(order_id),
+                    open_time=open_time,
+                    trade_type=position_type,
+                    amount=amount,
+                    entry_price=entry_price,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    status='OPEN',
+                    market_regime=regime,
+                    comment=comment
+                )
+                self.db.add_trade(trade)
+                print(f"📊 Position saved to database: Order={order_id}")
+            except Exception as e:
+                print(f"⚠️  Failed to save position to database: {e}")
+        
         print(f"📊 Logged opened position: Order={order_id}, Type={position_type}, Entry={entry_price}")
 
     def _log_position_closed(self, order_id, close_price, profit, status='CLOSED'):
@@ -175,7 +225,8 @@ class LiveBotBinanceFullAuto:
             return
 
         pos = self.positions_tracker[order_id]
-        pos['close_time'] = datetime.now()
+        close_time = datetime.now()
+        pos['close_time'] = close_time
         pos['close_price'] = close_price
         pos['profit'] = profit
         pos['status'] = status
@@ -194,6 +245,36 @@ class LiveBotBinanceFullAuto:
 
         # Write to CSV
         self._write_trade_to_csv(pos)
+        
+        # Update in database if enabled
+        if self.use_database and self.db:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.trade_record import TradeRecord
+                
+                trade = TradeRecord(
+                    trade_id=0,  # Not used for update
+                    bot_id=self.bot_id,
+                    order_id=str(order_id),
+                    open_time=pos['open_time'],
+                    close_time=close_time,
+                    duration_hours=pos['duration'],
+                    trade_type=pos['type'],
+                    amount=pos['amount'],
+                    entry_price=pos['entry_price'],
+                    close_price=close_price,
+                    stop_loss=pos['sl'],
+                    take_profit=pos['tp'],
+                    profit=profit,
+                    profit_percent=pos['profit_pct'],
+                    status=status,
+                    market_regime=pos['regime'],
+                    comment=pos['comment']
+                )
+                self.db.update_trade(trade)
+                print(f"📊 Position updated in database: Order={order_id}, Status={status}")
+            except Exception as e:
+                print(f"⚠️  Failed to update position in database: {e}")
 
         # Remove from tracker
         del self.positions_tracker[order_id]
@@ -535,15 +616,55 @@ class LiveBotBinanceFullAuto:
         """Monitor open positions in real-time and check if TP/SL levels are hit
         
         Checks:
-        1. Current bar's high/low to see if TP/SL was touched during the bar
-        2. Current price to determine exit price
-        3. Closes position if TP or SL is hit
+        1. Loads open positions from database (if enabled) or tracker
+        2. Current bar's high/low to see if TP/SL was touched during the bar
+        3. Current price to determine exit price
+        4. Closes position if TP or SL is hit
         """
         if not self.exchange_connected:
             return
         
         try:
-            # Get current open positions
+            # Get positions to monitor
+            positions_to_check = {}
+            
+            # If database is enabled, load positions from database
+            if self.use_database and self.db:
+                try:
+                    db_trades = self.db.get_open_trades(self.bot_id)
+                    for trade in db_trades:
+                        positions_to_check[trade.order_id] = {
+                            'tp': trade.take_profit,
+                            'sl': trade.stop_loss,
+                            'type': trade.trade_type,
+                            'entry_price': trade.entry_price,
+                            'amount': trade.amount,
+                            'status': trade.status,
+                            'open_time': trade.open_time,
+                            'regime': trade.market_regime,
+                            'comment': trade.comment or ''
+                        }
+                        # Also sync to in-memory tracker if not already there
+                        if trade.order_id not in self.positions_tracker:
+                            self.positions_tracker[trade.order_id] = positions_to_check[trade.order_id].copy()
+                            self.positions_tracker[trade.order_id]['order_id'] = trade.order_id
+                            self.positions_tracker[trade.order_id]['close_time'] = None
+                            self.positions_tracker[trade.order_id]['close_price'] = None
+                            self.positions_tracker[trade.order_id]['profit'] = None
+                            self.positions_tracker[trade.order_id]['profit_pct'] = None
+                            self.positions_tracker[trade.order_id]['duration'] = None
+                except Exception as e:
+                    print(f"⚠️  Error loading positions from database: {e}")
+                    # Fall back to in-memory tracker
+                    positions_to_check = self.positions_tracker.copy()
+            else:
+                # Use in-memory tracker
+                positions_to_check = self.positions_tracker.copy()
+            
+            if not positions_to_check:
+                return
+            
+            # Get current open positions from exchange
             open_positions = self.get_open_positions()
             if not open_positions:
                 return
@@ -568,17 +689,18 @@ class LiveBotBinanceFullAuto:
                 # Get position details
                 order_id = str(position.get('id', ''))
                 
-                # Skip if not in our tracker (might be manual position)
-                if order_id not in self.positions_tracker:
+                # Skip if not in our positions to check
+                if order_id not in positions_to_check:
                     continue
                 
-                tracked_pos = self.positions_tracker[order_id]
+                tracked_pos = positions_to_check[order_id]
                 
                 # Get current price
                 current_price = float(position.get('markPrice', 0))
                 if not current_price:
                     continue
                 
+                # Read TP/SL from tracked position (database columns or in-memory)
                 tp_target = tracked_pos['tp']
                 sl_target = tracked_pos['sl']
                 position_type = tracked_pos['type']
