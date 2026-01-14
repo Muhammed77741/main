@@ -606,9 +606,6 @@ class LiveBotBinanceFullAuto:
         except Exception as e:
             print(f"⚠️  Error checking TP levels: {e}")
 
-        except Exception as e:
-            print(f"⚠️  Error updating trailing stops: {e}")
-
     def get_market_data(self, bars=500):
         """Get historical data from Binance"""
         if not self.exchange_connected:

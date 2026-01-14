@@ -1021,7 +1021,7 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 if len(open_positions) > 0:
                     for i, pos in enumerate(open_positions, 1):
                         direction = "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT"
-                        profit = pos.profit if pos.profit is not None else 0.0
+                        profit = pos.profit or 0.0
                         # Calculate profit percentage
                         profit_pct = 0.0
                         if pos.price_open and pos.price_open > 0:
