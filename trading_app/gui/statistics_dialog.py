@@ -145,7 +145,7 @@ class StatisticsDialog(QDialog):
         
         # Use grid layout for cards
         layout = QGridLayout(group)
-        layout.setSpacing(10)
+        layout.setSpacing(8)  # Reduced from 10px to 8px
         
         # Create placeholders for metric cards
         self.total_trades_card = self.create_metric_card("🎯 Total Trades", "0", "#2196F3")
@@ -171,9 +171,9 @@ class StatisticsDialog(QDialog):
         card.setStyleSheet(f"""
             QFrame {{
                 background-color: {color};
-                border-radius: 8px;
-                padding: 12px;
-                min-height: 70px;
+                border-radius: 6px;
+                padding: 8px;
+                min-height: 50px;
             }}
             QLabel {{
                 color: white;
@@ -181,12 +181,12 @@ class StatisticsDialog(QDialog):
         """)
         
         layout = QVBoxLayout(card)
-        layout.setSpacing(4)
+        layout.setSpacing(3)
         
         # Title label
         title_label = QLabel(title)
         title_font = QFont()
-        title_font.setPointSize(10)
+        title_font.setPointSize(9)
         title_font.setBold(True)
         title_label.setFont(title_font)
         layout.addWidget(title_label)
@@ -194,7 +194,7 @@ class StatisticsDialog(QDialog):
         # Value label  
         value_label = QLabel(value)
         value_font = QFont()
-        value_font.setPointSize(18)
+        value_font.setPointSize(16)
         value_font.setBold(True)
         value_label.setFont(value_font)
         layout.addWidget(value_label)

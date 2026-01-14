@@ -217,6 +217,7 @@ class MainWindow(QMainWindow):
 
         # Bot list
         self.bot_list = QListWidget()
+        self.bot_list.setMaximumHeight(200)  # Limit height to ~20% of space instead of 40%
         self.bot_list.currentItemChanged.connect(self.on_bot_selection_changed)
 
         # Add bots
@@ -604,8 +605,39 @@ class MainWindow(QMainWindow):
                 self.live_positions_label.setText("<p style='color: #666; font-size: 12px;'>No open positions</p>")
                 return
             
-            # Calculate total P&L
-            total_pnl = sum(trade.profit if trade.profit is not None else 0.0 for trade in open_trades)
+            # Get bot config to fetch current price
+            config = self.bot_manager.get_config(self.current_bot_id)
+            current_price = None
+            
+            # Fetch current price from exchange (same logic as positions monitor)
+            try:
+                if config.exchange == 'Binance':
+                    import ccxt
+                    exchange = ccxt.binance({
+                        'enableRateLimit': True,
+                        'options': {'defaultType': 'future'}
+                    })
+                    ticker = exchange.fetch_ticker(config.symbol)
+                    current_price = ticker.get('last')
+                elif config.exchange == 'MT5':
+                    import MetaTrader5 as mt5
+                    if mt5.initialize():
+                        tick = mt5.symbol_info_tick(config.symbol)
+                        if tick:
+                            current_price = tick.last if tick.last > 0 else (tick.bid + tick.ask) / 2 if tick.bid > 0 and tick.ask > 0 else None
+                        mt5.shutdown()
+            except Exception as e:
+                print(f"Error fetching current price: {e}")
+            
+            # Calculate total P&L with current price
+            total_pnl = 0.0
+            for trade in open_trades:
+                if current_price and current_price > 0:
+                    direction = 1 if trade.trade_type == 'BUY' else -1
+                    profit = (current_price - trade.entry_price) * trade.amount * direction
+                else:
+                    profit = trade.profit if trade.profit is not None else 0.0
+                total_pnl += profit
             
             # Build HTML display
             positions_html = f"""
@@ -619,18 +651,22 @@ class MainWindow(QMainWindow):
             
             # Add each position
             for trade in open_trades[:5]:  # Show max 5 positions
-                # Get profit value, handle None
-                profit_value = trade.profit if trade.profit is not None else 0.0
+                # Calculate profit with current price (same as positions monitor)
+                if current_price and current_price > 0:
+                    direction = 1 if trade.trade_type == 'BUY' else -1
+                    profit_value = (current_price - trade.entry_price) * trade.amount * direction
+                else:
+                    profit_value = trade.profit if trade.profit is not None else 0.0
                 
                 # Determine color based on profit
                 pnl_color = '#4CAF50' if profit_value >= 0 else '#F44336'
                 type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
                 
-                # Get current price (if available from trade data)
-                current_price = trade.close_price if trade.close_price else trade.entry_price
+                # Use fetched current price or fallback
+                display_current_price = current_price if current_price and current_price > 0 else trade.entry_price
                 
                 # Get symbol
-                symbol = trade.symbol if hasattr(trade, 'symbol') and trade.symbol else 'N/A'
+                symbol = trade.symbol if hasattr(trade, 'symbol') and trade.symbol else config.symbol
                 
                 positions_html += f"""
                 <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
@@ -639,7 +675,7 @@ class MainWindow(QMainWindow):
                         <span style='color: #666;'>{trade.trade_type}</span>
                     </p>
                     <p style='margin: 2px 0; font-size: 11px; color: #666;'>
-                        Entry: {trade.entry_price:,.4f} → Current: {current_price:,.4f}
+                        Entry: {trade.entry_price:,.4f} → Current: {display_current_price:,.4f}
                     </p>
                     <p style='margin: 2px 0; font-size: 11px;'>
                         P&L: <span style='color: {pnl_color}; font-weight: bold;'>
