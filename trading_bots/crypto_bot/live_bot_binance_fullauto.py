@@ -531,8 +531,14 @@ class LiveBotBinanceFullAuto:
         except Exception as e:
             print(f"⚠️  Error updating trailing stops: {e}")
     
-    def _check_tp_levels_realtime(self):
-        """Monitor open positions in real-time and check if TP levels are hit"""
+    def _check_tp_sl_realtime(self):
+        """Monitor open positions in real-time and check if TP/SL levels are hit
+        
+        Checks:
+        1. Current bar's high/low to see if TP/SL was touched during the bar
+        2. Current price to determine exit price
+        3. Closes position if TP or SL is hit
+        """
         if not self.exchange_connected:
             return
         
@@ -541,6 +547,22 @@ class LiveBotBinanceFullAuto:
             open_positions = self.get_open_positions()
             if not open_positions:
                 return
+            
+            # Get current bar data to check high/low
+            try:
+                ohlcv = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit=1)
+                if ohlcv and len(ohlcv) > 0:
+                    current_bar = ohlcv[0]
+                    bar_high = current_bar[2]  # high price
+                    bar_low = current_bar[3]   # low price
+                else:
+                    # Fallback if can't get bar data
+                    bar_high = None
+                    bar_low = None
+            except Exception as e:
+                print(f"⚠️  Could not fetch current bar data: {e}")
+                bar_high = None
+                bar_low = None
             
             for position in open_positions:
                 # Get position details
@@ -558,37 +580,72 @@ class LiveBotBinanceFullAuto:
                     continue
                 
                 tp_target = tracked_pos['tp']
+                sl_target = tracked_pos['sl']
                 position_type = tracked_pos['type']
                 
-                # Check if TP is hit (with small tolerance for slippage)
-                tolerance_pct = 0.1  # 0.1% tolerance
+                # Check if TP or SL is hit based on bar high/low
                 tp_hit = False
+                sl_hit = False
                 
                 if position_type == 'BUY':
-                    # For BUY, TP is above entry
-                    tp_hit = current_price >= (tp_target * (1 - tolerance_pct / 100))
-                else:
-                    # For SELL, TP is below entry
-                    tp_hit = current_price <= (tp_target * (1 + tolerance_pct / 100))
+                    # For BUY: TP is above entry, SL is below entry
+                    # Check if bar high reached TP
+                    if bar_high and bar_high >= tp_target:
+                        tp_hit = True
+                    # Check if bar low reached SL
+                    if bar_low and bar_low <= sl_target:
+                        sl_hit = True
+                else:  # SELL
+                    # For SELL: TP is below entry, SL is above entry
+                    # Check if bar low reached TP
+                    if bar_low and bar_low <= tp_target:
+                        tp_hit = True
+                    # Check if bar high reached SL
+                    if bar_high and bar_high >= sl_target:
+                        sl_hit = True
                 
-                # If TP is hit and we haven't logged it yet
-                if tp_hit and tracked_pos.get('status') == 'OPEN':
-                    # Mark as TP hit in tracker
-                    tracked_pos['status'] = 'TP_HIT_DETECTED'
-                    tracked_pos['tp_hit_time'] = datetime.now()
+                # If TP or SL is hit and we haven't processed it yet
+                if (tp_hit or sl_hit) and tracked_pos.get('status') == 'OPEN':
+                    hit_type = 'TP' if tp_hit else 'SL'
+                    target_price = tp_target if tp_hit else sl_target
                     
-                    # Log the TP hit
-                    self._log_tp_hit(order_id, 'TP', current_price)
+                    # Mark as hit in tracker
+                    tracked_pos['status'] = f'{hit_type}_HIT_DETECTED'
+                    tracked_pos['hit_time'] = datetime.now()
                     
-                    # Send Telegram notification if available
+                    # Log the hit
+                    self._log_tp_hit(order_id, hit_type, current_price)
+                    
+                    # Close the position at current price
+                    if not self.dry_run:
+                        try:
+                            # Close position by placing opposite order
+                            side = 'sell' if position_type == 'BUY' else 'buy'
+                            amount = tracked_pos['amount']
+                            
+                            print(f"🔄 Closing position {order_id} at current price ${current_price:.2f} ({hit_type} hit)")
+                            close_order = self.exchange.create_order(
+                                symbol=self.symbol,
+                                type='market',
+                                side=side,
+                                amount=amount
+                            )
+                            print(f"✅ Position closed: Order ID {close_order['id']}")
+                        except Exception as e:
+                            print(f"❌ Failed to close position {order_id}: {e}")
+                    else:
+                        print(f"🧪 DRY RUN: Would close position {order_id} at ${current_price:.2f} ({hit_type} hit)")
+                    
+                    # Send Telegram notification
                     if self.telegram_bot:
-                        message = f"🎯 <b>TP HIT!</b>\n\n"
+                        emoji = "🎯" if tp_hit else "🛑"
+                        message = f"{emoji} <b>{hit_type} HIT!</b>\n\n"
                         message += f"Order ID: {order_id}\n"
                         message += f"Symbol: {self.symbol}\n"
                         message += f"Type: {tracked_pos['type']}\n"
                         message += f"Entry: ${tracked_pos['entry_price']:.2f}\n"
-                        message += f"TP Target: ${tp_target:.2f}\n"
-                        message += f"Current Price: ${current_price:.2f}\n"
+                        message += f"{hit_type} Target: ${target_price:.2f}\n"
+                        message += f"Close Price: ${current_price:.2f}\n"
                         message += f"Amount: {tracked_pos['amount']}\n"
                         
                         # Calculate profit percentage
@@ -596,7 +653,9 @@ class LiveBotBinanceFullAuto:
                             profit_pct = ((current_price - tracked_pos['entry_price']) / tracked_pos['entry_price']) * 100
                         else:
                             profit_pct = ((tracked_pos['entry_price'] - current_price) / tracked_pos['entry_price']) * 100
-                        message += f"Profit: +{profit_pct:.2f}%\n"
+                        
+                        sign = "+" if profit_pct >= 0 else ""
+                        message += f"Profit: {sign}{profit_pct:.2f}%\n"
                         
                         try:
                             asyncio.run(self.send_telegram(message))
@@ -604,7 +663,7 @@ class LiveBotBinanceFullAuto:
                             print(f"⚠️  Failed to send Telegram notification: {e}")
         
         except Exception as e:
-            print(f"⚠️  Error checking TP levels: {e}")
+            print(f"⚠️  Error checking TP/SL levels: {e}")
 
     def get_market_data(self, bars=500):
         """Get historical data from Binance"""
@@ -1015,9 +1074,9 @@ class LiveBotBinanceFullAuto:
             print(f"\n⏰ Waiting until next hour: {next_hour.strftime('%H:%M:%S')}")
             print(f"   Time now: {now.strftime('%H:%M:%S')}")
             print(f"   Wait time: {int(wait_seconds/60)} min {int(wait_seconds%60)} sec")
-            print(f"   🎯 Real-time TP monitoring: Active (checking every 30s)")
+            print(f"   🎯 Real-time TP/SL monitoring: Active (checking every 10s)")
 
-            monitoring_interval = 30  # Check every 30 seconds
+            monitoring_interval = 10  # Check every 10 seconds
             elapsed = 0
 
             while elapsed < wait_seconds:
@@ -1025,8 +1084,8 @@ class LiveBotBinanceFullAuto:
                 time.sleep(sleep_time)
                 elapsed += sleep_time
 
-                # Check TP levels in real-time
-                self._check_tp_levels_realtime()
+                # Check TP/SL levels in real-time
+                self._check_tp_sl_realtime()
 
                 # Check for closed positions
                 self._check_closed_positions()
@@ -1045,7 +1104,7 @@ class LiveBotBinanceFullAuto:
         print(f"   Max positions: {self.max_positions}")
         print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
         print(f"   Exchange: {'TESTNET' if self.testnet else 'PRODUCTION'}")
-        print(f"   🎯 Real-time TP monitoring: Every 30 seconds")
+        print(f"   🎯 Real-time TP/SL monitoring: Every 10 seconds (checks bar high/low)")
         print(f"\n🎯 Adaptive TP Levels:")
         print(f"   TREND Mode: {self.trend_tp1_pct}% / {self.trend_tp2_pct}% / {self.trend_tp3_pct}%")
         print(f"   RANGE Mode: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%")
@@ -1104,8 +1163,8 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                 # Check current positions
                 open_positions = self.get_open_positions()
                 
-                # Check TP levels in real-time
-                self._check_tp_levels_realtime()
+                # Check TP/SL levels in real-time
+                self._check_tp_sl_realtime()
                 
                 print(f"📊 Open positions: {len(open_positions)}/{self.max_positions}")
 
