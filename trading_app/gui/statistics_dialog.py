@@ -48,11 +48,11 @@ class StatisticsDialog(QDialog):
             }
             QPushButton {
                 border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
+                border-radius: 4px;
+                padding: 6px 12px;
                 font-weight: 600;
-                min-height: 40px;
-                font-size: 13px;
+                min-height: 28px;
+                font-size: 12px;
                 background-color: #2196F3;
                 color: white;
             }
@@ -84,9 +84,9 @@ class StatisticsDialog(QDialog):
             QComboBox {
                 border: 1px solid #E0E0E0;
                 border-radius: 4px;
-                padding: 8px;
+                padding: 5px;
                 background-color: white;
-                min-height: 35px;
+                min-height: 26px;
             }
         """)
 
@@ -145,7 +145,7 @@ class StatisticsDialog(QDialog):
         
         # Use grid layout for cards
         layout = QGridLayout(group)
-        layout.setSpacing(15)
+        layout.setSpacing(10)
         
         # Create placeholders for metric cards
         self.total_trades_card = self.create_metric_card("🎯 Total Trades", "0", "#2196F3")
@@ -171,9 +171,9 @@ class StatisticsDialog(QDialog):
         card.setStyleSheet(f"""
             QFrame {{
                 background-color: {color};
-                border-radius: 10px;
-                padding: 20px;
-                min-height: 100px;
+                border-radius: 8px;
+                padding: 12px;
+                min-height: 70px;
             }}
             QLabel {{
                 color: white;
@@ -181,12 +181,12 @@ class StatisticsDialog(QDialog):
         """)
         
         layout = QVBoxLayout(card)
-        layout.setSpacing(8)
+        layout.setSpacing(4)
         
         # Title label
         title_label = QLabel(title)
         title_font = QFont()
-        title_font.setPointSize(12)
+        title_font.setPointSize(10)
         title_font.setBold(True)
         title_label.setFont(title_font)
         layout.addWidget(title_label)
@@ -194,7 +194,7 @@ class StatisticsDialog(QDialog):
         # Value label  
         value_label = QLabel(value)
         value_font = QFont()
-        value_font.setPointSize(24)
+        value_font.setPointSize(18)
         value_font.setBold(True)
         value_label.setFont(value_font)
         layout.addWidget(value_label)

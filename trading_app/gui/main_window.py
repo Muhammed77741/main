@@ -85,11 +85,11 @@ class MainWindow(QMainWindow):
             }
             QPushButton {
                 border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
+                border-radius: 4px;
+                padding: 6px 12px;
                 font-weight: 600;
-                min-height: 45px;
-                font-size: 13px;
+                min-height: 32px;
+                font-size: 12px;
                 color: white;
             }
             QPushButton:hover {
@@ -245,7 +245,7 @@ class MainWindow(QMainWindow):
             QPushButton {
                 background-color: #2196F3;
                 color: white;
-                min-height: 40px;
+                min-height: 32px;
             }
             QPushButton:hover {
                 background-color: #1976D2;
