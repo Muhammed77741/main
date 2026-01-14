@@ -88,25 +88,29 @@ class StatisticsDialog(QDialog):
 
         # Table
         self.history_table = QTableWidget()
-        self.history_table.setColumnCount(9)
+        self.history_table.setColumnCount(12)
         self.history_table.setHorizontalHeaderLabels([
-            'Date', 'Type', 'Entry', 'Exit', 'Profit', 'Profit %', 'Pips', 'Duration', 'Regime'
+            'Date', 'Type', 'Amount', 'Entry', 'Exit', 'SL', 'TP', 
+            'Profit', 'Profit %', 'Duration', 'Regime', 'Status'
         ])
 
         # Configure column widths for better readability
         header = self.history_table.horizontalHeader()
-        header.setStretchLastSection(True)  # Stretch Regime column
+        header.setStretchLastSection(True)  # Stretch Status column
 
         # Set specific column widths
         self.history_table.setColumnWidth(0, 130)  # Date
         self.history_table.setColumnWidth(1, 60)   # Type
-        self.history_table.setColumnWidth(2, 100)  # Entry
-        self.history_table.setColumnWidth(3, 100)  # Exit
-        self.history_table.setColumnWidth(4, 100)  # Profit
-        self.history_table.setColumnWidth(5, 80)   # Profit %
-        self.history_table.setColumnWidth(6, 80)   # Pips
-        self.history_table.setColumnWidth(7, 90)   # Duration
-        # Regime (column 8) will stretch automatically
+        self.history_table.setColumnWidth(2, 80)   # Amount
+        self.history_table.setColumnWidth(3, 100)  # Entry
+        self.history_table.setColumnWidth(4, 100)  # Exit
+        self.history_table.setColumnWidth(5, 100)  # SL
+        self.history_table.setColumnWidth(6, 100)  # TP
+        self.history_table.setColumnWidth(7, 100)  # Profit
+        self.history_table.setColumnWidth(8, 80)   # Profit %
+        self.history_table.setColumnWidth(9, 90)   # Duration
+        self.history_table.setColumnWidth(10, 80)  # Regime
+        # Status (column 11) will stretch automatically
 
         # Allow user to resize columns
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -196,12 +200,24 @@ class StatisticsDialog(QDialog):
             # Type
             self.history_table.setItem(i, 1, QTableWidgetItem(trade.trade_type))
 
+            # Amount
+            amount_str = f"{trade.amount:.4f}" if trade.amount else '-'
+            self.history_table.setItem(i, 2, QTableWidgetItem(amount_str))
+
             # Entry
-            self.history_table.setItem(i, 2, QTableWidgetItem(f"${trade.entry_price:.2f}"))
+            self.history_table.setItem(i, 3, QTableWidgetItem(f"${trade.entry_price:.2f}"))
 
             # Exit
-            exit_str = f"${trade.close_price:.2f}" if trade.close_price else 'OPEN'
-            self.history_table.setItem(i, 3, QTableWidgetItem(exit_str))
+            exit_str = f"${trade.close_price:.2f}" if trade.close_price else '-'
+            self.history_table.setItem(i, 4, QTableWidgetItem(exit_str))
+
+            # SL
+            sl_str = f"${trade.stop_loss:.2f}" if trade.stop_loss else '-'
+            self.history_table.setItem(i, 5, QTableWidgetItem(sl_str))
+
+            # TP
+            tp_str = f"${trade.take_profit:.2f}" if trade.take_profit else '-'
+            self.history_table.setItem(i, 6, QTableWidgetItem(tp_str))
 
             # Profit
             if trade.profit is not None:
@@ -210,9 +226,9 @@ class StatisticsDialog(QDialog):
                     profit_item.setForeground(Qt.green)
                 elif trade.profit < 0:
                     profit_item.setForeground(Qt.red)
-                self.history_table.setItem(i, 4, profit_item)
+                self.history_table.setItem(i, 7, profit_item)
             else:
-                self.history_table.setItem(i, 4, QTableWidgetItem('OPEN'))
+                self.history_table.setItem(i, 7, QTableWidgetItem('-'))
 
             # Profit %
             if trade.profit_percent is not None:
@@ -221,31 +237,21 @@ class StatisticsDialog(QDialog):
                     pct_item.setForeground(Qt.green)
                 elif trade.profit_percent < 0:
                     pct_item.setForeground(Qt.red)
-                self.history_table.setItem(i, 5, pct_item)
+                self.history_table.setItem(i, 8, pct_item)
             else:
-                self.history_table.setItem(i, 5, QTableWidgetItem('-'))
-
-            # Pips (calculate from entry/exit)
-            pips = '-'
-            if trade.close_price and trade.entry_price:
-                if self.config.exchange == 'MT5':
-                    # For XAUUSD
-                    pips_val = (trade.close_price - trade.entry_price) * 10 if trade.trade_type == 'BUY' else (trade.entry_price - trade.close_price) * 10
-                    pips = f"{pips_val:.1f}p"
-                else:
-                    # For crypto, show %
-                    pips_val = ((trade.close_price - trade.entry_price) / trade.entry_price * 100) if trade.trade_type == 'BUY' else ((trade.entry_price - trade.close_price) / trade.entry_price * 100)
-                    pips = f"{pips_val:.2f}%"
-
-            self.history_table.setItem(i, 6, QTableWidgetItem(pips))
+                self.history_table.setItem(i, 8, QTableWidgetItem('-'))
 
             # Duration
-            duration_str = f"{trade.duration_hours:.1f}h" if trade.duration_hours else 'OPEN'
-            self.history_table.setItem(i, 7, QTableWidgetItem(duration_str))
+            duration_str = f"{trade.duration_hours:.1f}h" if trade.duration_hours else '-'
+            self.history_table.setItem(i, 9, QTableWidgetItem(duration_str))
 
             # Regime
             regime = trade.market_regime or '-'
-            self.history_table.setItem(i, 8, QTableWidgetItem(regime))
+            self.history_table.setItem(i, 10, QTableWidgetItem(regime))
+
+            # Status
+            status = trade.status or 'OPEN'
+            self.history_table.setItem(i, 11, QTableWidgetItem(status))
 
     def export_csv(self):
         """Export trades to CSV"""
