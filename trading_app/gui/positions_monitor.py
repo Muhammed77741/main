@@ -340,11 +340,32 @@ class PositionsMonitor(QDialog):
                 })
         
         if not selected_positions:
-            QMessageBox.warning(
-                self,
-                "No Selection",
-                "Please select at least one position to close."
-            )
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("No Selection")
+            msg.setText("Please select at least one position to close.")
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #2196F3;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #1976D2;
+                }
+            """)
+            msg.exec()
             return
         
         # Confirm closure
@@ -353,15 +374,36 @@ class PositionsMonitor(QDialog):
             for pos in selected_positions
         ])
         
-        reply = QMessageBox.question(
-            self,
-            "Confirm Close Positions",
-            f"Are you sure you want to close {len(selected_positions)} position(s)?\n\n{position_list}",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle("Confirm Close Positions")
+        msg.setText(f"Are you sure you want to close {len(selected_positions)} position(s)?\n\n{position_list}")
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: white;
+            }
+            QMessageBox QLabel {
+                color: #333;
+                font-size: 13px;
+            }
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                min-width: 80px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        reply = msg.exec()
         
-        if reply != QMessageBox.Yes:
+        if reply != msg.button(QMessageBox.Yes):
             return
         
         # Close positions
@@ -461,11 +503,32 @@ class PositionsMonitor(QDialog):
                 import MetaTrader5 as mt5
                 
                 if not mt5.initialize():
-                    QMessageBox.critical(
-                        self,
-                        "Error",
-                        f"MT5 initialization failed: {mt5.last_error()}"
-                    )
+                    msg = QMessageBox(self)
+                    msg.setIcon(QMessageBox.Critical)
+                    msg.setWindowTitle("Error")
+                    msg.setText(f"MT5 initialization failed: {mt5.last_error()}")
+                    msg.setStyleSheet("""
+                        QMessageBox {
+                            background-color: white;
+                        }
+                        QMessageBox QLabel {
+                            color: #333;
+                            font-size: 13px;
+                        }
+                        QPushButton {
+                            background-color: #F44336;
+                            color: white;
+                            border: none;
+                            border-radius: 4px;
+                            padding: 8px 16px;
+                            min-width: 80px;
+                            font-weight: bold;
+                        }
+                        QPushButton:hover {
+                            background-color: #D32F2F;
+                        }
+                    """)
+                    msg.exec()
                     return
                 
                 try:
@@ -602,19 +665,61 @@ class PositionsMonitor(QDialog):
                         error_count += 1
             
             elif exchange_positions:
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Unsupported exchange: {self.config.exchange}"
-                )
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Critical)
+                msg.setWindowTitle("Error")
+                msg.setText(f"Unsupported exchange: {self.config.exchange}")
+                msg.setStyleSheet("""
+                    QMessageBox {
+                        background-color: white;
+                    }
+                    QMessageBox QLabel {
+                        color: #333;
+                        font-size: 13px;
+                    }
+                    QPushButton {
+                        background-color: #F44336;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        padding: 8px 16px;
+                        min-width: 80px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #D32F2F;
+                    }
+                """)
+                msg.exec()
                 return
         
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Error closing positions: {str(e)}"
-            )
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Critical)
+            msg.setWindowTitle("Error")
+            msg.setText(f"Error closing positions: {str(e)}")
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #F44336;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #D32F2F;
+                }
+            """)
+            msg.exec()
             import traceback
             traceback.print_exc()
             return
@@ -626,7 +731,32 @@ class PositionsMonitor(QDialog):
             if errors:
                 result_msg += "\n\nErrors:\n" + "\n".join(errors[:5])  # Show first 5 errors
         
-        QMessageBox.information(self, "Close Positions Result", result_msg)
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle("Close Positions Result")
+        msg.setText(result_msg)
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: white;
+            }
+            QMessageBox QLabel {
+                color: #333;
+                font-size: 13px;
+            }
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                min-width: 80px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+        """)
+        msg.exec()
         
         # Refresh positions after closing
         self.refresh_positions()
