@@ -270,17 +270,33 @@ class LiveBotBinanceFullAuto:
         try:
             # Validate API credentials
             if not self.api_key or not self.api_secret:
-                print("❌ Binance API key and secret are required!")
+                error_msg = "❌ Binance API key and secret are required!"
+                print(error_msg)
                 print("💡 Please configure them in Settings:")
                 print("   1. Go to Settings for this bot")
                 print("   2. Enter your Binance API Key and API Secret")
                 print("   3. Enable 'Use Testnet' for testing (recommended)")
+                
+                # Send to Telegram
+                if self.telegram_bot:
+                    try:
+                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}\n\nPlease configure API credentials."))
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+                
                 return False
 
             if len(self.api_key) < 10 or len(self.api_secret) < 10:
-                print("❌ Invalid API credentials format")
-                print(f"   API Key length: {len(self.api_key)} (expected 64)")
-                print(f"   API Secret length: {len(self.api_secret)} (expected 64)")
+                error_msg = f"❌ Invalid API credentials format\n   API Key length: {len(self.api_key)} (expected 64)\n   API Secret length: {len(self.api_secret)} (expected 64)"
+                print(error_msg)
+                
+                # Send to Telegram
+                if self.telegram_bot:
+                    try:
+                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}"))
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+                
                 return False
 
             print(f"🔄 Connecting to Binance {'Testnet' if self.testnet else 'Mainnet'}...")
@@ -347,10 +363,19 @@ class LiveBotBinanceFullAuto:
             usdt_free = balance.get('USDT', {}).get('free', 0) or 0
             print(f"✅ Connected to Binance {'Testnet' if self.testnet else 'Mainnet'}")
             print(f"   Available balance: {usdt_free:.2f} USDT")
+            
+            # Send success notification to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}"))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return True
 
         except ccxt.AuthenticationError as e:
-            print(f"❌ Authentication Failed: {e}")
+            error_msg = f"❌ Authentication Failed: {e}"
+            print(error_msg)
             print("\n💡 Troubleshooting:")
             print("   1. Check your API Key and Secret are correct")
             print("   2. Ensure API has 'Enable Futures' permission")
@@ -360,6 +385,14 @@ class LiveBotBinanceFullAuto:
             print("   - Wrong API keys (copy-paste error)")
             print("   - Using Mainnet keys on Testnet (or vice versa)")
             print("   - API doesn't have Futures trading permission")
+            
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>Authentication Failed</b>\n\n{str(e)}\n\nPlease check your API credentials."))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return False
 
         except ccxt.ExchangeError as e:
@@ -382,11 +415,26 @@ class LiveBotBinanceFullAuto:
                 print("   Windows: Settings → Time & Language → Sync now")
                 print("   Or enable automatic time synchronization")
 
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>Binance Exchange Error</b>\n\n{error_msg}\n\nPlease check the logs for details."))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+
             return False
 
         except Exception as e:
-            print(f"❌ Connection failed: {e}")
-            print(f"   Error type: {type(e).__name__}")
+            error_msg = f"❌ Connection failed: {e}\n   Error type: {type(e).__name__}"
+            print(error_msg)
+            
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>Connection Failed</b>\n\n{str(e)}\n\nType: {type(e).__name__}"))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return False
 
     def disconnect_exchange(self):
@@ -479,6 +527,84 @@ class LiveBotBinanceFullAuto:
                             print(f"⚠️  Failed to update SL for {order_id}: {e}")
                     else:
                         print(f"🧪 DRY RUN: Would update SL to ${new_sl:.2f} for {order_id}")
+
+        except Exception as e:
+            print(f"⚠️  Error updating trailing stops: {e}")
+    
+    def _check_tp_levels_realtime(self):
+        """Monitor open positions in real-time and check if TP levels are hit"""
+        if not self.exchange_connected:
+            return
+        
+        try:
+            # Get current open positions
+            open_positions = self.get_open_positions()
+            if not open_positions:
+                return
+            
+            for position in open_positions:
+                # Get position details
+                order_id = str(position.get('id', ''))
+                
+                # Skip if not in our tracker (might be manual position)
+                if order_id not in self.positions_tracker:
+                    continue
+                
+                tracked_pos = self.positions_tracker[order_id]
+                
+                # Get current price
+                current_price = float(position.get('markPrice', 0))
+                if not current_price:
+                    continue
+                
+                tp_target = tracked_pos['tp']
+                position_type = tracked_pos['type']
+                
+                # Check if TP is hit (with small tolerance for slippage)
+                tolerance_pct = 0.1  # 0.1% tolerance
+                tp_hit = False
+                
+                if position_type == 'BUY':
+                    # For BUY, TP is above entry
+                    tp_hit = current_price >= (tp_target * (1 - tolerance_pct / 100))
+                else:
+                    # For SELL, TP is below entry
+                    tp_hit = current_price <= (tp_target * (1 + tolerance_pct / 100))
+                
+                # If TP is hit and we haven't logged it yet
+                if tp_hit and tracked_pos.get('status') == 'OPEN':
+                    # Mark as TP hit in tracker
+                    tracked_pos['status'] = 'TP_HIT_DETECTED'
+                    tracked_pos['tp_hit_time'] = datetime.now()
+                    
+                    # Log the TP hit
+                    self._log_tp_hit(order_id, 'TP', current_price)
+                    
+                    # Send Telegram notification if available
+                    if self.telegram_bot:
+                        message = f"🎯 <b>TP HIT!</b>\n\n"
+                        message += f"Order ID: {order_id}\n"
+                        message += f"Symbol: {self.symbol}\n"
+                        message += f"Type: {tracked_pos['type']}\n"
+                        message += f"Entry: ${tracked_pos['entry_price']:.2f}\n"
+                        message += f"TP Target: ${tp_target:.2f}\n"
+                        message += f"Current Price: ${current_price:.2f}\n"
+                        message += f"Amount: {tracked_pos['amount']}\n"
+                        
+                        # Calculate profit percentage
+                        if tracked_pos['type'] == 'BUY':
+                            profit_pct = ((current_price - tracked_pos['entry_price']) / tracked_pos['entry_price']) * 100
+                        else:
+                            profit_pct = ((tracked_pos['entry_price'] - current_price) / tracked_pos['entry_price']) * 100
+                        message += f"Profit: +{profit_pct:.2f}%\n"
+                        
+                        try:
+                            asyncio.run(self.send_telegram(message))
+                        except Exception as e:
+                            print(f"⚠️  Failed to send Telegram notification: {e}")
+        
+        except Exception as e:
+            print(f"⚠️  Error checking TP levels: {e}")
 
         except Exception as e:
             print(f"⚠️  Error updating trailing stops: {e}")
@@ -892,6 +1018,7 @@ class LiveBotBinanceFullAuto:
             print(f"\n⏰ Waiting until next hour: {next_hour.strftime('%H:%M:%S')}")
             print(f"   Time now: {now.strftime('%H:%M:%S')}")
             print(f"   Wait time: {int(wait_seconds/60)} min {int(wait_seconds%60)} sec")
+            print(f"   🎯 Real-time TP monitoring: Active (checking every 30s)")
 
             monitoring_interval = 30  # Check every 30 seconds
             elapsed = 0
@@ -900,6 +1027,9 @@ class LiveBotBinanceFullAuto:
                 sleep_time = min(monitoring_interval, wait_seconds - elapsed)
                 time.sleep(sleep_time)
                 elapsed += sleep_time
+
+                # Check TP levels in real-time
+                self._check_tp_levels_realtime()
 
                 # Check for closed positions
                 self._check_closed_positions()
@@ -918,6 +1048,7 @@ class LiveBotBinanceFullAuto:
         print(f"   Max positions: {self.max_positions}")
         print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
         print(f"   Exchange: {'TESTNET' if self.testnet else 'PRODUCTION'}")
+        print(f"   🎯 Real-time TP monitoring: Every 30 seconds")
         print(f"\n🎯 Adaptive TP Levels:")
         print(f"   TREND Mode: {self.trend_tp1_pct}% / {self.trend_tp2_pct}% / {self.trend_tp3_pct}%")
         print(f"   RANGE Mode: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%")
@@ -975,6 +1106,10 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
 
                 # Check current positions
                 open_positions = self.get_open_positions()
+                
+                # Check TP levels in real-time
+                self._check_tp_levels_realtime()
+                
                 print(f"📊 Open positions: {len(open_positions)}/{self.max_positions}")
 
                 if len(open_positions) > 0:

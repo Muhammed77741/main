@@ -38,7 +38,7 @@ class LiveBotMT5FullAuto:
     
     def __init__(self, telegram_token=None, telegram_chat_id=None,
                  symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1,
-                 check_interval=3600, risk_percent=2.0, max_positions=3,
+                 check_interval=3600, risk_percent=2.0, max_positions=9,
                  dry_run=False):
         """
         Initialize bot
@@ -331,17 +331,44 @@ class LiveBotMT5FullAuto:
     def connect_mt5(self):
         """Connect to MT5"""
         if not mt5.initialize():
-            print("❌ Failed to initialize MT5")
+            error_msg = "❌ Failed to initialize MT5"
+            print(error_msg)
+            
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure:\n1. MetaTrader 5 is installed and running\n2. 'Algo Trading' is enabled\n3. You're logged into an account"))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return False
             
         account_info = mt5.account_info()
         if account_info is None:
-            print("❌ Failed to get account info")
+            error_msg = "❌ Failed to get account info"
+            print(error_msg)
             mt5.shutdown()
+            
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure you're logged into an MT5 account"))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return False
             
         self.mt5_connected = True
-        print(f"✅ Connected to MT5: {account_info.server} - Account {account_info.login}")
+        success_msg = f"✅ Connected to MT5: {account_info.server} - Account {account_info.login}"
+        print(success_msg)
+        
+        # Send success notification to Telegram
+        if self.telegram_bot:
+            try:
+                asyncio.run(self.send_telegram(f"✅ <b>Connected to MT5</b>\n\nServer: {account_info.server}\nAccount: {account_info.login}\nBalance: ${account_info.balance:.2f}"))
+            except Exception as e:
+                print(f"⚠️  Failed to send Telegram notification: {e}")
+        
         return True
         
     def disconnect_mt5(self):
