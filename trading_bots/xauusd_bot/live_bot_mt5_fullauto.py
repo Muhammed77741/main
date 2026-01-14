@@ -39,7 +39,7 @@ class LiveBotMT5FullAuto:
     def __init__(self, telegram_token=None, telegram_chat_id=None,
                  symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1,
                  check_interval=3600, risk_percent=2.0, max_positions=9,
-                 dry_run=False):
+                 dry_run=False, bot_id=None, use_database=True):
         """
         Initialize bot
         
@@ -52,6 +52,8 @@ class LiveBotMT5FullAuto:
             risk_percent: Risk per trade (%)
             max_positions: Max simultaneous positions
             dry_run: If True, no real trades
+            bot_id: Unique bot identifier for database tracking
+            use_database: If True, use database for position tracking
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -61,6 +63,10 @@ class LiveBotMT5FullAuto:
         self.risk_percent = risk_percent
         self.max_positions = max_positions
         self.dry_run = dry_run
+        
+        # Bot identification for database
+        self.bot_id = bot_id or f"xauusd_bot_{symbol}"
+        self.use_database = use_database
         
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
@@ -84,6 +90,21 @@ class LiveBotMT5FullAuto:
         self.positions_tracker = {}  # {ticket: position_data}
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
+        
+        # Database connection (optional)
+        self.db = None
+        if self.use_database:
+            try:
+                # Import database manager
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from database.db_manager import DatabaseManager
+                self.db = DatabaseManager()
+                print(f"✅ Database connection established for bot {self.bot_id}")
+            except Exception as e:
+                print(f"⚠️  Failed to initialize database: {e}")
+                print("     Falling back to CSV-only mode")
+                self.use_database = False
+                self.db = None
         
         # Telegram bot (optional)
         self.telegram_bot = None
@@ -130,9 +151,11 @@ class LiveBotMT5FullAuto:
     def _log_position_opened(self, ticket, position_type, volume, entry_price, 
                              sl, tp, regime, comment=''):
         """Log when position is opened"""
+        open_time = datetime.now()
+        
         self.positions_tracker[ticket] = {
             'ticket': ticket,
-            'open_time': datetime.now(),
+            'open_time': open_time,
             'close_time': None,
             'type': position_type,
             'volume': volume,
@@ -147,6 +170,32 @@ class LiveBotMT5FullAuto:
             'status': 'OPEN',
             'comment': comment
         }
+        
+        # Also save to database if enabled
+        if self.use_database and self.db:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.trade_record import TradeRecord
+                
+                trade = TradeRecord(
+                    trade_id=0,  # Will be auto-assigned by database
+                    bot_id=self.bot_id,
+                    order_id=str(ticket),
+                    open_time=open_time,
+                    trade_type=position_type,
+                    amount=volume,
+                    entry_price=entry_price,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    status='OPEN',
+                    market_regime=regime,
+                    comment=comment
+                )
+                self.db.add_trade(trade)
+                print(f"📊 Position saved to database: Ticket={ticket}")
+            except Exception as e:
+                print(f"⚠️  Failed to save position to database: {e}")
+        
         print(f"📊 Logged opened position: Ticket={ticket}, Type={position_type}, Entry={entry_price}")
     
     def _log_position_closed(self, ticket, close_price, profit, status='CLOSED'):
@@ -156,7 +205,8 @@ class LiveBotMT5FullAuto:
             return
         
         pos = self.positions_tracker[ticket]
-        pos['close_time'] = datetime.now()
+        close_time = datetime.now()
+        pos['close_time'] = close_time
         pos['close_price'] = close_price
         pos['profit'] = profit
         pos['status'] = status
@@ -173,8 +223,41 @@ class LiveBotMT5FullAuto:
             pips = (pos['entry_price'] - close_price) * 10
         pos['pips'] = round(pips, 1)
         
+        # Calculate profit percentage (approximate)
+        profit_pct = (pips / pos['entry_price']) * 100 if pos['entry_price'] > 0 else 0
+        
         # Write to CSV
         self._write_trade_to_csv(pos)
+        
+        # Update in database if enabled
+        if self.use_database and self.db:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.trade_record import TradeRecord
+                
+                trade = TradeRecord(
+                    trade_id=0,  # Not used for update
+                    bot_id=self.bot_id,
+                    order_id=str(ticket),
+                    open_time=pos['open_time'],
+                    close_time=close_time,
+                    duration_hours=pos['duration'],
+                    trade_type=pos['type'],
+                    amount=pos['volume'],
+                    entry_price=pos['entry_price'],
+                    close_price=close_price,
+                    stop_loss=pos['sl'],
+                    take_profit=pos['tp'],
+                    profit=profit,
+                    profit_percent=profit_pct,
+                    status=status,
+                    market_regime=pos['regime'],
+                    comment=pos['comment']
+                )
+                self.db.update_trade(trade)
+                print(f"📊 Position updated in database: Ticket={ticket}, Status={status}")
+            except Exception as e:
+                print(f"⚠️  Failed to update position in database: {e}")
         
         # Remove from tracker
         del self.positions_tracker[ticket]
@@ -251,11 +334,57 @@ class LiveBotMT5FullAuto:
         """Monitor open positions in real-time and check if TP/SL levels are hit
         
         Checks:
-        1. Current bar's high/low to see if TP/SL was touched during the bar
-        2. Current price to determine exit price
-        3. Closes position if TP or SL is hit
+        1. Loads open positions from database (if enabled) or tracker
+        2. Current bar's high/low to see if TP/SL was touched during the bar
+        3. Current price to determine exit price
+        4. Closes position if TP or SL is hit
         """
         if not self.mt5_connected:
+            return
+        
+        # Get positions to monitor
+        positions_to_check = {}
+        
+        # If database is enabled, load positions from database
+        if self.use_database and self.db:
+            try:
+                db_trades = self.db.get_open_trades(self.bot_id)
+                for trade in db_trades:
+                    # Convert order_id (stored as string) back to int for MT5 ticket
+                    try:
+                        ticket = int(trade.order_id)
+                    except:
+                        ticket = trade.order_id
+                    
+                    positions_to_check[ticket] = {
+                        'tp': trade.take_profit,
+                        'sl': trade.stop_loss,
+                        'type': trade.trade_type,
+                        'entry_price': trade.entry_price,
+                        'volume': trade.amount,
+                        'status': trade.status,
+                        'open_time': trade.open_time,
+                        'regime': trade.market_regime,
+                        'comment': trade.comment or ''
+                    }
+                    # Also sync to in-memory tracker if not already there
+                    if ticket not in self.positions_tracker:
+                        self.positions_tracker[ticket] = positions_to_check[ticket].copy()
+                        self.positions_tracker[ticket]['ticket'] = ticket
+                        self.positions_tracker[ticket]['close_time'] = None
+                        self.positions_tracker[ticket]['close_price'] = None
+                        self.positions_tracker[ticket]['profit'] = None
+                        self.positions_tracker[ticket]['pips'] = None
+                        self.positions_tracker[ticket]['duration'] = None
+            except Exception as e:
+                print(f"⚠️  Error loading positions from database: {e}")
+                # Fall back to in-memory tracker
+                positions_to_check = self.positions_tracker.copy()
+        else:
+            # Use in-memory tracker
+            positions_to_check = self.positions_tracker.copy()
+        
+        if not positions_to_check:
             return
         
         # Get current open positions from MT5
@@ -281,11 +410,11 @@ class LiveBotMT5FullAuto:
         for position in open_positions:
             ticket = position.ticket
             
-            # Skip if not in our tracker (might be manual position)
-            if ticket not in self.positions_tracker:
+            # Skip if not in our positions to check
+            if ticket not in positions_to_check:
                 continue
             
-            tracked_pos = self.positions_tracker[ticket]
+            tracked_pos = positions_to_check[ticket]
             
             # Get current price
             tick = mt5.symbol_info_tick(self.symbol)
@@ -295,6 +424,8 @@ class LiveBotMT5FullAuto:
             # Use appropriate price based on position type
             # For BUY: close at bid (sell price), For SELL: close at ask (buy price)
             current_price = tick.bid if tracked_pos['type'] == 'BUY' else tick.ask
+            
+            # Read TP/SL from tracked position (database columns or in-memory)
             tp_target = tracked_pos['tp']
             sl_target = tracked_pos['sl']
             
