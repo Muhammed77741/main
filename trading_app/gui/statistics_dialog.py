@@ -147,7 +147,7 @@ class StatisticsDialog(QDialog):
         refresh_btn = QPushButton("Refresh")
         refresh_btn.setStyleSheet("""
             QPushButton {
-                background-color: #4CAF50;
+                background-color: #808080;
                 color: white;
                 border: none;
                 border-radius: 4px;
@@ -157,7 +157,7 @@ class StatisticsDialog(QDialog):
                 font-size: 12px;
             }
             QPushButton:hover {
-                background-color: #45a049;
+                background-color: #696969;
             }
         """)
         refresh_btn.clicked.connect(self.load_statistics)
@@ -166,7 +166,7 @@ class StatisticsDialog(QDialog):
         close_btn = QPushButton("Close")
         close_btn.setStyleSheet("""
             QPushButton {
-                background-color: #757575;
+                background-color: #808080;
                 color: white;
                 border: none;
                 border-radius: 4px;
@@ -176,7 +176,7 @@ class StatisticsDialog(QDialog):
                 font-size: 12px;
             }
             QPushButton:hover {
-                background-color: #616161;
+                background-color: #696969;
             }
         """)
         close_btn.clicked.connect(self.accept)
@@ -190,7 +190,7 @@ class StatisticsDialog(QDialog):
         
         # Use grid layout for cards
         layout = QGridLayout(group)
-        layout.setSpacing(8)  # Reduced from 10px to 8px
+        layout.setSpacing(6)  # Reduced from 8px to 6px
         
         # Create placeholders for metric cards
         self.total_trades_card = self.create_metric_card("🎯 Total Trades", "0", "#2196F3")
@@ -216,9 +216,9 @@ class StatisticsDialog(QDialog):
         card.setStyleSheet(f"""
             QFrame {{
                 background-color: {color};
-                border-radius: 6px;
-                padding: 8px;
-                min-height: 50px;
+                border-radius: 4px;
+                padding: 6px;
+                min-height: 35px;
             }}
             QLabel {{
                 color: white;
@@ -226,12 +226,12 @@ class StatisticsDialog(QDialog):
         """)
         
         layout = QVBoxLayout(card)
-        layout.setSpacing(3)
+        layout.setSpacing(2)
         
         # Title label
         title_label = QLabel(title)
         title_font = QFont()
-        title_font.setPointSize(9)
+        title_font.setPointSize(8)
         title_font.setBold(True)
         title_label.setFont(title_font)
         layout.addWidget(title_label)
@@ -239,7 +239,7 @@ class StatisticsDialog(QDialog):
         # Value label  
         value_label = QLabel(value)
         value_font = QFont()
-        value_font.setPointSize(16)
+        value_font.setPointSize(13)
         value_font.setBold(True)
         value_label.setFont(value_font)
         layout.addWidget(value_label)

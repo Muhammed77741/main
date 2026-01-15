@@ -215,6 +215,12 @@ class MainWindow(QMainWindow):
 
         # Bot list
         self.bot_list = QListWidget()
+        self.bot_list.setStyleSheet("""
+            QListWidget::item {
+                font-size: 14px;
+                font-weight: 600;
+            }
+        """)
         self.bot_list.currentItemChanged.connect(self.on_bot_selection_changed)
 
         # Add bots

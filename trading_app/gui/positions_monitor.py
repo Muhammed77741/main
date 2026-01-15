@@ -284,6 +284,21 @@ class PositionsMonitor(QDialog):
         
         # Refresh button
         refresh_btn = QPushButton("🔄 Refresh Now")
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #808080;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #696969;
+            }
+        """)
         refresh_btn.clicked.connect(self.refresh_positions)
         controls_layout.addWidget(refresh_btn)
         
@@ -306,6 +321,21 @@ class PositionsMonitor(QDialog):
 
         # Close button
         close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #808080;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #696969;
+            }
+        """)
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
 
