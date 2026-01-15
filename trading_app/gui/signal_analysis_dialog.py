@@ -1307,7 +1307,8 @@ class SignalAnalysisDialog(QDialog):
         info_label = QLabel(
             "📊 <b>Signal Analysis (Backtest)</b><br>"
             "Analyze which trading signals would have been generated in a date range.<br>"
-            "This uses the same strategy as the live bot."
+            "This uses the same strategy and TP/SL levels as the live bot.<br>"
+            "<i>Multi-TP mode uses regime-based TP levels (TREND vs RANGE detection).</i>"
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -1526,12 +1527,19 @@ class SignalAnalysisDialog(QDialog):
         # Multi-TP mode
         row5 = QHBoxLayout()
         
-        self.use_multi_tp_check = QCheckBox("Use Multiple TP Levels")
+        self.use_multi_tp_check = QCheckBox("Use Multiple TP Levels (Live Bot Mode)")
         self.use_multi_tp_check.setChecked(False)
         self.use_multi_tp_check.setToolTip(
-            "Enable partial position closing at multiple TP levels:\n"
-            "TP1: Close 50%, TP2: Close 30%, TP3: Close 20%\n"
-            "SL moves to breakeven after TP1"
+            "Enable regime-based TP levels matching live bot:\n\n"
+            "Crypto (BTC/ETH):\n"
+            "  TREND: TP1=1.5%, TP2=2.75%, TP3=4.5%\n"
+            "  RANGE: TP1=1.0%, TP2=1.75%, TP3=2.5%\n\n"
+            "XAUUSD (Gold):\n"
+            "  TREND: TP1=30p, TP2=55p, TP3=90p\n"
+            "  RANGE: TP1=20p, TP2=35p, TP3=50p\n\n"
+            "Partial closes: TP1=50%, TP2=30%, TP3=20%\n"
+            "SL moves to breakeven after TP1\n"
+            "Market regime auto-detected (TREND/RANGE)"
         )
         row5.addWidget(self.use_multi_tp_check)
         
@@ -1539,7 +1547,10 @@ class SignalAnalysisDialog(QDialog):
         layout.addLayout(row5)
         
         # Note about default strategy
-        note_label = QLabel("<i>Leave at defaults to use bot's configured strategy settings</i>")
+        note_label = QLabel(
+            "<i>Single-TP mode: Use TP/SL multipliers above (Fibonacci-style)<br>"
+            "Multi-TP mode: Uses live bot's regime-based TP levels (TREND/RANGE auto-detected)</i>"
+        )
         note_label.setStyleSheet("color: gray;")
         layout.addWidget(note_label)
         
