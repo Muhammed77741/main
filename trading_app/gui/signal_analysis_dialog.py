@@ -268,7 +268,6 @@ class SignalAnalysisWorker(QThread):
                 
                 if is_xauusd:
                     # XAUUSD uses points
-                    tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
                     if signal_type == 1:  # BUY
                         tp1 = entry_price + tp_config['tp1']
                         tp2 = entry_price + tp_config['tp2']
@@ -279,7 +278,6 @@ class SignalAnalysisWorker(QThread):
                         tp3 = entry_price - tp_config['tp3']
                 else:
                     # Crypto uses percentage
-                    tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
                     if signal_type == 1:  # BUY
                         tp1 = entry_price * (1 + tp_config['tp1'] / 100)
                         tp2 = entry_price * (1 + tp_config['tp2'] / 100)
@@ -885,7 +883,6 @@ class SignalAnalysisWorkerMT5(QThread):
                 
                 if is_xauusd:
                     # XAUUSD uses points
-                    tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
                     if signal_type == 1:  # BUY
                         tp1 = entry_price + tp_config['tp1']
                         tp2 = entry_price + tp_config['tp2']
@@ -896,7 +893,6 @@ class SignalAnalysisWorkerMT5(QThread):
                         tp3 = entry_price - tp_config['tp3']
                 else:
                     # Crypto uses percentage
-                    tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
                     if signal_type == 1:  # BUY
                         tp1 = entry_price * (1 + tp_config['tp1'] / 100)
                         tp2 = entry_price * (1 + tp_config['tp2'] / 100)
