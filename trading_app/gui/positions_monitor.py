@@ -383,7 +383,7 @@ class PositionsMonitor(QDialog):
                     font-size: 13px;
                 }
                 QPushButton {
-                    background-color: #2196F3;
+                    background-color: #808080;
                     color: white;
                     border: none;
                     border-radius: 4px;
@@ -392,7 +392,7 @@ class PositionsMonitor(QDialog):
                     font-weight: bold;
                 }
                 QPushButton:hover {
-                    background-color: #1976D2;
+                    background-color: #696969;
                 }
             """)
             msg.exec()
@@ -419,7 +419,7 @@ class PositionsMonitor(QDialog):
                 font-size: 13px;
             }
             QPushButton {
-                background-color: #2196F3;
+                background-color: #808080;
                 color: white;
                 border: none;
                 border-radius: 4px;
@@ -428,12 +428,12 @@ class PositionsMonitor(QDialog):
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #1976D2;
+                background-color: #696969;
             }
         """)
         reply = msg.exec()
         
-        if reply != msg.button(QMessageBox.Yes):
+        if reply != QMessageBox.Yes:
             return
         
         # Close positions
@@ -546,7 +546,7 @@ class PositionsMonitor(QDialog):
                             font-size: 13px;
                         }
                         QPushButton {
-                            background-color: #F44336;
+                            background-color: #808080;
                             color: white;
                             border: none;
                             border-radius: 4px;
@@ -555,7 +555,7 @@ class PositionsMonitor(QDialog):
                             font-weight: bold;
                         }
                         QPushButton:hover {
-                            background-color: #D32F2F;
+                            background-color: #696969;
                         }
                     """)
                     msg.exec()
@@ -708,7 +708,7 @@ class PositionsMonitor(QDialog):
                         font-size: 13px;
                     }
                     QPushButton {
-                        background-color: #F44336;
+                        background-color: #808080;
                         color: white;
                         border: none;
                         border-radius: 4px;
@@ -717,7 +717,7 @@ class PositionsMonitor(QDialog):
                         font-weight: bold;
                     }
                     QPushButton:hover {
-                        background-color: #D32F2F;
+                        background-color: #696969;
                     }
                 """)
                 msg.exec()
@@ -737,7 +737,7 @@ class PositionsMonitor(QDialog):
                     font-size: 13px;
                 }
                 QPushButton {
-                    background-color: #F44336;
+                    background-color: #808080;
                     color: white;
                     border: none;
                     border-radius: 4px;
@@ -746,7 +746,7 @@ class PositionsMonitor(QDialog):
                     font-weight: bold;
                 }
                 QPushButton:hover {
-                    background-color: #D32F2F;
+                    background-color: #696969;
                 }
             """)
             msg.exec()
@@ -774,7 +774,7 @@ class PositionsMonitor(QDialog):
                 font-size: 13px;
             }
             QPushButton {
-                background-color: #4CAF50;
+                background-color: #808080;
                 color: white;
                 border: none;
                 border-radius: 4px;
@@ -783,7 +783,7 @@ class PositionsMonitor(QDialog):
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #388E3C;
+                background-color: #696969;
             }
         """)
         msg.exec()
