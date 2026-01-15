@@ -51,3 +51,19 @@ htmlcov/
 .env
 .env.local
 smc_trading_strategy/.env
+
+# PyInstaller
+*.spec
+build/
+dist/
+*.manifest
+*.exe
+*.app
+
+# Release artifacts
+trading_app/release/
+trading_app/installer/Output/
+
+# License and trial data (for testing)
+*.dat
+*.lic

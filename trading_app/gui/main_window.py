@@ -20,8 +20,11 @@ from gui.signal_analysis_dialog import SignalAnalysisDialog
 class MainWindow(QMainWindow):
     """Main application window"""
 
-    def __init__(self):
+    def __init__(self, license_manager=None):
         super().__init__()
+
+        # License manager
+        self.license_manager = license_manager
 
         # Closing flag to prevent operations during shutdown
         self.is_closing = False
@@ -181,8 +184,18 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # Main layout
-        main_layout = QHBoxLayout(central_widget)
+        # Main layout (vertical to add license status at top)
+        main_layout_v = QVBoxLayout(central_widget)
+        
+        # Add license status bar at top if license manager available
+        if self.license_manager:
+            from gui.activation_dialog import TrialStatusWidget
+            self.license_status_widget = TrialStatusWidget(self.license_manager)
+            self.license_status_widget.setMaximumHeight(30)
+            main_layout_v.addWidget(self.license_status_widget)
+        
+        # Main content area
+        main_layout = QHBoxLayout()
 
         # Create splitter
         splitter = QSplitter(Qt.Horizontal)
@@ -199,6 +212,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([280, 1120])
 
         main_layout.addWidget(splitter)
+        main_layout_v.addLayout(main_layout)
 
     def create_bot_list_panel(self):
         """Create bot list panel"""
