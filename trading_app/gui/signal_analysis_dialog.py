@@ -35,6 +35,15 @@ CRYPTO_RANGE_TP = {'tp1': 1.0, 'tp2': 1.75, 'tp3': 2.5}      # RANGE mode
 XAUUSD_TREND_TP = {'tp1': 30, 'tp2': 55, 'tp3': 90}          # TREND mode
 XAUUSD_RANGE_TP = {'tp1': 20, 'tp2': 35, 'tp3': 50}          # RANGE mode
 
+# Live Bot SL Configuration - Matches live bot settings
+# For Crypto (BTC/ETH) - in percentage of price
+CRYPTO_TREND_SL = 0.8     # TREND mode: 0.8% stop loss
+CRYPTO_RANGE_SL = 0.6     # RANGE mode: 0.6% stop loss
+
+# For XAUUSD (Gold) - in points
+XAUUSD_TREND_SL = 16      # TREND mode: 16 points stop loss
+XAUUSD_RANGE_SL = 12      # RANGE mode: 12 points stop loss
+
 # Regime Detection Constants
 REGIME_LOOKBACK = 100                    # Bars to analyze for regime detection
 REGIME_STRUCTURAL_WINDOW = 20            # Window for structural trend analysis
@@ -51,7 +60,7 @@ class SignalAnalysisWorker(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None):
+                 custom_tp_levels=None, custom_sl_levels=None):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -64,6 +73,7 @@ class SignalAnalysisWorker(QThread):
         self.timeframe = timeframe
         self.use_multi_tp = use_multi_tp
         self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
+        self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
         
     def run(self):
         """Run signal analysis in background"""
@@ -273,13 +283,34 @@ class SignalAnalysisWorker(QThread):
                         tp2 = entry_price * (1 - tp_config['tp2'] / 100)
                         tp3 = entry_price * (1 - tp_config['tp3'] / 100)
                 
-                # Use original SL (or apply multiplier if set)
-                if signal_type == 1:  # BUY
-                    risk = entry_price - original_stop_loss
-                    stop_loss = entry_price - (risk * self.sl_multiplier)
-                else:  # SELL
-                    risk = original_stop_loss - entry_price
-                    stop_loss = entry_price + (risk * self.sl_multiplier)
+                # Calculate SL using custom values or defaults
+                if self.custom_sl_levels:
+                    # Use custom SL levels from GUI
+                    if regime == 'TREND':
+                        sl_value = self.custom_sl_levels['trend']
+                    else:
+                        sl_value = self.custom_sl_levels['range']
+                    
+                    if is_xauusd:
+                        # XAUUSD uses points
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price - sl_value
+                        else:  # SELL
+                            stop_loss = entry_price + sl_value
+                    else:
+                        # Crypto uses percentage
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price * (1 - sl_value / 100)
+                        else:  # SELL
+                            stop_loss = entry_price * (1 + sl_value / 100)
+                else:
+                    # Use original SL (or apply multiplier if set)
+                    if signal_type == 1:  # BUY
+                        risk = entry_price - original_stop_loss
+                        stop_loss = entry_price - (risk * self.sl_multiplier)
+                    else:  # SELL
+                        risk = original_stop_loss - entry_price
+                        stop_loss = entry_price + (risk * self.sl_multiplier)
             else:
                 # Single TP mode: use custom multipliers
                 if signal_type == 1:  # BUY
@@ -666,7 +697,7 @@ class SignalAnalysisWorkerMT5(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None):
+                 custom_tp_levels=None, custom_sl_levels=None):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -679,6 +710,7 @@ class SignalAnalysisWorkerMT5(QThread):
         self.timeframe = timeframe
         self.use_multi_tp = use_multi_tp
         self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
+        self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
         
     def run(self):
         """Run signal analysis in background using MT5"""
@@ -862,13 +894,34 @@ class SignalAnalysisWorkerMT5(QThread):
                         tp2 = entry_price * (1 - tp_config['tp2'] / 100)
                         tp3 = entry_price * (1 - tp_config['tp3'] / 100)
                 
-                # Use original SL (or apply multiplier if set)
-                if signal_type == 1:  # BUY
-                    risk = entry_price - original_stop_loss
-                    stop_loss = entry_price - (risk * self.sl_multiplier)
-                else:  # SELL
-                    risk = original_stop_loss - entry_price
-                    stop_loss = entry_price + (risk * self.sl_multiplier)
+                # Calculate SL using custom values or defaults
+                if self.custom_sl_levels:
+                    # Use custom SL levels from GUI
+                    if regime == 'TREND':
+                        sl_value = self.custom_sl_levels['trend']
+                    else:
+                        sl_value = self.custom_sl_levels['range']
+                    
+                    if is_xauusd:
+                        # XAUUSD uses points
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price - sl_value
+                        else:  # SELL
+                            stop_loss = entry_price + sl_value
+                    else:
+                        # Crypto uses percentage
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price * (1 - sl_value / 100)
+                        else:  # SELL
+                            stop_loss = entry_price * (1 + sl_value / 100)
+                else:
+                    # Use original SL (or apply multiplier if set)
+                    if signal_type == 1:  # BUY
+                        risk = entry_price - original_stop_loss
+                        stop_loss = entry_price - (risk * self.sl_multiplier)
+                    else:  # SELL
+                        risk = original_stop_loss - entry_price
+                        stop_loss = entry_price + (risk * self.sl_multiplier)
             else:
                 # Single TP mode: use custom multipliers
                 if signal_type == 1:  # BUY
@@ -1647,7 +1700,34 @@ class SignalAnalysisDialog(QDialog):
         range_row.addStretch()
         multi_tp_layout.addLayout(range_row)
         
-        # Help text for TP values
+        # Add spacing
+        multi_tp_layout.addSpacing(10)
+        
+        # TREND mode SL levels
+        trend_sl_row = QHBoxLayout()
+        trend_sl_row.addWidget(QLabel("<b>TREND Mode SL:</b>"))
+        self.trend_sl_spin = QSpinBox()
+        self.trend_sl_spin.setRange(1, 500)
+        self.trend_sl_spin.setValue(int(CRYPTO_TREND_SL * 100))  # Convert to basis points for crypto
+        self.trend_sl_spin.setSuffix(" (0.8% or 16p)")
+        self.trend_sl_spin.setToolTip("Stop Loss for TREND mode. For Crypto: 80 = 0.8%. For XAUUSD: 16 = 16 points")
+        trend_sl_row.addWidget(self.trend_sl_spin)
+        trend_sl_row.addStretch()
+        multi_tp_layout.addLayout(trend_sl_row)
+        
+        # RANGE mode SL levels
+        range_sl_row = QHBoxLayout()
+        range_sl_row.addWidget(QLabel("<b>RANGE Mode SL:</b>"))
+        self.range_sl_spin = QSpinBox()
+        self.range_sl_spin.setRange(1, 500)
+        self.range_sl_spin.setValue(int(CRYPTO_RANGE_SL * 100))  # Convert to basis points for crypto
+        self.range_sl_spin.setSuffix(" (0.6% or 12p)")
+        self.range_sl_spin.setToolTip("Stop Loss for RANGE mode. For Crypto: 60 = 0.6%. For XAUUSD: 12 = 12 points")
+        range_sl_row.addWidget(self.range_sl_spin)
+        range_sl_row.addStretch()
+        multi_tp_layout.addLayout(range_sl_row)
+        
+        # Help text for TP/SL values
         help_label = QLabel(
             "<i><small>For Crypto (BTC/ETH): Values are in basis points (100 = 1.0%)<br>"
             "For XAUUSD (Gold): Values are in points directly</small></i>"
@@ -1795,6 +1875,30 @@ class SignalAnalysisDialog(QDialog):
                     'range': {'tp1': range_tp1 / 100.0, 'tp2': range_tp2 / 100.0, 'tp3': range_tp3 / 100.0}
                 }
         
+        # Get custom SL levels if multi-TP is enabled
+        custom_sl_levels = None
+        if use_multi_tp:
+            # Determine if crypto or XAUUSD
+            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+            
+            # Get values from spin boxes
+            trend_sl = self.trend_sl_spin.value()
+            range_sl = self.range_sl_spin.value()
+            
+            # Convert values based on symbol type
+            if is_xauusd:
+                # For XAUUSD, values are already in points
+                custom_sl_levels = {
+                    'trend': trend_sl,
+                    'range': range_sl
+                }
+            else:
+                # For crypto, convert from basis points to percentage
+                custom_sl_levels = {
+                    'trend': trend_sl / 100.0,
+                    'range': range_sl / 100.0
+                }
+        
         # Clear previous results
         self.results_table.setRowCount(0)
         self.summary_label.setText("Analyzing...")
@@ -1812,14 +1916,14 @@ class SignalAnalysisDialog(QDialog):
             self.worker = SignalAnalysisWorkerMT5(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels
+                custom_tp_levels, custom_sl_levels
             )
         else:
             # Use Binance worker for BTC/ETH
             self.worker = SignalAnalysisWorker(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels
+                custom_tp_levels, custom_sl_levels
             )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)
