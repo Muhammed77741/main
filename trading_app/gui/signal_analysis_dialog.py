@@ -226,6 +226,11 @@ class SignalAnalysisWorker(QThread):
         # Add multi-TP column if enabled
         if self.use_multi_tp:
             signals_df['tp_levels_hit'] = 'None'
+            # Add columns to store actual TP levels used
+            signals_df['tp1_used'] = 0.0
+            signals_df['tp2_used'] = 0.0
+            signals_df['tp3_used'] = 0.0
+            signals_df['sl_used'] = 0.0
         
         # Add regime column to store market regime detection
         signals_df['regime'] = 'N/A'
@@ -335,6 +340,12 @@ class SignalAnalysisWorker(QThread):
             
             # Route to appropriate calculation method
             if self.use_multi_tp:
+                # Store the calculated TP and SL levels for display/export
+                signals_df.loc[idx, 'tp1_used'] = tp1
+                signals_df.loc[idx, 'tp2_used'] = tp2
+                signals_df.loc[idx, 'tp3_used'] = tp3
+                signals_df.loc[idx, 'sl_used'] = stop_loss
+                
                 result = self._calculate_multi_tp_outcome_live_style(
                     signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles
                 )
@@ -841,6 +852,11 @@ class SignalAnalysisWorkerMT5(QThread):
         # Add multi-TP column if enabled
         if self.use_multi_tp:
             signals_df['tp_levels_hit'] = 'None'
+            # Add columns to store actual TP levels used
+            signals_df['tp1_used'] = 0.0
+            signals_df['tp2_used'] = 0.0
+            signals_df['tp3_used'] = 0.0
+            signals_df['sl_used'] = 0.0
         
         # Add regime column to store market regime detection
         signals_df['regime'] = 'N/A'
@@ -950,6 +966,12 @@ class SignalAnalysisWorkerMT5(QThread):
             
             # Route to appropriate calculation method
             if self.use_multi_tp:
+                # Store the calculated TP and SL levels for display/export
+                signals_df.loc[idx, 'tp1_used'] = tp1
+                signals_df.loc[idx, 'tp2_used'] = tp2
+                signals_df.loc[idx, 'tp3_used'] = tp3
+                signals_df.loc[idx, 'sl_used'] = stop_loss
+                
                 result = self._calculate_multi_tp_outcome_live_style(
                     signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles
                 )
@@ -2132,18 +2154,29 @@ class SignalAnalysisDialog(QDialog):
             col_idx += 1
             
             # Stop Loss
-            sl_value = row.get('stop_loss', 0)
-            if pd.isna(sl_value):
-                sl_value = 0
+            # Use sl_used if available (multi-TP mode), otherwise use original stop_loss
+            if has_tp_levels and 'sl_used' in row and not pd.isna(row.get('sl_used', None)):
+                sl_value = row['sl_used']
+            else:
+                sl_value = row.get('stop_loss', 0)
+                if pd.isna(sl_value):
+                    sl_value = 0
             sl_item = QTableWidgetItem(f"${sl_value:.2f}" if sl_value else "N/A")
             self.results_table.setItem(row_idx, col_idx, sl_item)
             col_idx += 1
             
             # Take Profit
-            tp_value = row.get('take_profit', 0)
-            if pd.isna(tp_value):
-                tp_value = 0
-            tp_item = QTableWidgetItem(f"${tp_value:.2f}" if tp_value else "N/A")
+            # For multi-TP mode, show TP1/TP2/TP3, otherwise show single TP
+            if has_tp_levels and 'tp1_used' in row and not pd.isna(row.get('tp1_used', None)):
+                tp1 = row['tp1_used']
+                tp2 = row['tp2_used']
+                tp3 = row['tp3_used']
+                tp_item = QTableWidgetItem(f"${tp1:.2f}/${tp2:.2f}/${tp3:.2f}")
+            else:
+                tp_value = row.get('take_profit', 0)
+                if pd.isna(tp_value):
+                    tp_value = 0
+                tp_item = QTableWidgetItem(f"${tp_value:.2f}" if tp_value else "N/A")
             self.results_table.setItem(row_idx, col_idx, tp_item)
             col_idx += 1
             
