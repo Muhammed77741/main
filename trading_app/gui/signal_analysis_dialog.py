@@ -35,6 +35,12 @@ CRYPTO_RANGE_TP = {'tp1': 1.0, 'tp2': 1.75, 'tp3': 2.5}      # RANGE mode
 XAUUSD_TREND_TP = {'tp1': 30, 'tp2': 55, 'tp3': 90}          # TREND mode
 XAUUSD_RANGE_TP = {'tp1': 20, 'tp2': 35, 'tp3': 50}          # RANGE mode
 
+# Regime Detection Constants
+REGIME_LOOKBACK = 100                    # Bars to analyze for regime detection
+REGIME_STRUCTURAL_WINDOW = 20            # Window for structural trend analysis
+REGIME_STRUCTURAL_THRESHOLD = 12         # Threshold for higher highs/lower lows
+REGIME_TREND_SIGNALS_REQUIRED = 3        # Signals needed to classify as TREND
+
 
 class SignalAnalysisWorker(QThread):
     """Background worker for signal analysis"""
@@ -131,7 +137,7 @@ class SignalAnalysisWorker(QThread):
         except Exception as e:
             self.error.emit(f"Error: {str(e)}")
     
-    def _detect_market_regime(self, full_df, signal_idx, lookback=100):
+    def _detect_market_regime(self, full_df, signal_idx, lookback=REGIME_LOOKBACK):
         """
         Detect market regime at signal time: TREND or RANGE
         Uses same logic as live bot
@@ -141,7 +147,7 @@ class SignalAnalysisWorker(QThread):
         start_pos = max(0, signal_pos - lookback + 1)
         recent_data = full_df.iloc[start_pos:signal_pos + 1]
         
-        if len(recent_data) < lookback:
+        if len(recent_data) < REGIME_LOOKBACK:
             return 'RANGE'
         
         # 1. EMA CROSSOVER
@@ -179,19 +185,19 @@ class SignalAnalysisWorker(QThread):
         directional_bias = trend_strength > 0.15
         
         # 5. Structural trend
-        highs = recent_data['high'].values[-20:]
-        lows = recent_data['low'].values[-20:]
+        highs = recent_data['high'].values[-REGIME_STRUCTURAL_WINDOW:]
+        lows = recent_data['low'].values[-REGIME_STRUCTURAL_WINDOW:]
         
         higher_highs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
         lower_lows = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
         
-        structural_trend = (higher_highs > 12) or (lower_lows > 12)
+        structural_trend = (higher_highs > REGIME_STRUCTURAL_THRESHOLD) or (lower_lows > REGIME_STRUCTURAL_THRESHOLD)
         
         # Count trend signals
         trend_signals = sum([ema_trend, high_volatility, strong_direction, directional_bias, structural_trend])
         
         # Need 3+ signals for TREND
-        return 'TREND' if trend_signals >= 3 else 'RANGE'
+        return 'TREND' if trend_signals >= REGIME_TREND_SIGNALS_REQUIRED else 'RANGE'
 
     def _calculate_signal_outcomes(self, signals_df, full_df):
         """
@@ -866,7 +872,7 @@ class SignalAnalysisWorkerMT5(QThread):
                 signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
                 signals_df.loc[idx, 'bars_held'] = result['bars']
     
-    def _detect_market_regime(self, full_df, signal_idx, lookback=100):
+    def _detect_market_regime(self, full_df, signal_idx, lookback=REGIME_LOOKBACK):
         """
         Detect market regime at signal time: TREND or RANGE
         Uses same logic as live bot
@@ -876,7 +882,7 @@ class SignalAnalysisWorkerMT5(QThread):
         start_pos = max(0, signal_pos - lookback + 1)
         recent_data = full_df.iloc[start_pos:signal_pos + 1]
         
-        if len(recent_data) < lookback:
+        if len(recent_data) < REGIME_LOOKBACK:
             return 'RANGE'
         
         # 1. EMA CROSSOVER
@@ -914,19 +920,19 @@ class SignalAnalysisWorkerMT5(QThread):
         directional_bias = trend_strength > 0.15
         
         # 5. Structural trend
-        highs = recent_data['high'].values[-20:]
-        lows = recent_data['low'].values[-20:]
+        highs = recent_data['high'].values[-REGIME_STRUCTURAL_WINDOW:]
+        lows = recent_data['low'].values[-REGIME_STRUCTURAL_WINDOW:]
         
         higher_highs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
         lower_lows = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
         
-        structural_trend = (higher_highs > 12) or (lower_lows > 12)
+        structural_trend = (higher_highs > REGIME_STRUCTURAL_THRESHOLD) or (lower_lows > REGIME_STRUCTURAL_THRESHOLD)
         
         # Count trend signals
         trend_signals = sum([ema_trend, high_volatility, strong_direction, directional_bias, structural_trend])
         
         # Need 3+ signals for TREND
-        return 'TREND' if trend_signals >= 3 else 'RANGE'
+        return 'TREND' if trend_signals >= REGIME_TREND_SIGNALS_REQUIRED else 'RANGE'
 
     def _calculate_multi_tp_outcome_live_style(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles):
         """
