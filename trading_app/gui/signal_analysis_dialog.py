@@ -251,7 +251,7 @@ class SignalAnalysisWorker(QThread):
             if self.use_multi_tp:
                 # Use live bot's regime-based TP levels (or custom overrides)
                 is_xauusd = 'XAUUSD' in self.symbol.upper() or 'XAU' in self.symbol.upper()
-                
+
                 # Get TP configuration (custom or default)
                 if self.custom_tp_levels:
                     # Use custom TP levels from GUI
@@ -259,12 +259,20 @@ class SignalAnalysisWorker(QThread):
                         tp_config = self.custom_tp_levels['trend']
                     else:
                         tp_config = self.custom_tp_levels['range']
+                    # DEBUG: Print which TP config is being used
+                    if idx == signals_df.index[0]:  # Print once for first signal
+                        print(f"📊 Using CUSTOM TP levels for {self.symbol} - Regime: {regime}")
+                        print(f"   TP1: {tp_config['tp1']}, TP2: {tp_config['tp2']}, TP3: {tp_config['tp3']}")
                 else:
                     # Use default TP levels
                     if is_xauusd:
                         tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
                     else:
                         tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
+                    # DEBUG: Print which TP config is being used
+                    if idx == signals_df.index[0]:  # Print once for first signal
+                        print(f"📊 Using DEFAULT TP levels for {self.symbol} - Regime: {regime}")
+                        print(f"   TP1: {tp_config['tp1']}, TP2: {tp_config['tp2']}, TP3: {tp_config['tp3']}")
                 
                 if is_xauusd:
                     # XAUUSD uses points
@@ -908,7 +916,7 @@ class SignalAnalysisWorkerMT5(QThread):
             if self.use_multi_tp:
                 # Use live bot's regime-based TP levels (or custom overrides)
                 is_xauusd = 'XAUUSD' in self.symbol.upper() or 'XAU' in self.symbol.upper()
-                
+
                 # Get TP configuration (custom or default)
                 if self.custom_tp_levels:
                     # Use custom TP levels from GUI
@@ -916,12 +924,20 @@ class SignalAnalysisWorkerMT5(QThread):
                         tp_config = self.custom_tp_levels['trend']
                     else:
                         tp_config = self.custom_tp_levels['range']
+                    # DEBUG: Print which TP config is being used
+                    if idx == signals_df.index[0]:  # Print once for first signal
+                        print(f"📊 Using CUSTOM TP levels for {self.symbol} - Regime: {regime}")
+                        print(f"   TP1: {tp_config['tp1']}, TP2: {tp_config['tp2']}, TP3: {tp_config['tp3']}")
                 else:
                     # Use default TP levels
                     if is_xauusd:
                         tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
                     else:
                         tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
+                    # DEBUG: Print which TP config is being used
+                    if idx == signals_df.index[0]:  # Print once for first signal
+                        print(f"📊 Using DEFAULT TP levels for {self.symbol} - Regime: {regime}")
+                        print(f"   TP1: {tp_config['tp1']}, TP2: {tp_config['tp2']}, TP3: {tp_config['tp3']}")
                 
                 if is_xauusd:
                     # XAUUSD uses points
@@ -1797,7 +1813,21 @@ class SignalAnalysisDialog(QDialog):
         multi_tp_layout.addWidget(help_label)
         
         layout.addWidget(self.multi_tp_custom_group)
-        
+
+        # Set correct default values based on symbol
+        is_xauusd = 'XAUUSD' in self.config.symbol.upper() or 'XAU' in self.config.symbol.upper()
+        if is_xauusd:
+            # Set XAUUSD default values (in points)
+            self.trend_tp1_spin.setValue(XAUUSD_TREND_TP['tp1'])  # 30
+            self.trend_tp2_spin.setValue(XAUUSD_TREND_TP['tp2'])  # 55
+            self.trend_tp3_spin.setValue(XAUUSD_TREND_TP['tp3'])  # 90
+            self.range_tp1_spin.setValue(XAUUSD_RANGE_TP['tp1'])  # 20
+            self.range_tp2_spin.setValue(XAUUSD_RANGE_TP['tp2'])  # 35
+            self.range_tp3_spin.setValue(XAUUSD_RANGE_TP['tp3'])  # 50
+            self.trend_sl_spin.setValue(XAUUSD_TREND_SL)  # 16
+            self.range_sl_spin.setValue(XAUUSD_RANGE_SL)  # 12
+        # else: already set to CRYPTO values by default
+
         # Note about default strategy
         note_label = QLabel(
             "<i>Single-TP mode: Use TP/SL multipliers above (Fibonacci-style)<br>"
