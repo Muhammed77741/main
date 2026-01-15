@@ -181,42 +181,25 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # Main layout
-        main_layout = QHBoxLayout(central_widget)
+        # Main layout - vertical
+        main_layout = QVBoxLayout(central_widget)
 
-        # Create splitter
-        splitter = QSplitter(Qt.Horizontal)
+        # Bot list at top
+        bot_list_panel = self.create_bot_list_panel()
+        main_layout.addWidget(bot_list_panel)
 
-        # Left panel - bot list
-        left_panel = self.create_bot_list_panel()
-        splitter.addWidget(left_panel)
-
-        # Right panel - main content
-        right_panel = self.create_main_panel()
-        splitter.addWidget(right_panel)
-
-        # Set splitter sizes (20% left, 80% right)
-        splitter.setSizes([280, 1120])
-
-        main_layout.addWidget(splitter)
+        # Main content below
+        main_panel = self.create_main_panel()
+        main_layout.addWidget(main_panel, 1)  # Give main panel more space
 
     def create_bot_list_panel(self):
         """Create bot list panel"""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-
-        # Title
-        title = QLabel("🤖 Trading Bots")
-        title_font = QFont()
-        title_font.setPointSize(18)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        title.setStyleSheet("color: #2196F3; padding: 5px 0px;")
-        layout.addWidget(title)
+        group = QGroupBox("🤖 Trading Bots")
+        layout = QHBoxLayout(group)
 
         # Bot list
         self.bot_list = QListWidget()
-        self.bot_list.setMaximumHeight(200)  # Limit height to ~20% of space instead of 40%
+        self.bot_list.setMaximumHeight(150)  # Compact height for horizontal layout
         self.bot_list.currentItemChanged.connect(self.on_bot_selection_changed)
 
         # Add bots
@@ -237,7 +220,7 @@ class MainWindow(QMainWindow):
 
             self.bot_list.addItem(item)
 
-        layout.addWidget(self.bot_list)
+        layout.addWidget(self.bot_list, 1)
 
         # Refresh button
         refresh_btn = QPushButton("🔄 Refresh")
@@ -246,6 +229,7 @@ class MainWindow(QMainWindow):
                 background-color: #2196F3;
                 color: white;
                 min-height: 32px;
+                min-width: 100px;
             }
             QPushButton:hover {
                 background-color: #1976D2;
@@ -254,7 +238,7 @@ class MainWindow(QMainWindow):
         refresh_btn.clicked.connect(self.refresh_bot_list)
         layout.addWidget(refresh_btn)
 
-        return panel
+        return group
 
     def create_main_panel(self):
         """Create main content panel"""
@@ -597,8 +581,12 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            # Get open positions from database
-            open_trades = self.db.get_open_trades(self.current_bot_id)
+            # Get open positions from database - only OPEN status
+            all_trades = self.db.get_open_trades(self.current_bot_id)
+            
+            # Filter to only truly open positions (status == 'OPEN')
+            # Exclude positions that might be in processing states
+            open_trades = [t for t in all_trades if t.status == 'OPEN']
             
             if not open_trades or len(open_trades) == 0:
                 self.live_positions_label.setText("<p style='color: #666; font-size: 12px;'>No open positions</p>")
