@@ -10,6 +10,10 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QClipboard
 
 
+# License key format configuration
+LICENSE_KEY_GROUP_SIZE = 5  # Characters per group (e.g., XXXXX-XXXXX)
+
+
 class ActivationDialog(QDialog):
     """Dialog for license activation"""
     
@@ -135,8 +139,9 @@ class ActivationDialog(QDialog):
         # Remove all non-alphanumeric characters
         clean = ''.join(c for c in text.upper() if c.isalnum())
         
-        # Format with dashes every 5 characters
-        formatted = '-'.join([clean[i:i+5] for i in range(0, len(clean), 5)])
+        # Format with dashes every LICENSE_KEY_GROUP_SIZE characters
+        formatted = '-'.join([clean[i:i+LICENSE_KEY_GROUP_SIZE] 
+                             for i in range(0, len(clean), LICENSE_KEY_GROUP_SIZE)])
         
         # Update only if different (to avoid infinite loop)
         if formatted != text:

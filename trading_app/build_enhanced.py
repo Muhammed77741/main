@@ -102,9 +102,12 @@ def build_exe():
         '--clean',  # Clean PyInstaller cache
         
         # Exclude unnecessary modules (reduce size)
-        '--exclude-module=matplotlib',
-        '--exclude-module=scipy',
-        '--exclude-module=IPython',
+        # Note: Only exclude if you're certain they're not needed by dependencies
+        # Test thoroughly after excluding any modules
+        '--exclude-module=matplotlib',  # Large plotting library (not used)
+        '--exclude-module=scipy',  # Scientific computing (not used)
+        '--exclude-module=IPython',  # Interactive Python (not used)
+        # Note: tkinter excluded as we use PySide6
         '--exclude-module=tkinter',
         
         # Application info
