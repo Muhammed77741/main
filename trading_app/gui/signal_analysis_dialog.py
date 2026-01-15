@@ -1672,8 +1672,8 @@ class SignalAnalysisDialog(QDialog):
         
         # Multi-TP customization section (collapsible)
         self.multi_tp_custom_group = QGroupBox("Custom TP Levels (Optional - Override Defaults)")
-        self.multi_tp_custom_group.setCheckable(False)
-        self.multi_tp_custom_group.setVisible(False)  # Hidden by default
+        self.multi_tp_custom_group.setCheckable(True)
+        self.multi_tp_custom_group.setChecked(False)  # Collapsed by default
         multi_tp_layout = QVBoxLayout(self.multi_tp_custom_group)
         
         # Connect checkbox to show/hide customization
@@ -1792,7 +1792,9 @@ class SignalAnalysisDialog(QDialog):
     
     def on_multi_tp_changed(self, state):
         """Show/hide custom TP levels section when Multi-TP checkbox changes"""
-        self.multi_tp_custom_group.setVisible(state == 2)  # 2 = Qt.Checked
+        # Don't automatically show custom section - let user decide if they want to customize
+        # The custom section should remain collapsed by default to use correct regime-based defaults
+        pass
         
     def create_summary_section(self):
         """Create summary section - compact layout"""
@@ -1886,11 +1888,11 @@ class SignalAnalysisDialog(QDialog):
         trailing_pct = self.trailing_pct_spin.value()
         use_multi_tp = self.use_multi_tp_check.isChecked()
         
-        # Get custom TP levels if multi-TP is enabled AND custom group is visible
-        # Only use custom values if user explicitly opened the customization section
+        # Get custom TP levels if multi-TP is enabled AND custom group is checked
+        # Only use custom values if user explicitly checked the customization section
         custom_tp_levels = None
         custom_sl_levels = None
-        if use_multi_tp and self.multi_tp_custom_group.isVisible():
+        if use_multi_tp and self.multi_tp_custom_group.isChecked():
             # Determine if crypto or XAUUSD
             is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
             
