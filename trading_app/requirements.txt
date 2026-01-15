@@ -18,5 +18,8 @@ python-telegram-bot>=20.0
 # Database
 # sqlite3 is built-in to Python
 
-# Optional: For packaging
-# pyinstaller>=6.0.0
+# Licensing and Security
+cryptography>=41.0.0
+
+# Packaging
+pyinstaller>=6.0.0
