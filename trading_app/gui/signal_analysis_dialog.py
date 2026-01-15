@@ -1597,6 +1597,7 @@ class SignalAnalysisDialog(QDialog):
         self.trend_tp1_spin.setSingleStep(0.1)
         self.trend_tp1_spin.setValue(CRYPTO_TREND_TP['tp1'])  # Default to crypto percentage
         self.trend_tp1_spin.setSuffix("%")
+        self.trend_tp1_spin.setMinimumWidth(90)
         self.trend_tp1_spin.setToolTip("TP1 for TREND mode (percentage for Crypto, points for XAUUSD)")
         trend_row.addWidget(self.trend_tp1_spin)
         
@@ -1607,6 +1608,7 @@ class SignalAnalysisDialog(QDialog):
         self.trend_tp2_spin.setSingleStep(0.1)
         self.trend_tp2_spin.setValue(CRYPTO_TREND_TP['tp2'])
         self.trend_tp2_spin.setSuffix("%")
+        self.trend_tp2_spin.setMinimumWidth(90)
         self.trend_tp2_spin.setToolTip("TP2 for TREND mode (percentage for Crypto, points for XAUUSD)")
         trend_row.addWidget(self.trend_tp2_spin)
         
@@ -1617,6 +1619,7 @@ class SignalAnalysisDialog(QDialog):
         self.trend_tp3_spin.setSingleStep(0.1)
         self.trend_tp3_spin.setValue(CRYPTO_TREND_TP['tp3'])
         self.trend_tp3_spin.setSuffix("%")
+        self.trend_tp3_spin.setMinimumWidth(90)
         self.trend_tp3_spin.setToolTip("TP3 for TREND mode (percentage for Crypto, points for XAUUSD)")
         trend_row.addWidget(self.trend_tp3_spin)
         
@@ -1633,6 +1636,7 @@ class SignalAnalysisDialog(QDialog):
         self.range_tp1_spin.setSingleStep(0.1)
         self.range_tp1_spin.setValue(CRYPTO_RANGE_TP['tp1'])
         self.range_tp1_spin.setSuffix("%")
+        self.range_tp1_spin.setMinimumWidth(90)
         self.range_tp1_spin.setToolTip("TP1 for RANGE mode (percentage for Crypto, points for XAUUSD)")
         range_row.addWidget(self.range_tp1_spin)
         
@@ -1643,6 +1647,7 @@ class SignalAnalysisDialog(QDialog):
         self.range_tp2_spin.setSingleStep(0.1)
         self.range_tp2_spin.setValue(CRYPTO_RANGE_TP['tp2'])
         self.range_tp2_spin.setSuffix("%")
+        self.range_tp2_spin.setMinimumWidth(90)
         self.range_tp2_spin.setToolTip("TP2 for RANGE mode (percentage for Crypto, points for XAUUSD)")
         range_row.addWidget(self.range_tp2_spin)
         
@@ -1653,6 +1658,7 @@ class SignalAnalysisDialog(QDialog):
         self.range_tp3_spin.setSingleStep(0.1)
         self.range_tp3_spin.setValue(CRYPTO_RANGE_TP['tp3'])
         self.range_tp3_spin.setSuffix("%")
+        self.range_tp3_spin.setMinimumWidth(90)
         self.range_tp3_spin.setToolTip("TP3 for RANGE mode (percentage for Crypto, points for XAUUSD)")
         range_row.addWidget(self.range_tp3_spin)
         
