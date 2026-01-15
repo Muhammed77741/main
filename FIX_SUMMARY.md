@@ -2,19 +2,25 @@
 
 ## Issue Resolution
 
-The issue you reported about incorrect TP levels in the Signal Analysis GUI CSV export has been fixed.
+The issues you reported about incorrect TP levels in the Signal Analysis GUI CSV export have been fixed.
 
 ### What Was Wrong
 
-When using multi-TP mode, the CSV export showed the wrong TP values. For example:
+1. **CSV Export Issue:** The CSV showed wrong TP values from the original strategy instead of actual multi-TP levels
+2. **Custom Values Issue:** Custom TP spin boxes (initialized with crypto defaults) were being used for XAUUSD, causing incorrect point values
+
+Examples:
 - **Entry Price:** 3397.2 (XAUUSD)
 - **Regime:** RANGE
 - **Expected TP1:** 3417.2 (entry + 20 points)
-- **CSV showed:** 3440.71 ❌ (wrong - this was the original strategy TP)
+- **CSV showed:** 3440.71 ❌ (wrong - original strategy TP)
+- **If custom section was shown:** Would use 150 points instead of 20 ❌
 
 ### What's Fixed
 
-The CSV export now includes new columns with the **actual** TP levels used:
+1. **CSV Export:** New columns with actual TP levels used
+2. **Custom Values:** Only use custom TP/SL when user explicitly opens the custom section
+3. **Default Behavior:** Uses correct regime-based defaults for each symbol
 
 | Column Name | Description | Example (XAUUSD RANGE, Entry 3397.2) |
 |------------|-------------|--------------------------------------|
@@ -26,8 +32,10 @@ The CSV export now includes new columns with the **actual** TP levels used:
 ### How to Use
 
 1. **Run Signal Analysis** with multi-TP mode enabled
-2. **Export CSV** - the new columns will be included automatically
-3. **Use the correct columns:**
+2. **Default (Recommended):** Just enable "Use Multiple TP Levels" - uses correct defaults
+3. **Custom (Optional):** Expand "Custom TP Levels" section only if you want to override defaults
+4. **Export CSV** - the new columns will be included automatically
+5. **Use the correct columns:**
    - ❌ Don't use: `take_profit` (this is the original strategy TP, not relevant in multi-TP mode)
    - ✅ Use: `tp1_used`, `tp2_used`, `tp3_used` (these are the actual levels used)
 
