@@ -227,6 +227,9 @@ class SignalAnalysisWorker(QThread):
         if self.use_multi_tp:
             signals_df['tp_levels_hit'] = 'None'
         
+        # Add regime column to store market regime detection
+        signals_df['regime'] = 'N/A'
+        
         for idx, signal_row in signals_df.iterrows():
             signal_type = signal_row['signal']
             entry_price = signal_row['close']
@@ -240,6 +243,9 @@ class SignalAnalysisWorker(QThread):
             
             # Detect market regime at signal time (like live bot)
             regime = self._detect_market_regime(full_df, idx)
+            
+            # Store regime in dataframe for display
+            signals_df.loc[idx, 'regime'] = regime
             
             # Calculate TP levels using live bot's logic
             if self.use_multi_tp:
@@ -838,6 +844,9 @@ class SignalAnalysisWorkerMT5(QThread):
         if self.use_multi_tp:
             signals_df['tp_levels_hit'] = 'None'
         
+        # Add regime column to store market regime detection
+        signals_df['regime'] = 'N/A'
+        
         for idx, signal_row in signals_df.iterrows():
             signal_type = signal_row['signal']
             entry_price = signal_row['close']
@@ -851,6 +860,9 @@ class SignalAnalysisWorkerMT5(QThread):
             
             # Detect market regime at signal time (like live bot)
             regime = self._detect_market_regime(full_df, idx)
+            
+            # Store regime in dataframe for display
+            signals_df.loc[idx, 'regime'] = regime
             
             # Calculate TP levels using live bot's logic
             if self.use_multi_tp:
