@@ -1412,6 +1412,7 @@ class SignalAnalysisDialog(QDialog):
         
         self.setWindowTitle(f"Signal Analysis - {config.name}")
         self.setMinimumSize(1400, 900)  # Increased from 1200x800 for wider table
+        self.resize(1600, 1000)  # Set initial size larger and make it resizable
         
         # Check dependencies
         if not DEPENDENCIES_AVAILABLE:
@@ -1573,6 +1574,10 @@ class SignalAnalysisDialog(QDialog):
         else:
             # Default: add both
             self.symbol_combo.addItems(['BTC/USDT', 'ETH/USDT'])
+        
+        # Connect symbol change to update TP/SL labels dynamically
+        self.symbol_combo.currentTextChanged.connect(self.update_tp_sl_labels)
+        
         row1.addWidget(self.symbol_combo)
         
         row1.addWidget(QLabel("  Timeframe:"))
@@ -1788,6 +1793,9 @@ class SignalAnalysisDialog(QDialog):
         
         layout.addWidget(self.multi_tp_custom_group)
         
+        # Initialize TP/SL labels based on selected symbol
+        self.update_tp_sl_labels()
+        
         # Note about default strategy
         note_label = QLabel(
             "<i>Single-TP mode: Use TP/SL multipliers above (Fibonacci-style)<br>"
@@ -1807,6 +1815,78 @@ class SignalAnalysisDialog(QDialog):
         # Don't automatically show custom section - let user decide if they want to customize
         # The custom section should remain collapsed by default to use correct regime-based defaults
         pass
+    
+    def update_tp_sl_labels(self):
+        """Update TP/SL spin box labels based on selected symbol"""
+        symbol = self.symbol_combo.currentText()
+        is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+        
+        if is_xauusd:
+            # XAUUSD - show only points
+            self.trend_tp1_spin.setSuffix(" p")
+            self.trend_tp1_spin.setToolTip("TP1 for TREND mode (XAUUSD): 30 points")
+            self.trend_tp1_spin.setValue(XAUUSD_TREND_TP['tp1'])
+            
+            self.trend_tp2_spin.setSuffix(" p")
+            self.trend_tp2_spin.setToolTip("TP2 for TREND mode (XAUUSD): 55 points")
+            self.trend_tp2_spin.setValue(XAUUSD_TREND_TP['tp2'])
+            
+            self.trend_tp3_spin.setSuffix(" p")
+            self.trend_tp3_spin.setToolTip("TP3 for TREND mode (XAUUSD): 90 points")
+            self.trend_tp3_spin.setValue(XAUUSD_TREND_TP['tp3'])
+            
+            self.range_tp1_spin.setSuffix(" p")
+            self.range_tp1_spin.setToolTip("TP1 for RANGE mode (XAUUSD): 20 points")
+            self.range_tp1_spin.setValue(XAUUSD_RANGE_TP['tp1'])
+            
+            self.range_tp2_spin.setSuffix(" p")
+            self.range_tp2_spin.setToolTip("TP2 for RANGE mode (XAUUSD): 35 points")
+            self.range_tp2_spin.setValue(XAUUSD_RANGE_TP['tp2'])
+            
+            self.range_tp3_spin.setSuffix(" p")
+            self.range_tp3_spin.setToolTip("TP3 for RANGE mode (XAUUSD): 50 points")
+            self.range_tp3_spin.setValue(XAUUSD_RANGE_TP['tp3'])
+            
+            self.trend_sl_spin.setSuffix(" p")
+            self.trend_sl_spin.setToolTip("Stop Loss for TREND mode (XAUUSD): 16 points")
+            self.trend_sl_spin.setValue(XAUUSD_TREND_SL)
+            
+            self.range_sl_spin.setSuffix(" p")
+            self.range_sl_spin.setToolTip("Stop Loss for RANGE mode (XAUUSD): 12 points")
+            self.range_sl_spin.setValue(XAUUSD_RANGE_SL)
+        else:
+            # Crypto - show only percentages (basis points)
+            self.trend_tp1_spin.setSuffix(" (1.5%)")
+            self.trend_tp1_spin.setToolTip("TP1 for TREND mode (Crypto): 150 basis points = 1.5%")
+            self.trend_tp1_spin.setValue(int(CRYPTO_TREND_TP['tp1'] * 100))
+            
+            self.trend_tp2_spin.setSuffix(" (2.75%)")
+            self.trend_tp2_spin.setToolTip("TP2 for TREND mode (Crypto): 275 basis points = 2.75%")
+            self.trend_tp2_spin.setValue(int(CRYPTO_TREND_TP['tp2'] * 100))
+            
+            self.trend_tp3_spin.setSuffix(" (4.5%)")
+            self.trend_tp3_spin.setToolTip("TP3 for TREND mode (Crypto): 450 basis points = 4.5%")
+            self.trend_tp3_spin.setValue(int(CRYPTO_TREND_TP['tp3'] * 100))
+            
+            self.range_tp1_spin.setSuffix(" (1.0%)")
+            self.range_tp1_spin.setToolTip("TP1 for RANGE mode (Crypto): 100 basis points = 1.0%")
+            self.range_tp1_spin.setValue(int(CRYPTO_RANGE_TP['tp1'] * 100))
+            
+            self.range_tp2_spin.setSuffix(" (1.75%)")
+            self.range_tp2_spin.setToolTip("TP2 for RANGE mode (Crypto): 175 basis points = 1.75%")
+            self.range_tp2_spin.setValue(int(CRYPTO_RANGE_TP['tp2'] * 100))
+            
+            self.range_tp3_spin.setSuffix(" (2.5%)")
+            self.range_tp3_spin.setToolTip("TP3 for RANGE mode (Crypto): 250 basis points = 2.5%")
+            self.range_tp3_spin.setValue(int(CRYPTO_RANGE_TP['tp3'] * 100))
+            
+            self.trend_sl_spin.setSuffix(" (0.8%)")
+            self.trend_sl_spin.setToolTip("Stop Loss for TREND mode (Crypto): 80 basis points = 0.8%")
+            self.trend_sl_spin.setValue(int(CRYPTO_TREND_SL * 100))
+            
+            self.range_sl_spin.setSuffix(" (0.6%)")
+            self.range_sl_spin.setToolTip("Stop Loss for RANGE mode (Crypto): 60 basis points = 0.6%")
+            self.range_sl_spin.setValue(int(CRYPTO_RANGE_SL * 100))
         
     def create_summary_section(self):
         """Create summary section - compact layout"""
