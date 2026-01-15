@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QGroupBox, QHeaderView, QDateEdit, QComboBox,
-    QSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
+    QSpinBox, QDoubleSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QDate
 from models import BotConfig
@@ -1591,27 +1591,33 @@ class SignalAnalysisDialog(QDialog):
         trend_row = QHBoxLayout()
         trend_row.addWidget(QLabel("<b>TREND Mode:</b>"))
         trend_row.addWidget(QLabel("TP1:"))
-        self.trend_tp1_spin = QSpinBox()
-        self.trend_tp1_spin.setRange(1, 1000)
-        self.trend_tp1_spin.setValue(int(CRYPTO_TREND_TP['tp1'] * 100))  # Convert to basis points for crypto
-        self.trend_tp1_spin.setSuffix(" (1.5% or 30p)")
-        self.trend_tp1_spin.setToolTip("TP1 for TREND mode. For Crypto: 150 = 1.5%. For XAUUSD: 30 = 30 points")
+        self.trend_tp1_spin = QDoubleSpinBox()
+        self.trend_tp1_spin.setRange(0.1, 100.0)
+        self.trend_tp1_spin.setDecimals(2)
+        self.trend_tp1_spin.setSingleStep(0.1)
+        self.trend_tp1_spin.setValue(CRYPTO_TREND_TP['tp1'])  # Default to crypto percentage
+        self.trend_tp1_spin.setSuffix("%")
+        self.trend_tp1_spin.setToolTip("TP1 for TREND mode (percentage for Crypto, points for XAUUSD)")
         trend_row.addWidget(self.trend_tp1_spin)
         
         trend_row.addWidget(QLabel("  TP2:"))
-        self.trend_tp2_spin = QSpinBox()
-        self.trend_tp2_spin.setRange(1, 1000)
-        self.trend_tp2_spin.setValue(int(CRYPTO_TREND_TP['tp2'] * 100))
-        self.trend_tp2_spin.setSuffix(" (2.75% or 55p)")
-        self.trend_tp2_spin.setToolTip("TP2 for TREND mode. For Crypto: 275 = 2.75%. For XAUUSD: 55 = 55 points")
+        self.trend_tp2_spin = QDoubleSpinBox()
+        self.trend_tp2_spin.setRange(0.1, 100.0)
+        self.trend_tp2_spin.setDecimals(2)
+        self.trend_tp2_spin.setSingleStep(0.1)
+        self.trend_tp2_spin.setValue(CRYPTO_TREND_TP['tp2'])
+        self.trend_tp2_spin.setSuffix("%")
+        self.trend_tp2_spin.setToolTip("TP2 for TREND mode (percentage for Crypto, points for XAUUSD)")
         trend_row.addWidget(self.trend_tp2_spin)
         
         trend_row.addWidget(QLabel("  TP3:"))
-        self.trend_tp3_spin = QSpinBox()
-        self.trend_tp3_spin.setRange(1, 1000)
-        self.trend_tp3_spin.setValue(int(CRYPTO_TREND_TP['tp3'] * 100))
-        self.trend_tp3_spin.setSuffix(" (4.5% or 90p)")
-        self.trend_tp3_spin.setToolTip("TP3 for TREND mode. For Crypto: 450 = 4.5%. For XAUUSD: 90 = 90 points")
+        self.trend_tp3_spin = QDoubleSpinBox()
+        self.trend_tp3_spin.setRange(0.1, 100.0)
+        self.trend_tp3_spin.setDecimals(2)
+        self.trend_tp3_spin.setSingleStep(0.1)
+        self.trend_tp3_spin.setValue(CRYPTO_TREND_TP['tp3'])
+        self.trend_tp3_spin.setSuffix("%")
+        self.trend_tp3_spin.setToolTip("TP3 for TREND mode (percentage for Crypto, points for XAUUSD)")
         trend_row.addWidget(self.trend_tp3_spin)
         
         trend_row.addStretch()
@@ -1621,27 +1627,33 @@ class SignalAnalysisDialog(QDialog):
         range_row = QHBoxLayout()
         range_row.addWidget(QLabel("<b>RANGE Mode:</b>"))
         range_row.addWidget(QLabel("TP1:"))
-        self.range_tp1_spin = QSpinBox()
-        self.range_tp1_spin.setRange(1, 1000)
-        self.range_tp1_spin.setValue(int(CRYPTO_RANGE_TP['tp1'] * 100))
-        self.range_tp1_spin.setSuffix(" (1.0% or 20p)")
-        self.range_tp1_spin.setToolTip("TP1 for RANGE mode. For Crypto: 100 = 1.0%. For XAUUSD: 20 = 20 points")
+        self.range_tp1_spin = QDoubleSpinBox()
+        self.range_tp1_spin.setRange(0.1, 100.0)
+        self.range_tp1_spin.setDecimals(2)
+        self.range_tp1_spin.setSingleStep(0.1)
+        self.range_tp1_spin.setValue(CRYPTO_RANGE_TP['tp1'])
+        self.range_tp1_spin.setSuffix("%")
+        self.range_tp1_spin.setToolTip("TP1 for RANGE mode (percentage for Crypto, points for XAUUSD)")
         range_row.addWidget(self.range_tp1_spin)
         
         range_row.addWidget(QLabel("  TP2:"))
-        self.range_tp2_spin = QSpinBox()
-        self.range_tp2_spin.setRange(1, 1000)
-        self.range_tp2_spin.setValue(int(CRYPTO_RANGE_TP['tp2'] * 100))
-        self.range_tp2_spin.setSuffix(" (1.75% or 35p)")
-        self.range_tp2_spin.setToolTip("TP2 for RANGE mode. For Crypto: 175 = 1.75%. For XAUUSD: 35 = 35 points")
+        self.range_tp2_spin = QDoubleSpinBox()
+        self.range_tp2_spin.setRange(0.1, 100.0)
+        self.range_tp2_spin.setDecimals(2)
+        self.range_tp2_spin.setSingleStep(0.1)
+        self.range_tp2_spin.setValue(CRYPTO_RANGE_TP['tp2'])
+        self.range_tp2_spin.setSuffix("%")
+        self.range_tp2_spin.setToolTip("TP2 for RANGE mode (percentage for Crypto, points for XAUUSD)")
         range_row.addWidget(self.range_tp2_spin)
         
         range_row.addWidget(QLabel("  TP3:"))
-        self.range_tp3_spin = QSpinBox()
-        self.range_tp3_spin.setRange(1, 1000)
-        self.range_tp3_spin.setValue(int(CRYPTO_RANGE_TP['tp3'] * 100))
-        self.range_tp3_spin.setSuffix(" (2.5% or 50p)")
-        self.range_tp3_spin.setToolTip("TP3 for RANGE mode. For Crypto: 250 = 2.5%. For XAUUSD: 50 = 50 points")
+        self.range_tp3_spin = QDoubleSpinBox()
+        self.range_tp3_spin.setRange(0.1, 100.0)
+        self.range_tp3_spin.setDecimals(2)
+        self.range_tp3_spin.setSingleStep(0.1)
+        self.range_tp3_spin.setValue(CRYPTO_RANGE_TP['tp3'])
+        self.range_tp3_spin.setSuffix("%")
+        self.range_tp3_spin.setToolTip("TP3 for RANGE mode (percentage for Crypto, points for XAUUSD)")
         range_row.addWidget(self.range_tp3_spin)
         
         range_row.addStretch()
@@ -1649,11 +1661,14 @@ class SignalAnalysisDialog(QDialog):
         
         # Help text for TP values
         help_label = QLabel(
-            "<i><small>For Crypto (BTC/ETH): Values are in basis points (100 = 1.0%)<br>"
-            "For XAUUSD (Gold): Values are in points directly</small></i>"
+            "<i><small>For Crypto (BTC/ETH): Values in percentage (e.g., 1.5%)<br>"
+            "For XAUUSD (Gold): Values in pips/points (e.g., 30 pips)</small></i>"
         )
         help_label.setStyleSheet("color: gray;")
         multi_tp_layout.addWidget(help_label)
+        
+        # Connect symbol change to update TP spin boxes
+        self.symbol_combo.currentTextChanged.connect(self.on_symbol_changed)
         
         layout.addWidget(self.multi_tp_custom_group)
         
@@ -1674,6 +1689,86 @@ class SignalAnalysisDialog(QDialog):
     def on_multi_tp_changed(self, state):
         """Show/hide custom TP levels section when Multi-TP checkbox changes"""
         self.multi_tp_custom_group.setVisible(state == 2)  # 2 = Qt.Checked
+    
+    def on_symbol_changed(self, symbol):
+        """Update TP spin boxes based on selected symbol"""
+        is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+        
+        if is_xauusd:
+            # XAUUSD: Use points (pips)
+            # Update ranges and values for XAUUSD
+            self.trend_tp1_spin.setRange(1, 200)
+            self.trend_tp1_spin.setDecimals(0)
+            self.trend_tp1_spin.setSingleStep(1)
+            self.trend_tp1_spin.setValue(XAUUSD_TREND_TP['tp1'])
+            self.trend_tp1_spin.setSuffix(" pips")
+            
+            self.trend_tp2_spin.setRange(1, 200)
+            self.trend_tp2_spin.setDecimals(0)
+            self.trend_tp2_spin.setSingleStep(1)
+            self.trend_tp2_spin.setValue(XAUUSD_TREND_TP['tp2'])
+            self.trend_tp2_spin.setSuffix(" pips")
+            
+            self.trend_tp3_spin.setRange(1, 200)
+            self.trend_tp3_spin.setDecimals(0)
+            self.trend_tp3_spin.setSingleStep(1)
+            self.trend_tp3_spin.setValue(XAUUSD_TREND_TP['tp3'])
+            self.trend_tp3_spin.setSuffix(" pips")
+            
+            self.range_tp1_spin.setRange(1, 200)
+            self.range_tp1_spin.setDecimals(0)
+            self.range_tp1_spin.setSingleStep(1)
+            self.range_tp1_spin.setValue(XAUUSD_RANGE_TP['tp1'])
+            self.range_tp1_spin.setSuffix(" pips")
+            
+            self.range_tp2_spin.setRange(1, 200)
+            self.range_tp2_spin.setDecimals(0)
+            self.range_tp2_spin.setSingleStep(1)
+            self.range_tp2_spin.setValue(XAUUSD_RANGE_TP['tp2'])
+            self.range_tp2_spin.setSuffix(" pips")
+            
+            self.range_tp3_spin.setRange(1, 200)
+            self.range_tp3_spin.setDecimals(0)
+            self.range_tp3_spin.setSingleStep(1)
+            self.range_tp3_spin.setValue(XAUUSD_RANGE_TP['tp3'])
+            self.range_tp3_spin.setSuffix(" pips")
+        else:
+            # Crypto: Use percentage
+            self.trend_tp1_spin.setRange(0.1, 100.0)
+            self.trend_tp1_spin.setDecimals(2)
+            self.trend_tp1_spin.setSingleStep(0.1)
+            self.trend_tp1_spin.setValue(CRYPTO_TREND_TP['tp1'])
+            self.trend_tp1_spin.setSuffix("%")
+            
+            self.trend_tp2_spin.setRange(0.1, 100.0)
+            self.trend_tp2_spin.setDecimals(2)
+            self.trend_tp2_spin.setSingleStep(0.1)
+            self.trend_tp2_spin.setValue(CRYPTO_TREND_TP['tp2'])
+            self.trend_tp2_spin.setSuffix("%")
+            
+            self.trend_tp3_spin.setRange(0.1, 100.0)
+            self.trend_tp3_spin.setDecimals(2)
+            self.trend_tp3_spin.setSingleStep(0.1)
+            self.trend_tp3_spin.setValue(CRYPTO_TREND_TP['tp3'])
+            self.trend_tp3_spin.setSuffix("%")
+            
+            self.range_tp1_spin.setRange(0.1, 100.0)
+            self.range_tp1_spin.setDecimals(2)
+            self.range_tp1_spin.setSingleStep(0.1)
+            self.range_tp1_spin.setValue(CRYPTO_RANGE_TP['tp1'])
+            self.range_tp1_spin.setSuffix("%")
+            
+            self.range_tp2_spin.setRange(0.1, 100.0)
+            self.range_tp2_spin.setDecimals(2)
+            self.range_tp2_spin.setSingleStep(0.1)
+            self.range_tp2_spin.setValue(CRYPTO_RANGE_TP['tp2'])
+            self.range_tp2_spin.setSuffix("%")
+            
+            self.range_tp3_spin.setRange(0.1, 100.0)
+            self.range_tp3_spin.setDecimals(2)
+            self.range_tp3_spin.setSingleStep(0.1)
+            self.range_tp3_spin.setValue(CRYPTO_RANGE_TP['tp3'])
+            self.range_tp3_spin.setSuffix("%")
         
     def create_summary_section(self):
         """Create summary section - compact layout"""
@@ -1704,6 +1799,9 @@ class SignalAnalysisDialog(QDialog):
             'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
         ])
         
+        # Set minimum height for better visibility
+        self.results_table.setMinimumHeight(400)
+        
         # Configure table
         header = self.results_table.horizontalHeader()
         header.setStretchLastSection(True)
@@ -1713,6 +1811,11 @@ class SignalAnalysisDialog(QDialog):
         
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
+        
+        # Make font slightly larger for better readability
+        font = self.results_table.font()
+        font.setPointSize(font.pointSize() + 1)
+        self.results_table.setFont(font)
         
         layout.addWidget(self.results_table)
         
@@ -1789,10 +1892,10 @@ class SignalAnalysisDialog(QDialog):
                     'range': {'tp1': range_tp1, 'tp2': range_tp2, 'tp3': range_tp3}
                 }
             else:
-                # For crypto, convert from basis points to percentage
+                # For crypto, values are already in percentage (no need to convert)
                 custom_tp_levels = {
-                    'trend': {'tp1': trend_tp1 / 100.0, 'tp2': trend_tp2 / 100.0, 'tp3': trend_tp3 / 100.0},
-                    'range': {'tp1': range_tp1 / 100.0, 'tp2': range_tp2 / 100.0, 'tp3': range_tp3 / 100.0}
+                    'trend': {'tp1': trend_tp1, 'tp2': trend_tp2, 'tp3': trend_tp3},
+                    'range': {'tp1': range_tp1, 'tp2': range_tp2, 'tp3': range_tp3}
                 }
         
         # Clear previous results
