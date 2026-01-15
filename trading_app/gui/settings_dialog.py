@@ -50,14 +50,59 @@ class SettingsDialog(QDialog):
         button_layout = QHBoxLayout()
 
         save_btn = QPushButton("Save")
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #808080;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #696969;
+            }
+        """)
         save_btn.clicked.connect(self.save_settings)
         button_layout.addWidget(save_btn)
 
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #808080;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #696969;
+            }
+        """)
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
 
         test_btn = QPushButton("Test Connection")
+        test_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #808080;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #696969;
+            }
+        """)
         test_btn.clicked.connect(self.test_connection)
         button_layout.addWidget(test_btn)
 
