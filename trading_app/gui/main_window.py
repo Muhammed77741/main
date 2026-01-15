@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
         # Timer for status updates
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.update_status_display)
-        self.status_timer.start(60000)  # Update every 60 seconds (1 minute)
+        self.status_timer.start(5000)  # Update every 5 seconds
 
         # Select first bot
         if self.bot_manager.get_all_bot_ids():
@@ -85,11 +85,11 @@ class MainWindow(QMainWindow):
             }
             QPushButton {
                 border: none;
-                border-radius: 4px;
-                padding: 6px 12px;
+                border-radius: 6px;
+                padding: 8px 16px;
                 font-weight: 600;
-                min-height: 32px;
-                font-size: 12px;
+                min-height: 45px;
+                font-size: 13px;
                 color: white;
             }
             QPushButton:hover {
@@ -181,25 +181,40 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # Main layout - vertical
-        main_layout = QVBoxLayout(central_widget)
+        # Main layout
+        main_layout = QHBoxLayout(central_widget)
 
-        # Bot list at top
-        bot_list_panel = self.create_bot_list_panel()
-        main_layout.addWidget(bot_list_panel)
+        # Create splitter
+        splitter = QSplitter(Qt.Horizontal)
 
-        # Main content below
-        main_panel = self.create_main_panel()
-        main_layout.addWidget(main_panel, 1)  # Give main panel more space
+        # Left panel - bot list
+        left_panel = self.create_bot_list_panel()
+        splitter.addWidget(left_panel)
+
+        # Right panel - main content
+        right_panel = self.create_main_panel()
+        splitter.addWidget(right_panel)
+
+        # Set splitter sizes (20% left, 80% right)
+        splitter.setSizes([280, 1120])
+
+        main_layout.addWidget(splitter)
 
     def create_bot_list_panel(self):
         """Create bot list panel"""
-        group = QGroupBox("🤖 Trading Bots")
-        layout = QHBoxLayout(group)
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+
+        # Title
+        title = QLabel("Trading Bots")
+        title_font = QFont()
+        title_font.setPointSize(14)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        layout.addWidget(title)
 
         # Bot list
         self.bot_list = QListWidget()
-        self.bot_list.setMaximumHeight(150)  # Compact height for horizontal layout
         self.bot_list.currentItemChanged.connect(self.on_bot_selection_changed)
 
         # Add bots
@@ -220,7 +235,7 @@ class MainWindow(QMainWindow):
 
             self.bot_list.addItem(item)
 
-        layout.addWidget(self.bot_list, 1)
+        layout.addWidget(self.bot_list)
 
         # Refresh button
         refresh_btn = QPushButton("🔄 Refresh")
@@ -228,8 +243,7 @@ class MainWindow(QMainWindow):
             QPushButton {
                 background-color: #2196F3;
                 color: white;
-                min-height: 32px;
-                min-width: 100px;
+                min-height: 40px;
             }
             QPushButton:hover {
                 background-color: #1976D2;
@@ -238,7 +252,7 @@ class MainWindow(QMainWindow):
         refresh_btn.clicked.connect(self.refresh_bot_list)
         layout.addWidget(refresh_btn)
 
-        return group
+        return panel
 
     def create_main_panel(self):
         """Create main content panel"""
@@ -256,6 +270,10 @@ class MainWindow(QMainWindow):
         # Controls section
         controls_group = self.create_controls_section()
         layout.addWidget(controls_group)
+
+        # Active bots section
+        self.active_bots_group = self.create_active_bots_section()
+        layout.addWidget(self.active_bots_group)
 
         # Logs section
         logs_group = self.create_logs_section()
@@ -455,7 +473,19 @@ class MainWindow(QMainWindow):
 
         return group
 
+    def create_active_bots_section(self):
+        """Create active bots section"""
+        group = QGroupBox("Active Bots")
+        layout = QHBoxLayout(group)
 
+        # Active bots label
+        self.active_bots_label = QLabel("No bots running")
+        self.active_bots_label.setStyleSheet("font-weight: bold; color: #555;")
+        layout.addWidget(self.active_bots_label)
+
+        layout.addStretch()
+
+        return group
 
     def create_logs_section(self):
         """Create logs section"""
@@ -581,61 +611,15 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            # Get open positions from database - only OPEN status
-            all_trades = self.db.get_open_trades(self.current_bot_id)
-            
-            # Filter to only truly open positions (status == 'OPEN')
-            # Exclude positions that might be in processing states
-            open_trades = [t for t in all_trades if t.status == 'OPEN']
+            # Get open positions from database
+            open_trades = self.db.get_open_trades(self.current_bot_id)
             
             if not open_trades or len(open_trades) == 0:
                 self.live_positions_label.setText("<p style='color: #666; font-size: 12px;'>No open positions</p>")
                 return
             
-            # Get bot config to fetch current price
-            config = self.bot_manager.get_config(self.current_bot_id)
-            current_price = None
-            
-            # Fetch current price from exchange (same logic as positions monitor)
-            # In dry_run mode, use public ticker API (no authentication needed)
-            try:
-                if config.exchange == 'Binance':
-                    import ccxt
-                    exchange = ccxt.binance({
-                        'enableRateLimit': True,
-                        'options': {'defaultType': 'future'}
-                    })
-                    ticker = exchange.fetch_ticker(config.symbol)
-                    current_price = ticker.get('last')
-                elif config.exchange == 'MT5':
-                    import MetaTrader5 as mt5
-                    # MT5 requires initialization, but dry_run may not have real MT5 connection
-                    if config.dry_run:
-                        # For dry_run, try to get last known price or use entry price
-                        # Can't fetch from MT5 in dry_run mode without real connection
-                        pass  # Will fall back to database profit below
-                    else:
-                        if mt5.initialize():
-                            tick = mt5.symbol_info_tick(config.symbol)
-                            if tick:
-                                current_price = tick.last if tick.last > 0 else (tick.bid + tick.ask) / 2 if tick.bid > 0 and tick.ask > 0 else None
-                            mt5.shutdown()
-            except Exception as e:
-                print(f"Error fetching current price: {e}")
-            
-            # Calculate total P&L with current price or database profit
-            total_pnl = 0.0
-            for trade in open_trades:
-                # Try to use current price if available, otherwise use database profit
-                if current_price and current_price > 0:
-                    direction = 1 if trade.trade_type == 'BUY' else -1
-                    profit = (current_price - trade.entry_price) * trade.amount * direction
-                elif trade.profit is not None:
-                    # Use database profit (important for dry_run mode)
-                    profit = trade.profit
-                else:
-                    profit = 0.0
-                total_pnl += profit
+            # Calculate total P&L
+            total_pnl = sum(trade.profit if trade.profit else 0.0 for trade in open_trades)
             
             # Build HTML display
             positions_html = f"""
@@ -649,43 +633,25 @@ class MainWindow(QMainWindow):
             
             # Add each position
             for trade in open_trades[:5]:  # Show max 5 positions
-                # Calculate profit with current price or use database profit
-                if current_price and current_price > 0:
-                    direction = 1 if trade.trade_type == 'BUY' else -1
-                    profit_value = (current_price - trade.entry_price) * trade.amount * direction
-                elif trade.profit is not None:
-                    # Use database profit (important for dry_run mode where we can't fetch live price)
-                    profit_value = trade.profit
-                else:
-                    profit_value = 0.0
-                
                 # Determine color based on profit
-                pnl_color = '#4CAF50' if profit_value >= 0 else '#F44336'
+                pnl_color = '#4CAF50' if (trade.profit or 0) >= 0 else '#F44336'
                 type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
                 
-                # Use fetched current price or fallback to close_price or entry
-                if current_price and current_price > 0:
-                    display_current_price = current_price
-                elif trade.close_price and trade.close_price > 0:
-                    display_current_price = trade.close_price
-                else:
-                    display_current_price = trade.entry_price
-                
-                # Get symbol
-                symbol = trade.symbol if hasattr(trade, 'symbol') and trade.symbol else config.symbol
+                # Get current price (if available from trade data)
+                current_price = trade.close_price if trade.close_price else trade.entry_price
                 
                 positions_html += f"""
                 <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
                     <p style='margin: 2px 0;'>
-                        <b>{type_icon} {symbol}</b> 
+                        <b>{type_icon} {trade.symbol if hasattr(trade, 'symbol') else 'N/A'}</b> 
                         <span style='color: #666;'>{trade.trade_type}</span>
                     </p>
                     <p style='margin: 2px 0; font-size: 11px; color: #666;'>
-                        Entry: {trade.entry_price:,.4f} → Current: {display_current_price:,.4f}
+                        Entry: {trade.entry_price:,.4f} → Current: {current_price:,.4f}
                     </p>
                     <p style='margin: 2px 0; font-size: 11px;'>
                         P&L: <span style='color: {pnl_color}; font-weight: bold;'>
-                        ${profit_value:+,.2f}</span>
+                        ${(trade.profit or 0):+,.2f}</span>
                     </p>
                 </div>
                 """
@@ -708,7 +674,23 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(not is_running)
         self.stop_btn.setEnabled(is_running)
 
+    def update_active_bots_display(self):
+        """Update active bots display"""
+        running_bots = []
 
+        for bot_id in self.bot_manager.get_all_bot_ids():
+            if self.bot_manager.is_bot_running(bot_id):
+                config = self.bot_manager.get_config(bot_id)
+                icon = self.get_bot_icon(bot_id)
+                running_bots.append(f"{icon} {config.name}")
+
+        if running_bots:
+            bots_text = ", ".join(running_bots)
+            self.active_bots_label.setText(f"🟢 Running: {bots_text}")
+            self.active_bots_label.setStyleSheet("font-weight: bold; color: green;")
+        else:
+            self.active_bots_label.setText("⚫ No bots running")
+            self.active_bots_label.setStyleSheet("font-weight: bold; color: #555;")
 
     def start_bot(self):
         """Start current bot"""
@@ -891,6 +873,7 @@ class MainWindow(QMainWindow):
     def on_bot_started(self, bot_id: str):
         """Handle bot started signal"""
         self.update_controls()
+        self.update_active_bots_display()
         self.refresh_bot_list()  # Refresh to show green indicator
         self.log(f"Bot {bot_id} started")
 
@@ -898,6 +881,7 @@ class MainWindow(QMainWindow):
         """Handle bot stopped signal"""
         self.update_controls()
         self.update_status_display()
+        self.update_active_bots_display()
         self.refresh_bot_list()  # Refresh to remove green indicator
         self.log(f"Bot {bot_id} stopped")
 
@@ -961,7 +945,7 @@ class MainWindow(QMainWindow):
                 # Reset closing flag and restart timer if user cancels
                 self.is_closing = False
                 if hasattr(self, 'status_timer'):
-                    self.status_timer.start(60000)
+                    self.status_timer.start(5000)
                 return
 
             # Stop all bots
