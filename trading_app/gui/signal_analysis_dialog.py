@@ -50,7 +50,8 @@ class SignalAnalysisWorker(QThread):
     error = Signal(str)  # Error message
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
-                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False):
+                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
+                 custom_tp_levels=None):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -62,6 +63,7 @@ class SignalAnalysisWorker(QThread):
         self.trailing_pct = trailing_pct / 100.0  # Convert to decimal (50 -> 0.5)
         self.timeframe = timeframe
         self.use_multi_tp = use_multi_tp
+        self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
         
     def run(self):
         """Run signal analysis in background"""
@@ -231,8 +233,22 @@ class SignalAnalysisWorker(QThread):
             
             # Calculate TP levels using live bot's logic
             if self.use_multi_tp:
-                # Use live bot's regime-based TP levels
+                # Use live bot's regime-based TP levels (or custom overrides)
                 is_xauusd = 'XAUUSD' in self.symbol.upper() or 'XAU' in self.symbol.upper()
+                
+                # Get TP configuration (custom or default)
+                if self.custom_tp_levels:
+                    # Use custom TP levels from GUI
+                    if regime == 'TREND':
+                        tp_config = self.custom_tp_levels['trend']
+                    else:
+                        tp_config = self.custom_tp_levels['range']
+                else:
+                    # Use default TP levels
+                    if is_xauusd:
+                        tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
+                    else:
+                        tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
                 
                 if is_xauusd:
                     # XAUUSD uses points
@@ -649,7 +665,8 @@ class SignalAnalysisWorkerMT5(QThread):
     error = Signal(str)  # Error message
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
-                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False):
+                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
+                 custom_tp_levels=None):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -661,6 +678,7 @@ class SignalAnalysisWorkerMT5(QThread):
         self.trailing_pct = trailing_pct / 100.0  # Convert to decimal (50 -> 0.5)
         self.timeframe = timeframe
         self.use_multi_tp = use_multi_tp
+        self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
         
     def run(self):
         """Run signal analysis in background using MT5"""
@@ -804,8 +822,22 @@ class SignalAnalysisWorkerMT5(QThread):
             
             # Calculate TP levels using live bot's logic
             if self.use_multi_tp:
-                # Use live bot's regime-based TP levels
+                # Use live bot's regime-based TP levels (or custom overrides)
                 is_xauusd = 'XAUUSD' in self.symbol.upper() or 'XAU' in self.symbol.upper()
+                
+                # Get TP configuration (custom or default)
+                if self.custom_tp_levels:
+                    # Use custom TP levels from GUI
+                    if regime == 'TREND':
+                        tp_config = self.custom_tp_levels['trend']
+                    else:
+                        tp_config = self.custom_tp_levels['range']
+                else:
+                    # Use default TP levels
+                    if is_xauusd:
+                        tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
+                    else:
+                        tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
                 
                 if is_xauusd:
                     # XAUUSD uses points
@@ -1546,6 +1578,85 @@ class SignalAnalysisDialog(QDialog):
         row5.addStretch()
         layout.addLayout(row5)
         
+        # Multi-TP customization section (collapsible)
+        self.multi_tp_custom_group = QGroupBox("Custom TP Levels (Optional - Override Defaults)")
+        self.multi_tp_custom_group.setCheckable(False)
+        self.multi_tp_custom_group.setVisible(False)  # Hidden by default
+        multi_tp_layout = QVBoxLayout(self.multi_tp_custom_group)
+        
+        # Connect checkbox to show/hide customization
+        self.use_multi_tp_check.stateChanged.connect(self.on_multi_tp_changed)
+        
+        # TREND mode TP levels
+        trend_row = QHBoxLayout()
+        trend_row.addWidget(QLabel("<b>TREND Mode:</b>"))
+        trend_row.addWidget(QLabel("TP1:"))
+        self.trend_tp1_spin = QSpinBox()
+        self.trend_tp1_spin.setRange(1, 1000)
+        self.trend_tp1_spin.setValue(int(CRYPTO_TREND_TP['tp1'] * 100))  # Convert to basis points for crypto
+        self.trend_tp1_spin.setSuffix(" (1.5% or 30p)")
+        self.trend_tp1_spin.setToolTip("TP1 for TREND mode. For Crypto: 150 = 1.5%. For XAUUSD: 30 = 30 points")
+        trend_row.addWidget(self.trend_tp1_spin)
+        
+        trend_row.addWidget(QLabel("  TP2:"))
+        self.trend_tp2_spin = QSpinBox()
+        self.trend_tp2_spin.setRange(1, 1000)
+        self.trend_tp2_spin.setValue(int(CRYPTO_TREND_TP['tp2'] * 100))
+        self.trend_tp2_spin.setSuffix(" (2.75% or 55p)")
+        self.trend_tp2_spin.setToolTip("TP2 for TREND mode. For Crypto: 275 = 2.75%. For XAUUSD: 55 = 55 points")
+        trend_row.addWidget(self.trend_tp2_spin)
+        
+        trend_row.addWidget(QLabel("  TP3:"))
+        self.trend_tp3_spin = QSpinBox()
+        self.trend_tp3_spin.setRange(1, 1000)
+        self.trend_tp3_spin.setValue(int(CRYPTO_TREND_TP['tp3'] * 100))
+        self.trend_tp3_spin.setSuffix(" (4.5% or 90p)")
+        self.trend_tp3_spin.setToolTip("TP3 for TREND mode. For Crypto: 450 = 4.5%. For XAUUSD: 90 = 90 points")
+        trend_row.addWidget(self.trend_tp3_spin)
+        
+        trend_row.addStretch()
+        multi_tp_layout.addLayout(trend_row)
+        
+        # RANGE mode TP levels
+        range_row = QHBoxLayout()
+        range_row.addWidget(QLabel("<b>RANGE Mode:</b>"))
+        range_row.addWidget(QLabel("TP1:"))
+        self.range_tp1_spin = QSpinBox()
+        self.range_tp1_spin.setRange(1, 1000)
+        self.range_tp1_spin.setValue(int(CRYPTO_RANGE_TP['tp1'] * 100))
+        self.range_tp1_spin.setSuffix(" (1.0% or 20p)")
+        self.range_tp1_spin.setToolTip("TP1 for RANGE mode. For Crypto: 100 = 1.0%. For XAUUSD: 20 = 20 points")
+        range_row.addWidget(self.range_tp1_spin)
+        
+        range_row.addWidget(QLabel("  TP2:"))
+        self.range_tp2_spin = QSpinBox()
+        self.range_tp2_spin.setRange(1, 1000)
+        self.range_tp2_spin.setValue(int(CRYPTO_RANGE_TP['tp2'] * 100))
+        self.range_tp2_spin.setSuffix(" (1.75% or 35p)")
+        self.range_tp2_spin.setToolTip("TP2 for RANGE mode. For Crypto: 175 = 1.75%. For XAUUSD: 35 = 35 points")
+        range_row.addWidget(self.range_tp2_spin)
+        
+        range_row.addWidget(QLabel("  TP3:"))
+        self.range_tp3_spin = QSpinBox()
+        self.range_tp3_spin.setRange(1, 1000)
+        self.range_tp3_spin.setValue(int(CRYPTO_RANGE_TP['tp3'] * 100))
+        self.range_tp3_spin.setSuffix(" (2.5% or 50p)")
+        self.range_tp3_spin.setToolTip("TP3 for RANGE mode. For Crypto: 250 = 2.5%. For XAUUSD: 50 = 50 points")
+        range_row.addWidget(self.range_tp3_spin)
+        
+        range_row.addStretch()
+        multi_tp_layout.addLayout(range_row)
+        
+        # Help text for TP values
+        help_label = QLabel(
+            "<i><small>For Crypto (BTC/ETH): Values are in basis points (100 = 1.0%)<br>"
+            "For XAUUSD (Gold): Values are in points directly</small></i>"
+        )
+        help_label.setStyleSheet("color: gray;")
+        multi_tp_layout.addWidget(help_label)
+        
+        layout.addWidget(self.multi_tp_custom_group)
+        
         # Note about default strategy
         note_label = QLabel(
             "<i>Single-TP mode: Use TP/SL multipliers above (Fibonacci-style)<br>"
@@ -1559,6 +1670,10 @@ class SignalAnalysisDialog(QDialog):
     def on_trailing_changed(self, state):
         """Enable/disable trailing percentage when checkbox changes"""
         self.trailing_pct_spin.setEnabled(state == 2)  # 2 = Qt.Checked
+    
+    def on_multi_tp_changed(self, state):
+        """Show/hide custom TP levels section when Multi-TP checkbox changes"""
+        self.multi_tp_custom_group.setVisible(state == 2)  # 2 = Qt.Checked
         
     def create_summary_section(self):
         """Create summary section - compact layout"""
@@ -1652,6 +1767,34 @@ class SignalAnalysisDialog(QDialog):
         trailing_pct = self.trailing_pct_spin.value()
         use_multi_tp = self.use_multi_tp_check.isChecked()
         
+        # Get custom TP levels if multi-TP is enabled
+        custom_tp_levels = None
+        if use_multi_tp:
+            # Determine if crypto or XAUUSD
+            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+            
+            # Get values from spin boxes
+            trend_tp1 = self.trend_tp1_spin.value()
+            trend_tp2 = self.trend_tp2_spin.value()
+            trend_tp3 = self.trend_tp3_spin.value()
+            range_tp1 = self.range_tp1_spin.value()
+            range_tp2 = self.range_tp2_spin.value()
+            range_tp3 = self.range_tp3_spin.value()
+            
+            # Convert values based on symbol type
+            if is_xauusd:
+                # For XAUUSD, values are already in points
+                custom_tp_levels = {
+                    'trend': {'tp1': trend_tp1, 'tp2': trend_tp2, 'tp3': trend_tp3},
+                    'range': {'tp1': range_tp1, 'tp2': range_tp2, 'tp3': range_tp3}
+                }
+            else:
+                # For crypto, convert from basis points to percentage
+                custom_tp_levels = {
+                    'trend': {'tp1': trend_tp1 / 100.0, 'tp2': trend_tp2 / 100.0, 'tp3': trend_tp3 / 100.0},
+                    'range': {'tp1': range_tp1 / 100.0, 'tp2': range_tp2 / 100.0, 'tp3': range_tp3 / 100.0}
+                }
+        
         # Clear previous results
         self.results_table.setRowCount(0)
         self.summary_label.setText("Analyzing...")
@@ -1668,13 +1811,15 @@ class SignalAnalysisDialog(QDialog):
             # Use MT5 worker for XAUUSD
             self.worker = SignalAnalysisWorkerMT5(
                 symbol, days, start, end,
-                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp
+                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
+                custom_tp_levels
             )
         else:
             # Use Binance worker for BTC/ETH
             self.worker = SignalAnalysisWorker(
                 symbol, days, start, end,
-                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp
+                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
+                custom_tp_levels
             )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)
