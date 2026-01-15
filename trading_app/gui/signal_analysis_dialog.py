@@ -1423,7 +1423,8 @@ class SignalAnalysisDialog(QDialog):
             "📊 <b>Signal Analysis (Backtest)</b><br>"
             "Analyze which trading signals would have been generated in a date range.<br>"
             "This uses the same strategy and TP/SL levels as the live bot.<br>"
-            "<i>Multi-TP mode uses regime-based TP levels (TREND vs RANGE detection).</i>"
+            "<i>Multi-TP mode uses regime-based TP levels (TREND vs RANGE detection).<br>"
+            "CSV export includes tp1_used, tp2_used, tp3_used columns with actual TP levels.</i>"
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -1487,6 +1488,14 @@ class SignalAnalysisDialog(QDialog):
                 background-color: #696969;
             }
         """)
+        export_btn.setToolTip(
+            "Export results to CSV file.\n\n"
+            "Multi-TP mode includes:\n"
+            "  • tp1_used, tp2_used, tp3_used: Actual TP levels used\n"
+            "  • sl_used: Actual SL level used\n"
+            "  • tp_levels_hit: Which TPs were reached\n"
+            "  • regime: Market regime (TREND/RANGE)"
+        )
         export_btn.clicked.connect(self.export_csv)
         button_layout.addWidget(export_btn)
         
