@@ -226,15 +226,72 @@ class PositionFetcherThread(QThread):
 
                 print(f"📊 Raw positions data: {len(binance_positions)} positions returned")
 
+                # Fetch current market price with retry logic
+                current_price = None
+                max_retries = 2
+
+                for attempt in range(max_retries):
+                    try:
+                        ticker = exchange.fetch_ticker(self.config.symbol)
+                        current_price = ticker.get('last') or ticker.get('bid')
+                        if current_price and current_price > 0:
+                            print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
+                            self.current_price = current_price
+                            break
+                        else:
+                            print(f"⚠️  Invalid ticker price received: {current_price}, retrying...")
+                            if attempt < max_retries - 1:
+                                import time
+                                time.sleep(1)
+                    except Exception as e:
+                        print(f"⚠️  Error fetching ticker (attempt {attempt+1}/{max_retries}): {e}")
+                        if attempt < max_retries - 1:
+                            import time
+                            time.sleep(1)
+
+                if not current_price or current_price <= 0:
+                    print(f"⚠️  Failed to fetch current price after {max_retries} attempts")
+
                 for i, pos in enumerate(binance_positions):
                     contracts = float(pos.get('contracts', 0))
                     side = pos.get('side', 'unknown')
 
                     print(f"   Position {i+1}: side={side}, contracts={contracts}")
 
+                    # Debug: print raw position data
+                    print(f"      Raw position data: {pos}")
+
                     if contracts > 0:
+                        # Extract position details
+                        entry_price = float(pos.get('entryPrice', 0))
+
+                        # Use current market price if available, otherwise use position's markPrice
+                        mark_price = current_price if current_price and current_price > 0 else float(pos.get('markPrice', entry_price))
+
+                        # Calculate P&L manually
+                        unrealized_pnl = 0.0
+                        if mark_price and mark_price != entry_price:
+                            # Calculate price difference based on position side
+                            if side.lower() == 'long':
+                                price_diff = mark_price - entry_price
+                            elif side.lower() == 'short':
+                                price_diff = entry_price - mark_price
+                            else:
+                                price_diff = 0.0
+
+                            # P&L = price_diff * contracts (in quote currency, e.g., USDT)
+                            unrealized_pnl = price_diff * contracts
+
+                        # Get existing P&L from position if we couldn't calculate it
+                        if unrealized_pnl == 0.0 and 'unrealizedPnl' in pos:
+                            unrealized_pnl = float(pos.get('unrealizedPnl', 0))
+
+                        # Update position dict with correct values
+                        pos['markPrice'] = mark_price
+                        pos['unrealizedPnl'] = unrealized_pnl
+
                         positions.append(pos)
-                        print(f"   ✅ Added to display")
+                        print(f"   ✅ Added: Entry ${entry_price:.2f} | Current ${mark_price:.2f} | P&L ${unrealized_pnl:+.2f}")
                     else:
                         print(f"   ⚠️  Skipped (no contracts)")
 
