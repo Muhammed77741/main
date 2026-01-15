@@ -97,10 +97,11 @@ class StatisticsDialog(QDialog):
         """Initialize UI"""
         layout = QVBoxLayout(self)
 
+        # Filters row (period and trade type)
+        filters_layout = QHBoxLayout()
+        
         # Period selector
-        period_layout = QHBoxLayout()
-        period_layout.addWidget(QLabel("Period:"))
-
+        filters_layout.addWidget(QLabel("Period:"))
         self.period_combo = QComboBox()
         self.period_combo.addItems([
             'Last 7 days',
@@ -109,10 +110,41 @@ class StatisticsDialog(QDialog):
             'All time'
         ])
         self.period_combo.currentIndexChanged.connect(self.load_statistics)
-        period_layout.addWidget(self.period_combo)
-        period_layout.addStretch()
+        filters_layout.addWidget(self.period_combo)
+        
+        filters_layout.addSpacing(20)
+        
+        # Trade type selector (dry-run vs live)
+        filters_layout.addWidget(QLabel("Mode:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems([
+            'All Trades',
+            'Live Only',
+            'Dry-Run Only'
+        ])
+        self.mode_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+                padding: 5px 10px;
+                background-color: white;
+                min-height: 26px;
+                min-width: 120px;
+            }
+            QComboBox:hover {
+                border-color: #2196F3;
+            }
+            QComboBox::drop-down {
+                border: none;
+                padding-right: 10px;
+            }
+        """)
+        self.mode_combo.currentIndexChanged.connect(self.load_statistics)
+        filters_layout.addWidget(self.mode_combo)
+        
+        filters_layout.addStretch()
 
-        layout.addLayout(period_layout)
+        layout.addLayout(filters_layout)
 
         # Summary section
         summary_group = self.create_summary_section()
@@ -308,6 +340,14 @@ class StatisticsDialog(QDialog):
         """Load statistics from database"""
         # Get trades
         trades = self.db.get_trades(self.config.bot_id, limit=1000)
+
+        # Filter by mode (dry-run vs live)
+        mode_index = self.mode_combo.currentIndex()
+        if mode_index == 1:  # Live Only
+            trades = [t for t in trades if not self._is_dry_run_trade(t)]
+        elif mode_index == 2:  # Dry-Run Only
+            trades = [t for t in trades if self._is_dry_run_trade(t)]
+        # mode_index == 0 is "All Trades", no filtering needed
 
         # Filter by period (TODO: implement date filtering)
         # For now, just use all trades
@@ -568,3 +608,13 @@ class StatisticsDialog(QDialog):
                 }
             """)
             msg.exec()
+
+    def _is_dry_run_trade(self, trade):
+        """Check if a trade is a dry-run trade"""
+        # Check order_id prefix
+        if trade.order_id and trade.order_id.startswith('DRY-'):
+            return True
+        # Check comment field
+        if trade.comment and 'DRY RUN' in trade.comment.upper():
+            return True
+        return False
