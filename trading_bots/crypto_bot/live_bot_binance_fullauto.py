@@ -42,7 +42,8 @@ class LiveBotBinanceFullAuto:
                  symbol='BTC/USDT', timeframe='1h',
                  check_interval=3600, risk_percent=2.0, max_positions=3,
                  dry_run=False, testnet=True, api_key=None, api_secret=None,
-                 trailing_stop_enabled=True, trailing_stop_percent=1.5):
+                 trailing_stop_enabled=True, trailing_stop_percent=1.5,
+                 bot_id=None, use_database=True):
         """
         Initialize bot
 
@@ -60,6 +61,8 @@ class LiveBotBinanceFullAuto:
             api_secret: Binance API secret
             trailing_stop_enabled: Enable trailing stop
             trailing_stop_percent: Trailing stop activation threshold (%)
+            bot_id: Unique bot identifier for database tracking
+            use_database: If True, use database for position tracking
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -72,6 +75,10 @@ class LiveBotBinanceFullAuto:
         self.testnet = testnet
         self.api_key = api_key
         self.api_secret = api_secret
+        
+        # Bot identification for database
+        self.bot_id = bot_id or f"crypto_bot_{symbol.replace('/', '_')}"
+        self.use_database = use_database
 
         # Trailing stop settings
         self.trailing_stop_enabled = trailing_stop_enabled
@@ -101,6 +108,21 @@ class LiveBotBinanceFullAuto:
         self.position_peaks = {}  # Track highest profit for trailing stop
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
+        
+        # Database connection (optional)
+        self.db = None
+        if self.use_database:
+            try:
+                # Import database manager
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from database.db_manager import DatabaseManager
+                self.db = DatabaseManager()
+                print(f"✅ Database connection established for bot {self.bot_id}")
+            except Exception as e:
+                print(f"⚠️  Failed to initialize database: {e}")
+                print("     Falling back to CSV-only mode")
+                self.use_database = False
+                self.db = None
 
         # Telegram bot (optional)
         self.telegram_bot = None
@@ -149,9 +171,11 @@ class LiveBotBinanceFullAuto:
     def _log_position_opened(self, order_id, position_type, amount, entry_price,
                              sl, tp, regime, comment=''):
         """Log when position is opened"""
+        open_time = datetime.now()
+        
         self.positions_tracker[order_id] = {
             'order_id': order_id,
-            'open_time': datetime.now(),
+            'open_time': open_time,
             'close_time': None,
             'type': position_type,
             'amount': amount,
@@ -166,6 +190,32 @@ class LiveBotBinanceFullAuto:
             'status': 'OPEN',
             'comment': comment
         }
+        
+        # Also save to database if enabled
+        if self.use_database and self.db:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.trade_record import TradeRecord
+                
+                trade = TradeRecord(
+                    trade_id=0,  # Will be auto-assigned by database
+                    bot_id=self.bot_id,
+                    order_id=str(order_id),
+                    open_time=open_time,
+                    trade_type=position_type,
+                    amount=amount,
+                    entry_price=entry_price,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    status='OPEN',
+                    market_regime=regime,
+                    comment=comment
+                )
+                self.db.add_trade(trade)
+                print(f"📊 Position saved to database: Order={order_id}")
+            except Exception as e:
+                print(f"⚠️  Failed to save position to database: {e}")
+        
         print(f"📊 Logged opened position: Order={order_id}, Type={position_type}, Entry={entry_price}")
 
     def _log_position_closed(self, order_id, close_price, profit, status='CLOSED'):
@@ -175,7 +225,8 @@ class LiveBotBinanceFullAuto:
             return
 
         pos = self.positions_tracker[order_id]
-        pos['close_time'] = datetime.now()
+        close_time = datetime.now()
+        pos['close_time'] = close_time
         pos['close_price'] = close_price
         pos['profit'] = profit
         pos['status'] = status
@@ -194,6 +245,36 @@ class LiveBotBinanceFullAuto:
 
         # Write to CSV
         self._write_trade_to_csv(pos)
+        
+        # Update in database if enabled
+        if self.use_database and self.db:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.trade_record import TradeRecord
+                
+                trade = TradeRecord(
+                    trade_id=0,  # Not used for update
+                    bot_id=self.bot_id,
+                    order_id=str(order_id),
+                    open_time=pos['open_time'],
+                    close_time=close_time,
+                    duration_hours=pos['duration'],
+                    trade_type=pos['type'],
+                    amount=pos['amount'],
+                    entry_price=pos['entry_price'],
+                    close_price=close_price,
+                    stop_loss=pos['sl'],
+                    take_profit=pos['tp'],
+                    profit=profit,
+                    profit_percent=pos['profit_pct'],
+                    status=status,
+                    market_regime=pos['regime'],
+                    comment=pos['comment']
+                )
+                self.db.update_trade(trade)
+                print(f"📊 Position updated in database: Order={order_id}, Status={status}")
+            except Exception as e:
+                print(f"⚠️  Failed to update position in database: {e}")
 
         # Remove from tracker
         del self.positions_tracker[order_id]
@@ -270,17 +351,33 @@ class LiveBotBinanceFullAuto:
         try:
             # Validate API credentials
             if not self.api_key or not self.api_secret:
-                print("❌ Binance API key and secret are required!")
+                error_msg = "❌ Binance API key and secret are required!"
+                print(error_msg)
                 print("💡 Please configure them in Settings:")
                 print("   1. Go to Settings for this bot")
                 print("   2. Enter your Binance API Key and API Secret")
                 print("   3. Enable 'Use Testnet' for testing (recommended)")
+                
+                # Send to Telegram
+                if self.telegram_bot:
+                    try:
+                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}\n\nPlease configure API credentials."))
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+                
                 return False
 
             if len(self.api_key) < 10 or len(self.api_secret) < 10:
-                print("❌ Invalid API credentials format")
-                print(f"   API Key length: {len(self.api_key)} (expected 64)")
-                print(f"   API Secret length: {len(self.api_secret)} (expected 64)")
+                error_msg = f"❌ Invalid API credentials format\n   API Key length: {len(self.api_key)} (expected 64)\n   API Secret length: {len(self.api_secret)} (expected 64)"
+                print(error_msg)
+                
+                # Send to Telegram
+                if self.telegram_bot:
+                    try:
+                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}"))
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+                
                 return False
 
             print(f"🔄 Connecting to Binance {'Testnet' if self.testnet else 'Mainnet'}...")
@@ -347,10 +444,19 @@ class LiveBotBinanceFullAuto:
             usdt_free = balance.get('USDT', {}).get('free', 0) or 0
             print(f"✅ Connected to Binance {'Testnet' if self.testnet else 'Mainnet'}")
             print(f"   Available balance: {usdt_free:.2f} USDT")
+            
+            # Send success notification to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}"))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return True
 
         except ccxt.AuthenticationError as e:
-            print(f"❌ Authentication Failed: {e}")
+            error_msg = f"❌ Authentication Failed: {e}"
+            print(error_msg)
             print("\n💡 Troubleshooting:")
             print("   1. Check your API Key and Secret are correct")
             print("   2. Ensure API has 'Enable Futures' permission")
@@ -360,6 +466,14 @@ class LiveBotBinanceFullAuto:
             print("   - Wrong API keys (copy-paste error)")
             print("   - Using Mainnet keys on Testnet (or vice versa)")
             print("   - API doesn't have Futures trading permission")
+            
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>Authentication Failed</b>\n\n{str(e)}\n\nPlease check your API credentials."))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return False
 
         except ccxt.ExchangeError as e:
@@ -382,11 +496,26 @@ class LiveBotBinanceFullAuto:
                 print("   Windows: Settings → Time & Language → Sync now")
                 print("   Or enable automatic time synchronization")
 
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>Binance Exchange Error</b>\n\n{error_msg}\n\nPlease check the logs for details."))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+
             return False
 
         except Exception as e:
-            print(f"❌ Connection failed: {e}")
-            print(f"   Error type: {type(e).__name__}")
+            error_msg = f"❌ Connection failed: {e}\n   Error type: {type(e).__name__}"
+            print(error_msg)
+            
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>Connection Failed</b>\n\n{str(e)}\n\nType: {type(e).__name__}"))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return False
 
     def disconnect_exchange(self):
@@ -482,6 +611,331 @@ class LiveBotBinanceFullAuto:
 
         except Exception as e:
             print(f"⚠️  Error updating trailing stops: {e}")
+    
+    def _sync_positions_with_exchange(self):
+        """Sync database positions with actual exchange positions
+        
+        Detects positions that were manually closed on exchange but still show as OPEN in database
+        """
+        if not self.use_database or not self.db or self.dry_run or not self.exchange_connected:
+            return
+        
+        try:
+            # Get all OPEN positions from database
+            db_trades = self.db.get_open_trades(self.bot_id)
+            if not db_trades:
+                return
+            
+            # Get current open positions from exchange
+            positions = self.exchange.fetch_positions([self.symbol])
+            exchange_order_ids = set()
+            for pos in positions:
+                if pos['contracts'] > 0:  # Position is open
+                    # Extract order ID from position info
+                    if 'info' in pos and 'positionId' in pos['info']:
+                        exchange_order_ids.add(str(pos['info']['positionId']))
+                    elif 'id' in pos:
+                        exchange_order_ids.add(str(pos['id']))
+            
+            # Check each database position
+            for trade in db_trades:
+                order_id = trade.order_id
+                
+                # If position is in database but not on exchange, it was closed manually
+                if order_id not in exchange_order_ids:
+                    print(f"📊 Position {order_id} manually closed on exchange - syncing database...")
+                    
+                    # Get current price for profit calculation
+                    ticker = self.exchange.fetch_ticker(self.symbol)
+                    close_price = ticker['last']
+                    
+                    # Calculate profit
+                    if trade.trade_type == 'BUY':
+                        profit = (close_price - trade.entry_price) * trade.amount
+                    else:
+                        profit = (trade.entry_price - close_price) * trade.amount
+                    
+                    # Log the close
+                    self._log_position_closed(
+                        order_id=order_id,
+                        close_price=close_price,
+                        profit=profit,
+                        status='CLOSED'
+                    )
+                    
+                    print(f"✅ Database synced for position {order_id}")
+        except Exception as e:
+            print(f"⚠️  Error syncing positions with exchange: {e}")
+    
+    def _check_tp_sl_realtime(self):
+        """Monitor open positions in real-time and check if TP/SL levels are hit
+        
+        Checks:
+        1. Loads open positions from database (if enabled) or tracker
+        2. Current bar's high/low to see if TP/SL was touched during the bar
+        3. Current price to determine exit price
+        4. Closes position if TP or SL is hit
+        """
+        if not self.exchange_connected:
+            return
+        
+        try:
+            # Get positions to monitor
+            positions_to_check = {}
+            
+            # If database is enabled, load positions from database
+            if self.use_database and self.db:
+                try:
+                    db_trades = self.db.get_open_trades(self.bot_id)
+                    for trade in db_trades:
+                        positions_to_check[trade.order_id] = {
+                            'tp': trade.take_profit,
+                            'sl': trade.stop_loss,
+                            'type': trade.trade_type,
+                            'entry_price': trade.entry_price,
+                            'amount': trade.amount,
+                            'status': trade.status,
+                            'open_time': trade.open_time,
+                            'regime': trade.market_regime,
+                            'comment': trade.comment or ''
+                        }
+                        # Also sync to in-memory tracker if not already there
+                        if trade.order_id not in self.positions_tracker:
+                            self.positions_tracker[trade.order_id] = positions_to_check[trade.order_id].copy()
+                            self.positions_tracker[trade.order_id]['order_id'] = trade.order_id
+                            self.positions_tracker[trade.order_id]['close_time'] = None
+                            self.positions_tracker[trade.order_id]['close_price'] = None
+                            self.positions_tracker[trade.order_id]['profit'] = None
+                            self.positions_tracker[trade.order_id]['profit_pct'] = None
+                            self.positions_tracker[trade.order_id]['duration'] = None
+                except Exception as e:
+                    print(f"⚠️  Error loading positions from database: {e}")
+                    # Fall back to in-memory tracker
+                    positions_to_check = self.positions_tracker.copy()
+            else:
+                # Use in-memory tracker
+                positions_to_check = self.positions_tracker.copy()
+            
+            if not positions_to_check:
+                return
+            
+            # Get current open positions from exchange (skip if dry_run)
+            open_positions = []
+            exchange_position_ids = set()
+            
+            if not self.dry_run:
+                open_positions = self.get_open_positions()
+                exchange_position_ids = set(str(pos.get('id', '')) for pos in open_positions) if open_positions else set()
+            else:
+                # In dry_run mode, all database positions are "valid"
+                exchange_position_ids = set(positions_to_check.keys())
+            
+            # Get current bar data to check high/low
+            try:
+                ohlcv = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit=1)
+                if ohlcv and len(ohlcv) > 0:
+                    current_bar = ohlcv[0]
+                    bar_high = current_bar[2]  # high price
+                    bar_low = current_bar[3]   # low price
+                else:
+                    # Fallback if can't get bar data
+                    bar_high = None
+                    bar_low = None
+            except Exception as e:
+                print(f"⚠️  Could not fetch current bar data: {e}")
+                bar_high = None
+                bar_low = None
+            
+            # Check each tracked position
+            for order_id, tracked_pos in list(positions_to_check.items()):
+                # Skip if already processing or closed
+                if tracked_pos.get('status') not in ['OPEN']:
+                    continue
+                
+                # Check if position is still on exchange (skip check if dry_run)
+                if not self.dry_run and order_id not in exchange_position_ids:
+                    # Position closed on exchange but still in DB as OPEN
+                    # This means exchange TP/SL triggered it or manual close
+                    print(f"📊 Position {order_id} closed on exchange but DB shows OPEN - syncing...")
+                    # We can't determine exact close price, so mark as CLOSED
+                    if order_id in self.positions_tracker:
+                        # Try to close it properly
+                        self._log_position_closed(
+                            order_id=order_id,
+                            close_price=tracked_pos['entry_price'],  # Unknown close price
+                            profit=0.0,  # Unknown profit
+                            status='CLOSED'
+                        )
+                    continue
+                
+                # Get current price
+                current_price = None
+                if not self.dry_run:
+                    # Find the position data from exchange
+                    position = next((p for p in open_positions if str(p.get('id', '')) == order_id), None)
+                    if not position:
+                        continue
+                    
+                    current_price = float(position.get('markPrice', 0))
+                    if not current_price:
+                        continue
+                else:
+                    # In dry_run mode, get current price from ticker
+                    try:
+                        ticker = self.exchange.fetch_ticker(self.symbol)
+                        current_price = ticker.get('last', 0)
+                        if not current_price:
+                            print(f"⚠️  Could not get current price for dry_run position {order_id}")
+                            continue
+                    except Exception as e:
+                        print(f"⚠️  Error getting current price for dry_run: {e}")
+                        continue
+                
+                # Read TP/SL from tracked position (database columns or in-memory)
+                tp_target = tracked_pos['tp']
+                sl_target = tracked_pos['sl']
+                position_type = tracked_pos['type']
+                
+                # Check if TP or SL is hit based on bar high/low OR current price
+                tp_hit = False
+                sl_hit = False
+                
+                if position_type == 'BUY':
+                    # For BUY: TP is above entry, SL is below entry
+                    # Check if bar high reached TP OR current price is already at/past TP
+                    if (bar_high and bar_high >= tp_target) or (current_price >= tp_target):
+                        tp_hit = True
+                    # Check if bar low reached SL OR current price is already at/past SL
+                    if (bar_low and bar_low <= sl_target) or (current_price <= sl_target):
+                        sl_hit = True
+                else:  # SELL
+                    # For SELL: TP is below entry, SL is above entry
+                    # Check if bar low reached TP OR current price is already at/past TP
+                    if (bar_low and bar_low <= tp_target) or (current_price <= tp_target):
+                        tp_hit = True
+                    # Check if bar high reached SL OR current price is already at/past SL
+                    if (bar_high and bar_high >= sl_target) or (current_price >= sl_target):
+                        sl_hit = True
+                
+                # If TP or SL is hit
+                if tp_hit or sl_hit:
+                    hit_type = 'TP' if tp_hit else 'SL'
+                    target_price = tp_target if tp_hit else sl_target
+                    
+                    # Update status in both tracker and database immediately
+                    processing_status = f'{hit_type}_PROCESSING'
+                    tracked_pos['status'] = processing_status
+                    if order_id in self.positions_tracker:
+                        self.positions_tracker[order_id]['status'] = processing_status
+                    
+                    # Update status in database immediately to prevent re-processing
+                    if self.use_database and self.db:
+                        try:
+                            sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                            from models.trade_record import TradeRecord
+                            temp_trade = TradeRecord(
+                                trade_id=0,
+                                bot_id=self.bot_id,
+                                order_id=str(order_id),
+                                open_time=tracked_pos['open_time'],
+                                trade_type=tracked_pos['type'],
+                                amount=tracked_pos['amount'],
+                                entry_price=tracked_pos['entry_price'],
+                                stop_loss=tracked_pos['sl'],
+                                take_profit=tracked_pos['tp'],
+                                status=processing_status,
+                                market_regime=tracked_pos['regime'],
+                                comment=tracked_pos['comment']
+                            )
+                            self.db.update_trade(temp_trade)
+                            print(f"📊 Updated position {order_id} status to {processing_status} in database")
+                        except Exception as e:
+                            print(f"⚠️  Failed to update status in database: {e}")
+                    
+                    # Log the hit
+                    self._log_tp_hit(order_id, hit_type, current_price)
+                    
+                    # Close the position at current price
+                    close_successful = False
+                    if not self.dry_run:
+                        try:
+                            # Close position by placing opposite order
+                            side = 'sell' if position_type == 'BUY' else 'buy'
+                            amount = tracked_pos['amount']
+                            
+                            print(f"🔄 Closing position {order_id} at current price ${current_price:.2f} ({hit_type} hit)")
+                            close_order = self.exchange.create_order(
+                                symbol=self.symbol,
+                                type='market',
+                                side=side,
+                                amount=amount
+                            )
+                            print(f"✅ Position closed: Order ID {close_order['id']}")
+                            close_successful = True
+                        except Exception as e:
+                            print(f"❌ Failed to close position {order_id}: {e}")
+                            # Revert status back to OPEN if close failed
+                            tracked_pos['status'] = 'OPEN'
+                            if order_id in self.positions_tracker:
+                                self.positions_tracker[order_id]['status'] = 'OPEN'
+                            # Revert in database too
+                            if self.use_database and self.db:
+                                try:
+                                    temp_trade.status = 'OPEN'
+                                    self.db.update_trade(temp_trade)
+                                except:
+                                    pass
+                    else:
+                        print(f"🧪 DRY RUN: Would close position {order_id} at ${current_price:.2f} ({hit_type} hit)")
+                        close_successful = True  # Simulate successful close in dry run
+                    
+                    # If close was successful, properly log the position as closed
+                    if close_successful:
+                        # Calculate profit
+                        if tracked_pos['type'] == 'BUY':
+                            profit_pct = ((current_price - tracked_pos['entry_price']) / tracked_pos['entry_price']) * 100
+                        else:
+                            profit_pct = ((tracked_pos['entry_price'] - current_price) / tracked_pos['entry_price']) * 100
+                        
+                        profit_usdt = profit_pct / 100 * tracked_pos['entry_price'] * tracked_pos['amount']
+                        
+                        # Log position as closed with proper status
+                        self._log_position_closed(
+                            order_id=order_id,
+                            close_price=current_price,
+                            profit=profit_usdt,
+                            status=hit_type  # Status will be 'TP' or 'SL'
+                        )
+                    
+                    # Send Telegram notification
+                    if self.telegram_bot and close_successful:
+                        emoji = "🎯" if tp_hit else "🛑"
+                        message = f"{emoji} <b>{hit_type} HIT & CLOSED!</b>\n\n"
+                        message += f"Order ID: {order_id}\n"
+                        message += f"Symbol: {self.symbol}\n"
+                        message += f"Type: {tracked_pos['type']}\n"
+                        message += f"Entry: ${tracked_pos['entry_price']:.2f}\n"
+                        message += f"{hit_type} Target: ${target_price:.2f}\n"
+                        message += f"Close Price: ${current_price:.2f}\n"
+                        message += f"Amount: {tracked_pos['amount']}\n"
+                        
+                        # Calculate profit percentage
+                        if tracked_pos['type'] == 'BUY':
+                            profit_pct = ((current_price - tracked_pos['entry_price']) / tracked_pos['entry_price']) * 100
+                        else:
+                            profit_pct = ((tracked_pos['entry_price'] - current_price) / tracked_pos['entry_price']) * 100
+                        
+                        sign = "+" if profit_pct >= 0 else ""
+                        message += f"Profit: {sign}{profit_pct:.2f}%\n"
+                        message += f"Status: CLOSED"
+                        
+                        try:
+                            asyncio.run(self.send_telegram(message))
+                        except Exception as e:
+                            print(f"⚠️  Failed to send Telegram notification: {e}")
+        
+        except Exception as e:
+            print(f"⚠️  Error checking TP/SL levels: {e}")
 
     def get_market_data(self, bars=500):
         """Get historical data from Binance"""
@@ -892,14 +1346,21 @@ class LiveBotBinanceFullAuto:
             print(f"\n⏰ Waiting until next hour: {next_hour.strftime('%H:%M:%S')}")
             print(f"   Time now: {now.strftime('%H:%M:%S')}")
             print(f"   Wait time: {int(wait_seconds/60)} min {int(wait_seconds%60)} sec")
+            print(f"   🎯 Real-time TP/SL monitoring: Active (checking every 10s)")
 
-            monitoring_interval = 30  # Check every 30 seconds
+            monitoring_interval = 10  # Check every 10 seconds
             elapsed = 0
 
             while elapsed < wait_seconds:
                 sleep_time = min(monitoring_interval, wait_seconds - elapsed)
                 time.sleep(sleep_time)
                 elapsed += sleep_time
+
+                # Sync positions with exchange first
+                self._sync_positions_with_exchange()
+
+                # Check TP/SL levels in real-time
+                self._check_tp_sl_realtime()
 
                 # Check for closed positions
                 self._check_closed_positions()
@@ -918,6 +1379,7 @@ class LiveBotBinanceFullAuto:
         print(f"   Max positions: {self.max_positions}")
         print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
         print(f"   Exchange: {'TESTNET' if self.testnet else 'PRODUCTION'}")
+        print(f"   🎯 Real-time TP/SL monitoring: Every 10 seconds (checks bar high/low)")
         print(f"\n🎯 Adaptive TP Levels:")
         print(f"   TREND Mode: {self.trend_tp1_pct}% / {self.trend_tp2_pct}% / {self.trend_tp3_pct}%")
         print(f"   RANGE Mode: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%")
@@ -975,6 +1437,13 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
 
                 # Check current positions
                 open_positions = self.get_open_positions()
+                
+                # Sync positions with exchange first
+                self._sync_positions_with_exchange()
+                
+                # Check TP/SL levels in real-time
+                self._check_tp_sl_realtime()
+                
                 print(f"📊 Open positions: {len(open_positions)}/{self.max_positions}")
 
                 if len(open_positions) > 0:
@@ -982,10 +1451,27 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                         side = pos.get('side', 'unknown')
                         contracts = pos.get('contracts', 0)
                         entry_price = pos.get('entryPrice', 0)
-                        unrealized_pnl = pos.get('unrealizedPnl', 0)
+                        unrealized_pnl = pos.get('unrealizedPnl') if pos.get('unrealizedPnl') is not None else 0.0
+                        mark_price = pos.get('markPrice', 0)
+                        order_id = str(pos.get('id', ''))
+                        
+                        # Get status from tracker if available
+                        status = 'OPEN'
+                        if order_id in self.positions_tracker:
+                            status = self.positions_tracker[order_id].get('status', 'OPEN')
+                        
+                        # Calculate profit percentage
+                        profit_pct = 0.0
+                        if entry_price and entry_price > 0 and mark_price and mark_price > 0:
+                            if side.lower() == 'long':
+                                profit_pct = ((mark_price - entry_price) / entry_price) * 100
+                            elif side.lower() == 'short':
+                                profit_pct = ((entry_price - mark_price) / entry_price) * 100
+                        
                         print(f"   Position #{i}: {side.upper()} {contracts}, "
-                              f"Entry={entry_price:.2f}, "
-                              f"PnL: {unrealized_pnl:.2f} USDT")
+                              f"Entry=${entry_price:.2f}, Mark=${mark_price:.2f}, "
+                              f"P&L: ${unrealized_pnl:.2f} ({profit_pct:+.2f}%), "
+                              f"Status: {status}")
 
                 # Check for closed positions
                 self._check_closed_positions()

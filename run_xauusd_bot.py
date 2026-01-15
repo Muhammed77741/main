@@ -245,7 +245,7 @@ def get_configuration(dry_run=False, risk=None, max_positions=None, no_confirm=F
 
     print("\nDefault settings:")
     print("  - Risk per trade: 2.0%")
-    print("  - Max positions: 3")
+    print("  - Max positions: 9")
     print("  - Check interval: 1 hour")
 
     use_defaults = input("\nUse default settings? (y/n): ").lower()
@@ -253,7 +253,7 @@ def get_configuration(dry_run=False, risk=None, max_positions=None, no_confirm=F
     if use_defaults == 'y':
         return {
             'risk_percent': 2.0,
-            'max_positions': 3,
+            'max_positions': 9,
             'check_interval': 3600,
             'dry_run': False
         }
@@ -270,15 +270,15 @@ def get_configuration(dry_run=False, risk=None, max_positions=None, no_confirm=F
         print("⚠️  Invalid input. Using 2.0%")
         risk = 2.0
 
-    max_pos = input("Max simultaneous positions (1-5): ")
+    max_pos = input("Max simultaneous positions (1-9): ")
     try:
         max_pos = int(max_pos)
-        if max_pos < 1 or max_pos > 5:
-            print("⚠️  Max positions must be between 1 and 5. Using 3")
-            max_pos = 3
+        if max_pos < 1 or max_pos > 9:
+            print("⚠️  Max positions must be between 1 and 9. Using 9")
+            max_pos = 9
     except:
-        print("⚠️  Invalid input. Using 3")
-        max_pos = 3
+        print("⚠️  Invalid input. Using 9")
+        max_pos = 9
 
     return {
         'risk_percent': risk,
@@ -414,8 +414,8 @@ def main():
                        help='Skip confirmation prompts (DANGEROUS! Use only for automated deployment)')
     parser.add_argument('--risk', type=float, default=2.0,
                        help='Risk per trade (0.5-5.0%%, default: 2.0)')
-    parser.add_argument('--max-positions', type=int, default=3,
-                       help='Max simultaneous positions (1-5, default: 3)')
+    parser.add_argument('--max-positions', type=int, default=9,
+                       help='Max simultaneous positions (1-9, default: 9)')
     args = parser.parse_args()
 
     # Validate args
@@ -423,8 +423,8 @@ def main():
         print(f"❌ Error: Risk must be between 0.5%% and 5.0%%. Got: {args.risk}%%")
         sys.exit(1)
     
-    if args.max_positions < 1 or args.max_positions > 5:
-        print(f"❌ Error: Max positions must be between 1 and 5. Got: {args.max_positions}")
+    if args.max_positions < 1 or args.max_positions > 9:
+        print(f"❌ Error: Max positions must be between 1 and 9. Got: {args.max_positions}")
         sys.exit(1)
 
     # Show warning

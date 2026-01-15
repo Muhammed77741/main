@@ -355,6 +355,37 @@ class DatabaseManager:
 
         return trades
 
+    def update_trade(self, trade: TradeRecord):
+        """Update an existing trade record"""
+        # Check if connection is still valid
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed, skipping trade update for {trade.bot_id}")
+            return
+
+        try:
+            cursor = self.conn.cursor()
+
+            cursor.execute("""
+                UPDATE trades SET
+                    close_time = ?,
+                    duration_hours = ?,
+                    close_price = ?,
+                    profit = ?,
+                    profit_percent = ?,
+                    status = ?
+                WHERE bot_id = ? AND order_id = ?
+            """, (
+                trade.close_time, trade.duration_hours, trade.close_price,
+                trade.profit, trade.profit_percent, trade.status,
+                trade.bot_id, trade.order_id
+            ))
+
+            self.conn.commit()
+        except sqlite3.ProgrammingError as e:
+            print(f"⚠️  Warning: Database error during trade update: {e}")
+        except Exception as e:
+            print(f"⚠️  Warning: Unexpected error during trade update: {e}")
+
     def log(self, level: str, message: str, bot_id: str = None):
         """Add a log entry"""
         # Check if connection is still valid

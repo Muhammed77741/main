@@ -38,8 +38,8 @@ class LiveBotMT5FullAuto:
     
     def __init__(self, telegram_token=None, telegram_chat_id=None,
                  symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1,
-                 check_interval=3600, risk_percent=2.0, max_positions=3,
-                 dry_run=False):
+                 check_interval=3600, risk_percent=2.0, max_positions=9,
+                 dry_run=False, bot_id=None, use_database=True):
         """
         Initialize bot
         
@@ -52,6 +52,8 @@ class LiveBotMT5FullAuto:
             risk_percent: Risk per trade (%)
             max_positions: Max simultaneous positions
             dry_run: If True, no real trades
+            bot_id: Unique bot identifier for database tracking
+            use_database: If True, use database for position tracking
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -61,6 +63,10 @@ class LiveBotMT5FullAuto:
         self.risk_percent = risk_percent
         self.max_positions = max_positions
         self.dry_run = dry_run
+        
+        # Bot identification for database
+        self.bot_id = bot_id or f"xauusd_bot_{symbol}"
+        self.use_database = use_database
         
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
@@ -84,6 +90,21 @@ class LiveBotMT5FullAuto:
         self.positions_tracker = {}  # {ticket: position_data}
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
+        
+        # Database connection (optional)
+        self.db = None
+        if self.use_database:
+            try:
+                # Import database manager
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from database.db_manager import DatabaseManager
+                self.db = DatabaseManager()
+                print(f"✅ Database connection established for bot {self.bot_id}")
+            except Exception as e:
+                print(f"⚠️  Failed to initialize database: {e}")
+                print("     Falling back to CSV-only mode")
+                self.use_database = False
+                self.db = None
         
         # Telegram bot (optional)
         self.telegram_bot = None
@@ -130,9 +151,11 @@ class LiveBotMT5FullAuto:
     def _log_position_opened(self, ticket, position_type, volume, entry_price, 
                              sl, tp, regime, comment=''):
         """Log when position is opened"""
+        open_time = datetime.now()
+        
         self.positions_tracker[ticket] = {
             'ticket': ticket,
-            'open_time': datetime.now(),
+            'open_time': open_time,
             'close_time': None,
             'type': position_type,
             'volume': volume,
@@ -147,6 +170,32 @@ class LiveBotMT5FullAuto:
             'status': 'OPEN',
             'comment': comment
         }
+        
+        # Also save to database if enabled
+        if self.use_database and self.db:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.trade_record import TradeRecord
+                
+                trade = TradeRecord(
+                    trade_id=0,  # Will be auto-assigned by database
+                    bot_id=self.bot_id,
+                    order_id=str(ticket),
+                    open_time=open_time,
+                    trade_type=position_type,
+                    amount=volume,
+                    entry_price=entry_price,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    status='OPEN',
+                    market_regime=regime,
+                    comment=comment
+                )
+                self.db.add_trade(trade)
+                print(f"📊 Position saved to database: Ticket={ticket}")
+            except Exception as e:
+                print(f"⚠️  Failed to save position to database: {e}")
+        
         print(f"📊 Logged opened position: Ticket={ticket}, Type={position_type}, Entry={entry_price}")
     
     def _log_position_closed(self, ticket, close_price, profit, status='CLOSED'):
@@ -156,7 +205,8 @@ class LiveBotMT5FullAuto:
             return
         
         pos = self.positions_tracker[ticket]
-        pos['close_time'] = datetime.now()
+        close_time = datetime.now()
+        pos['close_time'] = close_time
         pos['close_price'] = close_price
         pos['profit'] = profit
         pos['status'] = status
@@ -173,8 +223,41 @@ class LiveBotMT5FullAuto:
             pips = (pos['entry_price'] - close_price) * 10
         pos['pips'] = round(pips, 1)
         
+        # Calculate profit percentage (approximate)
+        profit_pct = (pips / pos['entry_price']) * 100 if pos['entry_price'] > 0 else 0
+        
         # Write to CSV
         self._write_trade_to_csv(pos)
+        
+        # Update in database if enabled
+        if self.use_database and self.db:
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.trade_record import TradeRecord
+                
+                trade = TradeRecord(
+                    trade_id=0,  # Not used for update
+                    bot_id=self.bot_id,
+                    order_id=str(ticket),
+                    open_time=pos['open_time'],
+                    close_time=close_time,
+                    duration_hours=pos['duration'],
+                    trade_type=pos['type'],
+                    amount=pos['volume'],
+                    entry_price=pos['entry_price'],
+                    close_price=close_price,
+                    stop_loss=pos['sl'],
+                    take_profit=pos['tp'],
+                    profit=profit,
+                    profit_percent=profit_pct,
+                    status=status,
+                    market_regime=pos['regime'],
+                    comment=pos['comment']
+                )
+                self.db.update_trade(trade)
+                print(f"📊 Position updated in database: Ticket={ticket}, Status={status}")
+            except Exception as e:
+                print(f"⚠️  Failed to update position in database: {e}")
         
         # Remove from tracker
         del self.positions_tracker[ticket]
@@ -247,34 +330,199 @@ class LiveBotMT5FullAuto:
         
         print(f"🎯 TP HIT LOGGED: Ticket={ticket}, Level={tp_level}, Price={current_price:.2f}, Pips={pips:.1f}")
     
-    def _check_tp_levels_realtime(self):
-        """Monitor open positions in real-time and check if TP levels are hit"""
+    def _sync_positions_with_exchange(self):
+        """Sync database positions with actual exchange positions
+        
+        Detects positions that were manually closed on exchange but still show as OPEN in database
+        """
+        if not self.use_database or not self.db or self.dry_run or not self.mt5_connected:
+            return
+        
+        try:
+            # Get all OPEN positions from database
+            db_trades = self.db.get_open_trades(self.bot_id)
+            if not db_trades:
+                return
+            
+            # Get current open positions from MT5
+            open_positions = mt5.positions_get(symbol=self.symbol)
+            mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+            
+            # Check each database position
+            for trade in db_trades:
+                try:
+                    ticket = int(trade.order_id)
+                except (ValueError, TypeError):
+                    continue
+                
+                # If position is in database but not on MT5, it was closed manually
+                if ticket not in mt5_position_tickets:
+                    print(f"📊 Position #{ticket} manually closed on MT5 - syncing database...")
+                    
+                    # Get current price for profit calculation
+                    tick = mt5.symbol_info_tick(self.symbol)
+                    if tick:
+                        close_price = tick.bid if trade.trade_type == 'BUY' else tick.ask
+                        
+                        # Calculate profit
+                        if trade.trade_type == 'BUY':
+                            profit = (close_price - trade.entry_price) * trade.amount
+                        else:
+                            profit = (trade.entry_price - close_price) * trade.amount
+                    else:
+                        close_price = trade.entry_price
+                        profit = 0.0
+                    
+                    # Log the close
+                    self._log_position_closed(
+                        ticket=ticket,
+                        close_price=close_price,
+                        profit=profit,
+                        status='CLOSED'
+                    )
+                    
+                    print(f"✅ Database synced for position #{ticket}")
+        except Exception as e:
+            print(f"⚠️  Error syncing positions with exchange: {e}")
+    
+    def _check_tp_sl_realtime(self):
+        """Monitor open positions in real-time and check if TP/SL levels are hit
+        
+        Checks:
+        1. Loads open positions from database (if enabled) or tracker
+        2. Current bar's high/low to see if TP/SL was touched during the bar
+        3. Current price to determine exit price
+        4. Closes position if TP or SL is hit
+        """
         if not self.mt5_connected:
             return
         
-        # Get current open positions from MT5
-        open_positions = mt5.positions_get(symbol=self.symbol)
-        if not open_positions:
+        # Get positions to monitor
+        positions_to_check = {}
+        
+        # If database is enabled, load positions from database
+        if self.use_database and self.db:
+            try:
+                db_trades = self.db.get_open_trades(self.bot_id)
+                for trade in db_trades:
+                    # Convert order_id (stored as string) back to int for MT5 ticket
+                    try:
+                        ticket = int(trade.order_id)
+                    except (ValueError, TypeError):
+                        ticket = trade.order_id
+                    
+                    positions_to_check[ticket] = {
+                        'tp': trade.take_profit,
+                        'sl': trade.stop_loss,
+                        'type': trade.trade_type,
+                        'entry_price': trade.entry_price,
+                        'volume': trade.amount,
+                        'status': trade.status,
+                        'open_time': trade.open_time,
+                        'regime': trade.market_regime,
+                        'comment': trade.comment or ''
+                    }
+                    # Also sync to in-memory tracker if not already there
+                    if ticket not in self.positions_tracker:
+                        self.positions_tracker[ticket] = positions_to_check[ticket].copy()
+                        self.positions_tracker[ticket]['ticket'] = ticket
+                        self.positions_tracker[ticket]['close_time'] = None
+                        self.positions_tracker[ticket]['close_price'] = None
+                        self.positions_tracker[ticket]['profit'] = None
+                        self.positions_tracker[ticket]['pips'] = None
+                        self.positions_tracker[ticket]['duration'] = None
+            except Exception as e:
+                print(f"⚠️  Error loading positions from database: {e}")
+                # Fall back to in-memory tracker
+                positions_to_check = self.positions_tracker.copy()
+        else:
+            # Use in-memory tracker
+            positions_to_check = self.positions_tracker.copy()
+        
+        if not positions_to_check:
             return
         
-        for position in open_positions:
-            ticket = position.ticket
-            
-            # Skip if not in our tracker (might be manual position)
-            if ticket not in self.positions_tracker:
+        # Get current open positions from MT5 (skip if dry_run)
+        open_positions = []
+        mt5_position_tickets = set()
+        
+        if not self.dry_run:
+            open_positions = mt5.positions_get(symbol=self.symbol)
+            mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+        else:
+            # In dry_run mode, all database positions are "valid" (use string tickets)
+            mt5_position_tickets = set(positions_to_check.keys())
+        
+        # Get current bar data to check high/low
+        try:
+            rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, 1)
+            if rates is not None and len(rates) > 0:
+                bar_high = rates[0]['high']
+                bar_low = rates[0]['low']
+            else:
+                # Fallback if can't get bar data
+                bar_high = None
+                bar_low = None
+        except Exception as e:
+            print(f"⚠️  Could not fetch current bar data: {e}")
+            bar_high = None
+            bar_low = None
+        
+        # Check each tracked position
+        for ticket, tracked_pos in list(positions_to_check.items()):
+            # Skip if already processing or closed
+            if tracked_pos.get('status') not in ['OPEN']:
                 continue
             
-            tracked_pos = self.positions_tracker[ticket]
+            # Check if position is still on MT5 (skip check if dry_run)
+            if not self.dry_run and ticket not in mt5_position_tickets:
+                # Position closed on MT5 but still in DB as OPEN
+                print(f"📊 Position #{ticket} closed on MT5 but DB shows OPEN - syncing...")
+                if ticket in self.positions_tracker:
+                    # Try to close it properly
+                    self._log_position_closed(
+                        ticket=ticket,
+                        close_price=tracked_pos['entry_price'],  # Unknown close price
+                        profit=0.0,  # Unknown profit
+                        status='CLOSED'
+                    )
+                continue
             
             # Get current price
-            tick = mt5.symbol_info_tick(self.symbol)
-            if not tick:
-                continue
+            current_price = None
+            if not self.dry_run:
+                # Find the position data from MT5
+                position = next((p for p in open_positions if p.ticket == ticket), None)
+                if not position:
+                    continue
+                
+                # Get current price
+                tick = mt5.symbol_info_tick(self.symbol)
+                if not tick:
+                    continue
+                
+                # Use appropriate price based on position type
+                # For BUY: close at bid (sell price), For SELL: close at ask (buy price)
+                current_price = tick.bid if tracked_pos['type'] == 'BUY' else tick.ask
+            else:
+                # In dry_run mode, get current price from ticker
+                try:
+                    tick = mt5.symbol_info_tick(self.symbol)
+                    if tick:
+                        current_price = tick.bid if tracked_pos['type'] == 'BUY' else tick.ask
+                        if not current_price or current_price <= 0:
+                            print(f"⚠️  Could not get valid current price for dry_run position {ticket}")
+                            continue
+                    else:
+                        print(f"⚠️  Could not get tick data for dry_run position {ticket}")
+                        continue
+                except Exception as e:
+                    print(f"⚠️  Error getting current price for dry_run: {e}")
+                    continue
             
-            # Use appropriate price based on position type
-            # For BUY: close at bid (sell price), For SELL: close at ask (buy price)
-            current_price = tick.bid if tracked_pos['type'] == 'BUY' else tick.ask
+            # Read TP/SL from tracked position (database columns or in-memory)
             tp_target = tracked_pos['tp']
+            sl_target = tracked_pos['sl']
             
             # Determine which TP level this is from the comment
             tp_level = 'UNKNOWN'
@@ -285,35 +533,154 @@ class LiveBotMT5FullAuto:
             elif 'TP3' in tracked_pos['comment']:
                 tp_level = 'TP3'
             
-            # Check if TP is hit (with small tolerance for slippage)
-            tolerance = 0.5  # 0.5 point tolerance
+            # Check if TP or SL is hit based on bar high/low OR current price
             tp_hit = False
+            sl_hit = False
             
             if tracked_pos['type'] == 'BUY':
-                # For BUY, TP is above entry
-                tp_hit = current_price >= (tp_target - tolerance)
-            else:
-                # For SELL, TP is below entry
-                tp_hit = current_price <= (tp_target + tolerance)
+                # For BUY: TP is above entry, SL is below entry
+                # Check if bar high reached TP OR current price is already at/past TP
+                if (bar_high and bar_high >= tp_target) or (current_price >= tp_target):
+                    tp_hit = True
+                # Check if bar low reached SL OR current price is already at/past SL
+                if (bar_low and bar_low <= sl_target) or (current_price <= sl_target):
+                    sl_hit = True
+            else:  # SELL
+                # For SELL: TP is below entry, SL is above entry
+                # Check if bar low reached TP OR current price is already at/past TP
+                if (bar_low and bar_low <= tp_target) or (current_price <= tp_target):
+                    tp_hit = True
+                # Check if bar high reached SL OR current price is already at/past SL
+                if (bar_high and bar_high >= sl_target) or (current_price >= sl_target):
+                    sl_hit = True
             
-            # If TP is hit and we haven't logged it yet
-            if tp_hit and tracked_pos.get('status') == 'OPEN':
-                # Mark as TP hit in tracker
-                tracked_pos['status'] = 'TP_HIT_DETECTED'
-                tracked_pos['tp_hit_time'] = datetime.now()
+            # If TP or SL is hit
+            if tp_hit or sl_hit:
+                hit_type = tp_level if tp_hit else 'SL'
+                target_price = tp_target if tp_hit else sl_target
                 
-                # Log the TP hit
-                self._log_tp_hit(ticket, tp_level, current_price)
+                # Update status in both tracker and database immediately
+                processing_status = f'{hit_type}_PROCESSING'
+                tracked_pos['status'] = processing_status
+                if ticket in self.positions_tracker:
+                    self.positions_tracker[ticket]['status'] = processing_status
                 
-                # Send Telegram notification if available
-                if self.telegram_bot:
-                    message = f"🎯 <b>TP HIT!</b>\n\n"
+                # Update status in database immediately to prevent re-processing
+                if self.use_database and self.db:
+                    try:
+                        sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                        from models.trade_record import TradeRecord
+                        temp_trade = TradeRecord(
+                            trade_id=0,
+                            bot_id=self.bot_id,
+                            order_id=str(ticket),
+                            open_time=tracked_pos['open_time'],
+                            trade_type=tracked_pos['type'],
+                            amount=tracked_pos['volume'],
+                            entry_price=tracked_pos['entry_price'],
+                            stop_loss=tracked_pos['sl'],
+                            take_profit=tracked_pos['tp'],
+                            status=processing_status,
+                            market_regime=tracked_pos['regime'],
+                            comment=tracked_pos['comment']
+                        )
+                        self.db.update_trade(temp_trade)
+                        print(f"📊 Updated position #{ticket} status to {processing_status} in database")
+                    except Exception as e:
+                        print(f"⚠️  Failed to update status in database: {e}")
+                
+                # Log the hit
+                self._log_tp_hit(ticket, hit_type, current_price)
+                
+                # Close the position at current price
+                close_successful = False
+                if not self.dry_run:
+                    try:
+                        # Close position using MT5
+                        order_type = mt5.ORDER_TYPE_SELL if tracked_pos['type'] == 'BUY' else mt5.ORDER_TYPE_BUY
+                        
+                        print(f"🔄 Closing position #{ticket} at current price ${current_price:.2f} ({hit_type} hit)")
+                        
+                        request = {
+                            "action": mt5.TRADE_ACTION_DEAL,
+                            "symbol": self.symbol,
+                            "volume": tracked_pos['volume'],
+                            "type": order_type,
+                            "position": ticket,
+                            "price": current_price,
+                            "deviation": 20,
+                            "magic": 234000,
+                            "comment": f"Close_{hit_type}",
+                            "type_time": mt5.ORDER_TIME_GTC,
+                            "type_filling": mt5.ORDER_FILLING_IOC,
+                        }
+                        
+                        result = mt5.order_send(request)
+                        
+                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                            print(f"✅ Position closed: Order #{result.order}")
+                            close_successful = True
+                        else:
+                            error_msg = result.comment if result else "No result"
+                            print(f"❌ Failed to close position #{ticket}: {error_msg}")
+                            # Revert status back to OPEN if close failed
+                            tracked_pos['status'] = 'OPEN'
+                            if ticket in self.positions_tracker:
+                                self.positions_tracker[ticket]['status'] = 'OPEN'
+                            # Revert in database too
+                            if self.use_database and self.db:
+                                try:
+                                    temp_trade.status = 'OPEN'
+                                    self.db.update_trade(temp_trade)
+                                except:
+                                    pass
+                    except Exception as e:
+                        print(f"❌ Failed to close position #{ticket}: {e}")
+                        # Revert status back to OPEN if close failed
+                        tracked_pos['status'] = 'OPEN'
+                        if ticket in self.positions_tracker:
+                            self.positions_tracker[ticket]['status'] = 'OPEN'
+                        # Revert in database too
+                        if self.use_database and self.db:
+                            try:
+                                temp_trade.status = 'OPEN'
+                                self.db.update_trade(temp_trade)
+                            except:
+                                pass
+                        tracked_pos['status'] = 'OPEN'
+                else:
+                    print(f"🧪 DRY RUN: Would close position #{ticket} at ${current_price:.2f} ({hit_type} hit)")
+                    close_successful = True  # Simulate successful close in dry run
+                
+                # If close was successful, properly log the position as closed
+                if close_successful:
+                    # Calculate profit in pips
+                    if tracked_pos['type'] == 'BUY':
+                        pips = (current_price - tracked_pos['entry_price']) * 10
+                    else:
+                        pips = (tracked_pos['entry_price'] - current_price) * 10
+                    
+                    # Estimate profit in dollars (approximate)
+                    point_value = 100.0  # For XAUUSD, 1 lot = $100 per point
+                    profit = pips / 10 * tracked_pos['volume'] * point_value
+                    
+                    # Log position as closed with proper status
+                    self._log_position_closed(
+                        ticket=ticket,
+                        close_price=current_price,
+                        profit=profit,
+                        status=hit_type  # Status will be 'TP1', 'TP2', 'TP3', or 'SL'
+                    )
+                
+                # Send Telegram notification
+                if self.telegram_bot and close_successful:
+                    emoji = "🎯" if tp_hit else "🛑"
+                    message = f"{emoji} <b>{hit_type} HIT & CLOSED!</b>\n\n"
                     message += f"Ticket: #{ticket}\n"
-                    message += f"TP Level: {tp_level}\n"
                     message += f"Type: {tracked_pos['type']}\n"
                     message += f"Entry: ${tracked_pos['entry_price']:.2f}\n"
-                    message += f"TP Target: ${tp_target:.2f}\n"
-                    message += f"Current Price: ${current_price:.2f}\n"
+                    message += f"{hit_type} Target: ${target_price:.2f}\n"
+                    message += f"Close Price: ${current_price:.2f}\n"
                     message += f"Volume: {tracked_pos['volume']} lot\n"
                     
                     # Calculate pips
@@ -321,7 +688,10 @@ class LiveBotMT5FullAuto:
                         pips = (current_price - tracked_pos['entry_price']) * 10
                     else:
                         pips = (tracked_pos['entry_price'] - current_price) * 10
-                    message += f"Pips: {pips:.1f}\n"
+                    
+                    sign = "+" if pips >= 0 else ""
+                    message += f"Pips: {sign}{pips:.1f}\n"
+                    message += f"Status: CLOSED"
                     
                     try:
                         asyncio.run(self.send_telegram(message))
@@ -331,17 +701,44 @@ class LiveBotMT5FullAuto:
     def connect_mt5(self):
         """Connect to MT5"""
         if not mt5.initialize():
-            print("❌ Failed to initialize MT5")
+            error_msg = "❌ Failed to initialize MT5"
+            print(error_msg)
+            
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure:\n1. MetaTrader 5 is installed and running\n2. 'Algo Trading' is enabled\n3. You're logged into an account"))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return False
             
         account_info = mt5.account_info()
         if account_info is None:
-            print("❌ Failed to get account info")
+            error_msg = "❌ Failed to get account info"
+            print(error_msg)
             mt5.shutdown()
+            
+            # Send to Telegram
+            if self.telegram_bot:
+                try:
+                    asyncio.run(self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure you're logged into an MT5 account"))
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            
             return False
             
         self.mt5_connected = True
-        print(f"✅ Connected to MT5: {account_info.server} - Account {account_info.login}")
+        success_msg = f"✅ Connected to MT5: {account_info.server} - Account {account_info.login}"
+        print(success_msg)
+        
+        # Send success notification to Telegram
+        if self.telegram_bot:
+            try:
+                asyncio.run(self.send_telegram(f"✅ <b>Connected to MT5</b>\n\nServer: {account_info.server}\nAccount: {account_info.login}\nBalance: ${account_info.balance:.2f}"))
+            except Exception as e:
+                print(f"⚠️  Failed to send Telegram notification: {e}")
+        
         return True
         
     def disconnect_mt5(self):
@@ -879,7 +1276,7 @@ class LiveBotMT5FullAuto:
             print(f"\n⏰ Waiting until next hour: {next_hour.strftime('%H:%M:%S')}")
             print(f"   Time now: {now.strftime('%H:%M:%S')}")
             print(f"   Wait time: {int(wait_seconds/60)} min {int(wait_seconds%60)} sec")
-            print(f"   🎯 Real-time TP monitoring: Active (checking every 10s)")
+            print(f"   🎯 Real-time TP/SL monitoring: Active (checking every 10s, bar high/low)")
             
             # Monitor positions while waiting
             monitoring_interval = 10  # Check every 10 seconds
@@ -891,8 +1288,11 @@ class LiveBotMT5FullAuto:
                 time.sleep(sleep_time)
                 elapsed += sleep_time
                 
-                # Check TP levels in real-time
-                self._check_tp_levels_realtime()
+                # Sync positions with exchange first
+                self._sync_positions_with_exchange()
+                
+                # Check TP/SL levels in real-time
+                self._check_tp_sl_realtime()
                 
                 # Also check for closed positions
                 self._check_closed_positions()
@@ -911,7 +1311,7 @@ class LiveBotMT5FullAuto:
         print(f"   Risk per trade: {self.risk_percent}%")
         print(f"   Max positions: {self.max_positions}")
         print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
-        print(f"   🎯 Real-time TP monitoring: Every 10 seconds")
+        print(f"   🎯 Real-time TP/SL monitoring: Every 10 seconds (checks bar high/low)")
         print(f"\n🎯 Adaptive TP Levels:")
         print(f"   TREND Mode: {self.trend_tp1}p / {self.trend_tp2}p / {self.trend_tp3}p")
         print(f"   RANGE Mode: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p")
@@ -983,8 +1383,11 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 # Check current positions
                 open_positions = self.get_open_positions()
                 
-                # Check TP levels in real-time
-                self._check_tp_levels_realtime()
+                # Sync positions with exchange first
+                self._sync_positions_with_exchange()
+                
+                # Check TP/SL levels in real-time
+                self._check_tp_sl_realtime()
                 
                 # Check for closed positions and log them
                 self._check_closed_positions()
@@ -994,10 +1397,29 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 if len(open_positions) > 0:
                     for i, pos in enumerate(open_positions, 1):
                         direction = "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT"
-                        profit = pos.profit
+                        profit = pos.profit if pos.profit is not None else 0.0
+                        ticket = pos.ticket
+                        
+                        # Get status from tracker if available
+                        status = 'OPEN'
+                        if ticket in self.positions_tracker:
+                            status = self.positions_tracker[ticket].get('status', 'OPEN')
+                        
+                        # Calculate profit percentage
+                        profit_pct = 0.0
+                        if pos.price_open and pos.price_open > 0:
+                            current_tick = mt5.symbol_info_tick(self.symbol)
+                            if current_tick:
+                                current_price = current_tick.bid if pos.type == mt5.ORDER_TYPE_BUY else current_tick.ask
+                                if pos.type == mt5.ORDER_TYPE_BUY:
+                                    profit_pct = ((current_price - pos.price_open) / pos.price_open) * 100
+                                else:
+                                    profit_pct = ((pos.price_open - current_price) / pos.price_open) * 100
+                        
                         print(f"   Position #{i}: {direction} @ {pos.price_open:.2f}, "
                               f"SL={pos.sl:.2f}, TP={pos.tp:.2f}, "
-                              f"P&L: ${profit:.2f}")
+                              f"P&L: ${profit:.2f} ({profit_pct:+.2f}%), "
+                              f"Status: {status}")
                 
                 # Analyze market
                 print(f"\n🔍 Analyzing market...")

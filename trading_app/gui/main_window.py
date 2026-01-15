@@ -4,10 +4,10 @@ Main Window - main GUI window for the trading app
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QPlainTextEdit, QListWidget, QListWidgetItem,
-    QGroupBox, QMessageBox, QSplitter, QApplication
+    QGroupBox, QMessageBox, QSplitter, QApplication, QFrame, QGridLayout
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont, QIcon, QColor
 from core import BotManager
 from database import DatabaseManager
 from models import BotConfig, BotStatus
@@ -54,11 +54,128 @@ class MainWindow(QMainWindow):
         # Select first bot
         if self.bot_manager.get_all_bot_ids():
             self.select_bot(self.bot_manager.get_all_bot_ids()[0])
+    
+    def get_modern_stylesheet(self):
+        """Return modern stylesheet for the application"""
+        return """
+            QMainWindow {
+                background-color: #F5F5F5;
+            }
+            QWidget {
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+            QGroupBox {
+                border: 2px solid #E0E0E0;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 20px;
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-bottom: 15px;
+                font-weight: bold;
+                font-size: 13px;
+                background-color: white;
+                color: #333;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 5px 10px;
+                color: #2196F3;
+            }
+            QPushButton {
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 600;
+                min-height: 45px;
+                font-size: 13px;
+                color: white;
+            }
+            QPushButton:hover {
+                opacity: 0.9;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            }
+            QPushButton:pressed {
+                transform: translateY(1px);
+            }
+            QPushButton:disabled {
+                background-color: #CCCCCC;
+                color: #999999;
+            }
+            QListWidget {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                background-color: white;
+                padding: 5px;
+            }
+            QListWidget::item {
+                border-radius: 4px;
+                padding: 8px;
+                margin: 2px;
+            }
+            QListWidget::item:hover {
+                background-color: #E3F2FD;
+            }
+            QListWidget::item:selected {
+                background-color: #2196F3;
+                color: white;
+            }
+            QPlainTextEdit {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                background-color: #FAFAFA;
+                padding: 8px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 11px;
+            }
+            QLabel {
+                color: #555;
+            }
+            QTableWidget {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                background-color: white;
+                gridline-color: #F0F0F0;
+            }
+            QTableWidget::item {
+                padding: 8px;
+            }
+            QTableWidget::item:selected {
+                background-color: #E3F2FD;
+                color: #333;
+            }
+            QHeaderView::section {
+                background-color: #2196F3;
+                color: white;
+                padding: 10px;
+                border: none;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QComboBox {
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+                padding: 6px;
+                background-color: white;
+                min-height: 30px;
+            }
+            QComboBox:hover {
+                border-color: #2196F3;
+            }
+            QComboBox::drop-down {
+                border: none;
+                padding-right: 10px;
+            }
+        """
 
     def init_ui(self):
         """Initialize user interface"""
         self.setWindowTitle("Trading Bot Manager")
         self.setGeometry(100, 100, 1400, 900)
+        
+        # Apply modern styling
+        self.setStyleSheet(self.get_modern_stylesheet())
 
         # Central widget
         central_widget = QWidget()
@@ -122,6 +239,16 @@ class MainWindow(QMainWindow):
 
         # Refresh button
         refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                min-height: 40px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
         refresh_btn.clicked.connect(self.refresh_bot_list)
         layout.addWidget(refresh_btn)
 
@@ -132,13 +259,13 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
-        # Bot info section
-        self.info_group = self.create_info_section()
-        layout.addWidget(self.info_group)
+        # Combined info and status section (horizontal)
+        self.combined_info_status_group = self.create_combined_info_status_section()
+        layout.addWidget(self.combined_info_status_group)
 
-        # Status section
-        self.status_group = self.create_status_section()
-        layout.addWidget(self.status_group)
+        # Live open positions section
+        self.live_positions_group = self.create_live_positions_section()
+        layout.addWidget(self.live_positions_group)
 
         # Controls section
         controls_group = self.create_controls_section()
@@ -154,26 +281,73 @@ class MainWindow(QMainWindow):
 
         return panel
 
-    def create_info_section(self):
-        """Create bot info section"""
-        group = QGroupBox("Bot Information")
-        layout = QVBoxLayout(group)
-
+    def create_combined_info_status_section(self):
+        """Create combined bot info and status section (horizontal layout)"""
+        group = QGroupBox("Bot Information & Status")
+        main_layout = QHBoxLayout(group)
+        
+        # Left side: Bot Information
+        info_widget = QWidget()
+        info_layout = QVBoxLayout(info_widget)
+        info_layout.setContentsMargins(5, 5, 5, 5)
+        
+        info_title = QLabel("📋 Bot Configuration")
+        info_title_font = QFont()
+        info_title_font.setPointSize(11)
+        info_title_font.setBold(True)
+        info_title.setFont(info_title_font)
+        info_layout.addWidget(info_title)
+        
         self.info_label = QLabel("Select a bot from the list")
         self.info_label.setWordWrap(True)
-        layout.addWidget(self.info_label)
-
-        return group
-
-    def create_status_section(self):
-        """Create status section"""
-        group = QGroupBox("Status")
-        layout = QVBoxLayout(group)
-
+        info_layout.addWidget(self.info_label, 1)
+        
+        main_layout.addWidget(info_widget, 1)
+        
+        # Separator line
+        separator = QFrame()
+        separator.setFrameShape(QFrame.VLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("background-color: #E0E0E0;")
+        main_layout.addWidget(separator)
+        
+        # Right side: Status
+        status_widget = QWidget()
+        status_layout = QVBoxLayout(status_widget)
+        status_layout.setContentsMargins(5, 5, 5, 5)
+        
+        status_title = QLabel("📊 Live Status")
+        status_title_font = QFont()
+        status_title_font.setPointSize(11)
+        status_title_font.setBold(True)
+        status_title.setFont(status_title_font)
+        status_layout.addWidget(status_title)
+        
         self.status_label = QLabel("Status: Stopped")
         self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-
+        status_layout.addWidget(self.status_label, 1)
+        
+        main_layout.addWidget(status_widget, 1)
+        
+        return group
+    
+    def create_live_positions_section(self):
+        """Create live open positions section"""
+        group = QGroupBox("📊 Live Open Positions")
+        layout = QVBoxLayout(group)
+        
+        self.live_positions_label = QLabel("No open positions")
+        self.live_positions_label.setWordWrap(True)
+        self.live_positions_label.setStyleSheet("""
+            QLabel {
+                padding: 10px;
+                background-color: #F9F9F9;
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+            }
+        """)
+        layout.addWidget(self.live_positions_label)
+        
         return group
 
     def create_controls_section(self):
@@ -183,45 +357,118 @@ class MainWindow(QMainWindow):
 
         # Start button
         self.start_btn = QPushButton("▶ Start Bot")
+        self.start_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45A049;
+            }
+            QPushButton:disabled {
+                background-color: #CCCCCC;
+            }
+        """)
         self.start_btn.clicked.connect(self.start_bot)
-        self.start_btn.setMinimumHeight(40)
+        self.start_btn.setMinimumHeight(50)
         layout.addWidget(self.start_btn)
 
         # Stop button
         self.stop_btn = QPushButton("⏹ Stop Bot")
+        self.stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+            QPushButton:disabled {
+                background-color: #CCCCCC;
+            }
+        """)
         self.stop_btn.clicked.connect(self.stop_bot)
-        self.stop_btn.setMinimumHeight(40)
+        self.stop_btn.setMinimumHeight(50)
         self.stop_btn.setEnabled(False)
         layout.addWidget(self.stop_btn)
 
         # Settings button
         settings_btn = QPushButton("⚙ Settings")
+        settings_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
         settings_btn.clicked.connect(self.show_settings)
-        settings_btn.setMinimumHeight(40)
+        settings_btn.setMinimumHeight(50)
         layout.addWidget(settings_btn)
 
         # Positions button
         positions_btn = QPushButton("📊 Positions")
+        positions_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9C27B0;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #7B1FA2;
+            }
+        """)
         positions_btn.clicked.connect(self.show_positions)
-        positions_btn.setMinimumHeight(40)
+        positions_btn.setMinimumHeight(50)
         layout.addWidget(positions_btn)
 
         # Statistics button
         stats_btn = QPushButton("📈 Statistics")
+        stats_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+        """)
         stats_btn.clicked.connect(self.show_statistics)
-        stats_btn.setMinimumHeight(40)
+        stats_btn.setMinimumHeight(50)
         layout.addWidget(stats_btn)
 
         # TP Hits button
         tp_hits_btn = QPushButton("🎯 TP Hits")
+        tp_hits_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #00BCD4;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #0097A7;
+            }
+        """)
         tp_hits_btn.clicked.connect(self.show_tp_hits)
-        tp_hits_btn.setMinimumHeight(40)
+        tp_hits_btn.setMinimumHeight(50)
         layout.addWidget(tp_hits_btn)
 
         # Signal Analysis button (Backtest)
         signal_analysis_btn = QPushButton("🔍 Signal Analysis")
+        signal_analysis_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #607D8B;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #455A64;
+            }
+        """)
         signal_analysis_btn.clicked.connect(self.show_signal_analysis)
-        signal_analysis_btn.setMinimumHeight(40)
+        signal_analysis_btn.setMinimumHeight(50)
         layout.addWidget(signal_analysis_btn)
 
         return group
@@ -350,6 +597,118 @@ class MainWindow(QMainWindow):
             status_html += f"<p style='color: red;'><b>Error:</b> {status.error_message}</p>"
 
         self.status_label.setText(status_html)
+        
+        # Update live positions
+        self.update_live_positions_display()
+
+    def update_live_positions_display(self):
+        """Update live open positions display"""
+        if not hasattr(self, 'live_positions_label') or self.live_positions_label is None:
+            return
+            
+        if not self.current_bot_id:
+            self.live_positions_label.setText("No bot selected")
+            return
+        
+        try:
+            # Get bot config to fetch current price
+            config = self.bot_manager.get_bot_config(self.current_bot_id)
+            if not config:
+                self.live_positions_label.setText("<p style='color: #F44336;'>Bot config not found</p>")
+                return
+            
+            # Get open positions from database
+            open_trades = self.db.get_open_trades(self.current_bot_id)
+            
+            if not open_trades or len(open_trades) == 0:
+                self.live_positions_label.setText("<p style='color: #666; font-size: 12px;'>No open positions</p>")
+                return
+            
+            # Fetch current price from exchange for accurate P&L calculation
+            current_price = None
+            try:
+                if config.exchange == 'Binance':
+                    import ccxt
+                    exchange = ccxt.binance({'enableRateLimit': True})
+                    ticker = exchange.fetch_ticker(config.symbol)
+                    current_price = ticker.get('last')
+                elif config.exchange == 'MT5':
+                    import MetaTrader5 as mt5
+                    if mt5.initialize():
+                        tick = mt5.symbol_info_tick(config.symbol)
+                        if tick:
+                            current_price = tick.last if tick.last > 0 else (tick.bid + tick.ask) / 2
+                        mt5.shutdown()
+            except Exception as e:
+                print(f"Warning: Could not fetch current price for live display: {e}")
+            
+            # Calculate positions with real-time P&L
+            total_pnl = 0.0
+            positions_data = []
+            
+            for trade in open_trades[:5]:  # Show max 5 positions
+                # Calculate P&L based on current price if available
+                if current_price and current_price > 0:
+                    direction = 1 if trade.trade_type == 'BUY' else -1
+                    pnl = (current_price - trade.entry_price) * trade.amount * direction
+                else:
+                    # Fallback to database profit
+                    pnl = trade.profit if trade.profit is not None else 0.0
+                
+                total_pnl += pnl
+                positions_data.append({
+                    'trade': trade,
+                    'pnl': pnl,
+                    'current_price': current_price if current_price else trade.entry_price
+                })
+            
+            # Build HTML display
+            positions_html = f"""
+            <div style='font-size: 12px;'>
+            <p style='font-weight: bold; font-size: 13px; margin-bottom: 8px;'>
+                {len(open_trades)} position{'s' if len(open_trades) != 1 else ''} open | 
+                Total P&L: <span style='color: {'#4CAF50' if total_pnl >= 0 else '#F44336'}; font-weight: bold;'>
+                ${total_pnl:+,.2f}</span>
+            </p>
+            """
+            
+            # Add each position
+            for pos_data in positions_data:
+                trade = pos_data['trade']
+                pnl = pos_data['pnl']
+                display_price = pos_data['current_price']
+                
+                pnl_color = '#4CAF50' if pnl >= 0 else '#F44336'
+                type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
+                
+                positions_html += f"""
+                <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
+                    <p style='margin: 2px 0;'>
+                        <b>{type_icon} {trade.symbol if hasattr(trade, 'symbol') else config.symbol}</b> 
+                        <span style='color: #666;'>{trade.trade_type}</span>
+                    </p>
+                    <p style='margin: 2px 0; font-size: 11px; color: #666;'>
+                        Entry: {trade.entry_price:,.4f} → Current: {display_price:,.4f}
+                    </p>
+                    <p style='margin: 2px 0; font-size: 11px;'>
+                        P&L: <span style='color: {pnl_color}; font-weight: bold;'>
+                        ${pnl:+,.2f}</span>
+                    </p>
+                </div>
+                """
+            
+            if len(open_trades) > 5:
+                positions_html += f"<p style='color: #666; font-size: 11px; margin-top: 5px;'>...and {len(open_trades) - 5} more</p>"
+            
+            positions_html += "</div>"
+            
+            self.live_positions_label.setText(positions_html)
+            
+        except Exception as e:
+            print(f"Error updating live positions: {e}")
+            import traceback
+            traceback.print_exc()
+            self.live_positions_label.setText(f"<p style='color: #F44336;'>Error loading positions</p>")
 
     def update_controls(self):
         """Update control buttons based on bot state"""
