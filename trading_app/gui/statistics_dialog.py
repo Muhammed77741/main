@@ -134,7 +134,7 @@ class StatisticsDialog(QDialog):
                 border-radius: 4px;
                 padding: 6px 12px;
                 font-weight: bold;
-                min-height: 28px;
+                min-height: 35px;
                 font-size: 12px;
             }
             QPushButton:hover {
@@ -153,7 +153,7 @@ class StatisticsDialog(QDialog):
                 border-radius: 4px;
                 padding: 6px 12px;
                 font-weight: bold;
-                min-height: 28px;
+                min-height: 35px;
                 font-size: 12px;
             }
             QPushButton:hover {
@@ -172,7 +172,7 @@ class StatisticsDialog(QDialog):
                 border-radius: 4px;
                 padding: 6px 12px;
                 font-weight: bold;
-                min-height: 28px;
+                min-height: 35px;
                 font-size: 12px;
             }
             QPushButton:hover {

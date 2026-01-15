@@ -611,6 +611,12 @@ class MainWindow(QMainWindow):
             return
         
         try:
+            # Get bot config to fetch current price
+            config = self.bot_manager.get_bot_config(self.current_bot_id)
+            if not config:
+                self.live_positions_label.setText("<p style='color: #F44336;'>Bot config not found</p>")
+                return
+            
             # Get open positions from database
             open_trades = self.db.get_open_trades(self.current_bot_id)
             
@@ -618,8 +624,43 @@ class MainWindow(QMainWindow):
                 self.live_positions_label.setText("<p style='color: #666; font-size: 12px;'>No open positions</p>")
                 return
             
-            # Calculate total P&L
-            total_pnl = sum(trade.profit if trade.profit else 0.0 for trade in open_trades)
+            # Fetch current price from exchange for accurate P&L calculation
+            current_price = None
+            try:
+                if config.exchange == 'Binance':
+                    import ccxt
+                    exchange = ccxt.binance({'enableRateLimit': True})
+                    ticker = exchange.fetch_ticker(config.symbol)
+                    current_price = ticker.get('last')
+                elif config.exchange == 'MT5':
+                    import MetaTrader5 as mt5
+                    if mt5.initialize():
+                        tick = mt5.symbol_info_tick(config.symbol)
+                        if tick:
+                            current_price = tick.last if tick.last > 0 else (tick.bid + tick.ask) / 2
+                        mt5.shutdown()
+            except Exception as e:
+                print(f"Warning: Could not fetch current price for live display: {e}")
+            
+            # Calculate positions with real-time P&L
+            total_pnl = 0.0
+            positions_data = []
+            
+            for trade in open_trades[:5]:  # Show max 5 positions
+                # Calculate P&L based on current price if available
+                if current_price and current_price > 0:
+                    direction = 1 if trade.trade_type == 'BUY' else -1
+                    pnl = (current_price - trade.entry_price) * trade.amount * direction
+                else:
+                    # Fallback to database profit
+                    pnl = trade.profit if trade.profit is not None else 0.0
+                
+                total_pnl += pnl
+                positions_data.append({
+                    'trade': trade,
+                    'pnl': pnl,
+                    'current_price': current_price if current_price else trade.entry_price
+                })
             
             # Build HTML display
             positions_html = f"""
@@ -632,26 +673,26 @@ class MainWindow(QMainWindow):
             """
             
             # Add each position
-            for trade in open_trades[:5]:  # Show max 5 positions
-                # Determine color based on profit
-                pnl_color = '#4CAF50' if (trade.profit or 0) >= 0 else '#F44336'
-                type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
+            for pos_data in positions_data:
+                trade = pos_data['trade']
+                pnl = pos_data['pnl']
+                display_price = pos_data['current_price']
                 
-                # Get current price (if available from trade data)
-                current_price = trade.close_price if trade.close_price else trade.entry_price
+                pnl_color = '#4CAF50' if pnl >= 0 else '#F44336'
+                type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
                 
                 positions_html += f"""
                 <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
                     <p style='margin: 2px 0;'>
-                        <b>{type_icon} {trade.symbol if hasattr(trade, 'symbol') else 'N/A'}</b> 
+                        <b>{type_icon} {trade.symbol if hasattr(trade, 'symbol') else config.symbol}</b> 
                         <span style='color: #666;'>{trade.trade_type}</span>
                     </p>
                     <p style='margin: 2px 0; font-size: 11px; color: #666;'>
-                        Entry: {trade.entry_price:,.4f} → Current: {current_price:,.4f}
+                        Entry: {trade.entry_price:,.4f} → Current: {display_price:,.4f}
                     </p>
                     <p style='margin: 2px 0; font-size: 11px;'>
                         P&L: <span style='color: {pnl_color}; font-weight: bold;'>
-                        ${(trade.profit or 0):+,.2f}</span>
+                        ${pnl:+,.2f}</span>
                     </p>
                 </div>
                 """
@@ -665,6 +706,8 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             print(f"Error updating live positions: {e}")
+            import traceback
+            traceback.print_exc()
             self.live_positions_label.setText(f"<p style='color: #F44336;'>Error loading positions</p>")
 
     def update_controls(self):

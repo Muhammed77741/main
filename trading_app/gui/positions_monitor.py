@@ -285,12 +285,15 @@ class PositionsMonitor(QDialog):
         # Refresh button
         refresh_btn = QPushButton("🔄 Refresh Now")
         refresh_btn.clicked.connect(self.refresh_positions)
+        refresh_btn.setMinimumHeight(35)
+        refresh_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; min-height: 35px; padding: 6px 12px;")
         controls_layout.addWidget(refresh_btn)
         
         # Close Selected button
         self.close_selected_btn = QPushButton("❌ Close Selected Positions")
         self.close_selected_btn.clicked.connect(self.close_selected_positions)
-        self.close_selected_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.close_selected_btn.setMinimumHeight(35)
+        self.close_selected_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold; min-height: 35px; padding: 6px 12px;")
         self.close_selected_btn.setEnabled(False)  # Disabled until positions are loaded
         controls_layout.addWidget(self.close_selected_btn)
         
@@ -307,6 +310,8 @@ class PositionsMonitor(QDialog):
         # Close button
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
+        close_btn.setMinimumHeight(35)
+        close_btn.setStyleSheet("background-color: #757575; color: white; font-weight: bold; min-height: 35px; padding: 6px 12px;")
         layout.addWidget(close_btn)
 
     def toggle_auto_refresh(self, state):
