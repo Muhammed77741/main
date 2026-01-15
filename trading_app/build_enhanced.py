@@ -109,10 +109,13 @@ def build_exe():
         '--exclude-module=IPython',  # Interactive Python (not used)
         # Note: tkinter excluded as we use PySide6
         '--exclude-module=tkinter',
-        
-        # Application info
-        '--version-file=None',  # Can add version info later
     ]
+    
+    # Optional: Add version file if it exists
+    # To add version info, create a version.txt file and uncomment:
+    # version_file = script_dir / 'version.txt'
+    # if version_file.exists():
+    #     args.append(f'--version-file={version_file}')
     
     # Add icon if available
     if icon_file:
