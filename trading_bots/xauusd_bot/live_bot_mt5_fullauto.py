@@ -70,20 +70,28 @@ class LiveBotMT5FullAuto:
         
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
-        
+
         # TREND MODE parameters (strong trend)
         self.trend_tp1 = 30
         self.trend_tp2 = 55
         self.trend_tp3 = 90
-        
+
         # RANGE MODE parameters (sideways)
         self.range_tp1 = 20
         self.range_tp2 = 35
         self.range_tp3 = 50
-        
+
         # Current market regime
         self.current_regime = 'RANGE'
-        
+
+        # Trailing stop settings (НОВОЕ!)
+        self.trailing_stop_enabled = True
+        self.trend_trailing_activation = 30  # Activate after 30 points profit in TREND
+        self.trend_trailing_distance = 18    # Trail at 18 points below peak in TREND
+        self.range_trailing_activation = 20  # Activate after 20 points profit in RANGE
+        self.range_trailing_distance = 15    # Trail at 15 points below peak in RANGE
+        self.position_peaks = {}  # Track highest profit for trailing stop {ticket: peak_data}
+
         # Position tracking
         self.trades_file = 'bot_trades_log.csv'
         self.tp_hits_file = 'bot_tp_hits_log.csv'
@@ -455,20 +463,9 @@ class LiveBotMT5FullAuto:
             # In dry_run mode, all database positions are "valid" (use string tickets)
             mt5_position_tickets = set(positions_to_check.keys())
         
-        # Get current bar data to check high/low
-        try:
-            rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, 1)
-            if rates is not None and len(rates) > 0:
-                bar_high = rates[0]['high']
-                bar_low = rates[0]['low']
-            else:
-                # Fallback if can't get bar data
-                bar_high = None
-                bar_low = None
-        except Exception as e:
-            print(f"⚠️  Could not fetch current bar data: {e}")
-            bar_high = None
-            bar_low = None
+        # NOTE: We check only CURRENT PRICE, not bar high/low
+        # Checking bar high/low of current (unclosed) candle can give false signals
+        # MT5/exchange will close positions automatically when TP/SL is hit
         
         # Check each tracked position
         for ticket, tracked_pos in list(positions_to_check.items()):
@@ -535,25 +532,27 @@ class LiveBotMT5FullAuto:
             elif 'TP3' in tracked_pos['comment']:
                 tp_level = 'TP3'
             
-            # Check if TP or SL is hit based on bar high/low OR current price
+            # Check if TP or SL is hit based on CURRENT PRICE only (FIXED!)
+            # We rely on MT5/exchange to close positions when TP/SL is actually hit
+            # This check is only for logging and notification purposes
             tp_hit = False
             sl_hit = False
-            
+
             if tracked_pos['type'] == 'BUY':
                 # For BUY: TP is above entry, SL is below entry
-                # Check if bar high reached TP OR current price is already at/past TP
-                if (bar_high and bar_high >= tp_target) or (current_price >= tp_target):
+                # Check only current price (not bar high/low to avoid false signals)
+                if current_price >= tp_target:
                     tp_hit = True
-                # Check if bar low reached SL OR current price is already at/past SL
-                if (bar_low and bar_low <= sl_target) or (current_price <= sl_target):
+                # SL check happens on exchange - we just detect it was closed
+                if current_price <= sl_target:
                     sl_hit = True
             else:  # SELL
                 # For SELL: TP is below entry, SL is above entry
-                # Check if bar low reached TP OR current price is already at/past TP
-                if (bar_low and bar_low <= tp_target) or (current_price <= tp_target):
+                # Check only current price
+                if current_price <= tp_target:
                     tp_hit = True
-                # Check if bar high reached SL OR current price is already at/past SL
-                if (bar_high and bar_high >= sl_target) or (current_price >= sl_target):
+                # SL check happens on exchange
+                if current_price >= sl_target:
                     sl_hit = True
             
             # If TP or SL is hit
@@ -795,6 +794,163 @@ class LiveBotMT5FullAuto:
                         status='UNKNOWN'
                     )
             
+    def update_trailing_stops(self):
+        """
+        Update trailing stops for all open positions
+
+        Logic:
+        1. Check profit for each position
+        2. If profit > threshold (based on regime), activate trailing
+        3. Track peak profit (best price)
+        4. Move SL up to lock in profits (peak - trailing_distance)
+        """
+        if not self.trailing_stop_enabled or not self.mt5_connected:
+            return
+
+        try:
+            # Get open positions
+            positions = mt5.positions_get(symbol=self.symbol)
+            if not positions or len(positions) == 0:
+                return
+
+            # Get current price
+            tick = mt5.symbol_info_tick(self.symbol)
+            if not tick:
+                return
+
+            for pos in positions:
+                ticket = pos.ticket
+
+                # Get position details
+                entry_price = pos.price_open
+                current_sl = pos.sl
+                position_type = pos.type  # ORDER_TYPE_BUY or ORDER_TYPE_SELL
+
+                # Get regime from tracker
+                regime = 'RANGE'
+                if ticket in self.positions_tracker:
+                    regime = self.positions_tracker[ticket].get('regime', 'RANGE')
+
+                # Get regime-specific trailing parameters
+                if regime == 'TREND':
+                    trailing_activation = self.trend_trailing_activation
+                    trailing_distance = self.trend_trailing_distance
+                else:
+                    trailing_activation = self.range_trailing_activation
+                    trailing_distance = self.range_trailing_distance
+
+                # Calculate current profit in points
+                if position_type == mt5.ORDER_TYPE_BUY:
+                    current_price = tick.bid
+                    profit_points = current_price - entry_price
+                else:
+                    current_price = tick.ask
+                    profit_points = entry_price - current_price
+
+                # Check if trailing should be activated
+                if profit_points < trailing_activation:
+                    # Not enough profit yet to activate trailing
+                    continue
+
+                # Initialize peak tracking if not exists
+                if ticket not in self.position_peaks:
+                    self.position_peaks[ticket] = {
+                        'peak_price': current_price,
+                        'peak_profit': profit_points,
+                        'trailing_active': False
+                    }
+
+                peak_data = self.position_peaks[ticket]
+
+                # Update peak if current profit is higher
+                if profit_points > peak_data['peak_profit']:
+                    peak_data['peak_price'] = current_price
+                    peak_data['peak_profit'] = profit_points
+                    peak_data['trailing_active'] = True
+
+                # Only move SL if trailing is active
+                if not peak_data['trailing_active']:
+                    continue
+
+                # Calculate new trailing stop level
+                if position_type == mt5.ORDER_TYPE_BUY:
+                    new_sl = peak_data['peak_price'] - trailing_distance
+                    # Only move SL UP for LONG positions
+                    if new_sl > current_sl:
+                        self._modify_sl(ticket, new_sl, regime)
+                        print(f"   ✅ Trailing SL updated for position #{ticket}")
+                        print(f"      Old SL: {current_sl:.2f} → New SL: {new_sl:.2f}")
+                        print(f"      Peak: {peak_data['peak_price']:.2f}, Trail: {trailing_distance}p")
+                else:  # SHORT
+                    new_sl = peak_data['peak_price'] + trailing_distance
+                    # Only move SL DOWN for SHORT positions
+                    if new_sl < current_sl or current_sl == 0:
+                        self._modify_sl(ticket, new_sl, regime)
+                        print(f"   ✅ Trailing SL updated for position #{ticket}")
+                        print(f"      Old SL: {current_sl:.2f} → New SL: {new_sl:.2f}")
+                        print(f"      Peak: {peak_data['peak_price']:.2f}, Trail: {trailing_distance}p")
+
+        except Exception as e:
+            print(f"⚠️  Error updating trailing stops: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _modify_sl(self, ticket, new_sl, regime):
+        """Modify stop loss for position"""
+        if self.dry_run:
+            print(f"   🧪 DRY RUN: Would update SL for #{ticket} to {new_sl:.2f}")
+            return True
+
+        try:
+            # Get position
+            positions = mt5.positions_get(ticket=ticket)
+            if not positions or len(positions) == 0:
+                print(f"   ⚠️  Position #{ticket} not found")
+                return False
+
+            pos = positions[0]
+
+            # Create modify request
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": ticket,
+                "symbol": self.symbol,
+                "sl": new_sl,
+                "tp": pos.tp,  # Keep existing TP
+            }
+
+            # Send request
+            result = mt5.order_send(request)
+
+            if result is None:
+                print(f"   ❌ Failed to modify SL for #{ticket}: No result")
+                return False
+
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                print(f"   ❌ Failed to modify SL for #{ticket}: {result.retcode} - {result.comment}")
+                return False
+
+            # Update tracker
+            if ticket in self.positions_tracker:
+                self.positions_tracker[ticket]['sl'] = new_sl
+
+            # Send Telegram notification
+            if self.telegram_bot:
+                position_type = "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT"
+                message = f"🔄 <b>Trailing SL Updated</b>\n\n"
+                message += f"Position: #{ticket} ({position_type})\n"
+                message += f"Regime: {regime}\n"
+                message += f"New SL: {new_sl:.2f}\n"
+                message += f"Entry: {pos.price_open:.2f}\n"
+                message += f"TP: {pos.tp:.2f}"
+                asyncio.run(self.send_telegram(message))
+
+            return True
+
+        except Exception as e:
+            print(f"   ❌ Error modifying SL: {e}")
+            return False
+
     async def send_telegram(self, message):
         """Send Telegram notification"""
         if self.telegram_bot and self.telegram_chat_id:
@@ -1162,10 +1318,24 @@ class LiveBotMT5FullAuto:
             if result.retcode != mt5.TRADE_RETCODE_DONE:
                 print(f"   ❌ {tp_name} order failed: {result.retcode} - {result.comment}")
                 continue
-                
+
+            # Check slippage (НОВОЕ!)
+            expected_price = price
+            actual_price = result.price
+            slippage = abs(actual_price - expected_price)
+            max_acceptable_slippage = 5.0  # 5 points max acceptable slippage
+
+            if slippage > max_acceptable_slippage:
+                print(f"   ⚠️  HIGH SLIPPAGE DETECTED: {slippage:.2f} points!")
+                print(f"      Expected: {expected_price:.2f}, Actual: {actual_price:.2f}")
+                # You could decide to close position here if slippage is too high
+                # For now, just warn but continue
+
             print(f"   ✅ {tp_name} position opened!")
             print(f"      Order: #{result.order}")
             print(f"      Lot: {lot_size}")
+            print(f"      Expected entry: {expected_price:.2f}")
+            print(f"      Actual entry: {actual_price:.2f} (slippage: {slippage:.2f}p)")
             print(f"      TP: {tp_price:.2f} ({tp_distance}p)")
             
             # Log position
@@ -1391,10 +1561,15 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 
                 # Check TP/SL levels in real-time
                 self._check_tp_sl_realtime()
-                
+
                 # Check for closed positions and log them
                 self._check_closed_positions()
-                
+
+                # Update trailing stops for all open positions (НОВОЕ!)
+                if self.trailing_stop_enabled and len(open_positions) > 0:
+                    print(f"\n🔄 Updating trailing stops...")
+                    self.update_trailing_stops()
+
                 print(f"📊 Open positions: {len(open_positions)}/{self.max_positions}")
                 
                 if len(open_positions) > 0:

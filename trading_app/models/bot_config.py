@@ -47,6 +47,41 @@ class BotConfig:
     dry_run: bool = True
     testnet: bool = True
 
+    def validate(self):
+        """
+        Validate configuration parameters
+
+        Returns:
+            tuple: (is_valid, error_messages)
+        """
+        errors = []
+
+        # TP levels must be in ascending order
+        if not (self.trend_tp1 < self.trend_tp2 < self.trend_tp3):
+            errors.append(f"TREND TP levels must be ascending: TP1 ({self.trend_tp1}) < TP2 ({self.trend_tp2}) < TP3 ({self.trend_tp3})")
+
+        if not (self.range_tp1 < self.range_tp2 < self.range_tp3):
+            errors.append(f"RANGE TP levels must be ascending: TP1 ({self.range_tp1}) < TP2 ({self.range_tp2}) < TP3 ({self.range_tp3})")
+
+        # TP levels must be positive
+        if any(tp <= 0 for tp in [self.trend_tp1, self.trend_tp2, self.trend_tp3,
+                                    self.range_tp1, self.range_tp2, self.range_tp3]):
+            errors.append("All TP levels must be positive")
+
+        # Risk must be reasonable
+        if self.risk_percent < 0.1 or self.risk_percent > 10.0:
+            errors.append(f"Risk per trade should be between 0.1% and 10% (got: {self.risk_percent}%)")
+
+        # Max positions must be reasonable
+        if self.max_positions < 1 or self.max_positions > 50:
+            errors.append(f"Max positions should be between 1 and 50 (got: {self.max_positions})")
+
+        # Symbol must not be empty
+        if not self.symbol or self.symbol.strip() == '':
+            errors.append("Symbol cannot be empty")
+
+        return (len(errors) == 0, errors)
+
     def to_dict(self):
         """Convert to dictionary"""
         return asdict(self)
@@ -58,7 +93,12 @@ class BotConfig:
     @classmethod
     def from_dict(cls, data: dict):
         """Create from dictionary"""
-        return cls(**data)
+        config = cls(**data)
+        # Validate after creation
+        is_valid, errors = config.validate()
+        if not is_valid:
+            raise ValueError(f"Invalid configuration:\n" + "\n".join(f"  - {err}" for err in errors))
+        return config
 
     @classmethod
     def from_json(cls, json_str: str):

@@ -732,21 +732,9 @@ class LiveBotBinanceFullAuto:
                 # In dry_run mode, all database positions are "valid"
                 exchange_position_ids = set(positions_to_check.keys())
             
-            # Get current bar data to check high/low
-            try:
-                ohlcv = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit=1)
-                if ohlcv and len(ohlcv) > 0:
-                    current_bar = ohlcv[0]
-                    bar_high = current_bar[2]  # high price
-                    bar_low = current_bar[3]   # low price
-                else:
-                    # Fallback if can't get bar data
-                    bar_high = None
-                    bar_low = None
-            except Exception as e:
-                print(f"⚠️  Could not fetch current bar data: {e}")
-                bar_high = None
-                bar_low = None
+            # NOTE: We check only CURRENT PRICE, not bar high/low
+            # Checking bar high/low of current (unclosed) candle can give false signals
+            # Exchange will close positions automatically when TP/SL is hit
             
             # Check each tracked position
             for order_id, tracked_pos in list(positions_to_check.items()):
@@ -798,25 +786,27 @@ class LiveBotBinanceFullAuto:
                 sl_target = tracked_pos['sl']
                 position_type = tracked_pos['type']
                 
-                # Check if TP or SL is hit based on bar high/low OR current price
+                # Check if TP or SL is hit based on CURRENT PRICE only (FIXED!)
+                # We rely on exchange to close positions when TP/SL is actually hit
+                # This check is only for logging and notification purposes
                 tp_hit = False
                 sl_hit = False
-                
+
                 if position_type == 'BUY':
                     # For BUY: TP is above entry, SL is below entry
-                    # Check if bar high reached TP OR current price is already at/past TP
-                    if (bar_high and bar_high >= tp_target) or (current_price >= tp_target):
+                    # Check only current price (not bar high/low to avoid false signals)
+                    if current_price >= tp_target:
                         tp_hit = True
-                    # Check if bar low reached SL OR current price is already at/past SL
-                    if (bar_low and bar_low <= sl_target) or (current_price <= sl_target):
+                    # SL check happens on exchange - we just detect it was closed
+                    if current_price <= sl_target:
                         sl_hit = True
                 else:  # SELL
                     # For SELL: TP is below entry, SL is above entry
-                    # Check if bar low reached TP OR current price is already at/past TP
-                    if (bar_low and bar_low <= tp_target) or (current_price <= tp_target):
+                    # Check only current price
+                    if current_price <= tp_target:
                         tp_hit = True
-                    # Check if bar high reached SL OR current price is already at/past SL
-                    if (bar_high and bar_high >= sl_target) or (current_price >= sl_target):
+                    # SL check happens on exchange
+                    if current_price >= sl_target:
                         sl_hit = True
                 
                 # If TP or SL is hit
