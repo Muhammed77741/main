@@ -1582,13 +1582,30 @@ class SignalAnalysisDialog(QDialog):
         self.multi_tp_custom_group = QGroupBox("Custom TP Levels (Optional - Override Defaults)")
         self.multi_tp_custom_group.setCheckable(False)
         self.multi_tp_custom_group.setVisible(False)  # Hidden by default
+        self.multi_tp_custom_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #cccccc;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+            }
+        """)
         multi_tp_layout = QVBoxLayout(self.multi_tp_custom_group)
+        multi_tp_layout.setSpacing(10)
+        multi_tp_layout.setContentsMargins(15, 20, 15, 15)
         
         # Connect checkbox to show/hide customization
         self.use_multi_tp_check.stateChanged.connect(self.on_multi_tp_changed)
         
         # TREND mode TP levels
         trend_row = QHBoxLayout()
+        trend_row.setSpacing(8)
         trend_row.addWidget(QLabel("<b>TREND Mode:</b>"))
         trend_row.addWidget(QLabel("TP1:"))
         self.trend_tp1_spin = QDoubleSpinBox()
@@ -1628,6 +1645,7 @@ class SignalAnalysisDialog(QDialog):
         
         # RANGE mode TP levels
         range_row = QHBoxLayout()
+        range_row.setSpacing(8)
         range_row.addWidget(QLabel("<b>RANGE Mode:</b>"))
         range_row.addWidget(QLabel("TP1:"))
         self.range_tp1_spin = QDoubleSpinBox()
