@@ -48,60 +48,100 @@ class PositionFetcherThread(QThread):
                 
                 # Try to get current price for P&L calculation
                 current_price = None
-                try:
-                    if self.config.exchange == 'Binance':
-                        import ccxt
-                        # Use public data (no credentials needed for ticker)
-                        exchange = ccxt.binance({
-                            'enableRateLimit': True,
-                            'options': {'defaultType': 'future'}
-                        })
-                        ticker = exchange.fetch_ticker(self.config.symbol)
-                        current_price = ticker.get('last')
-                        if current_price and current_price > 0:
-                            print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
-                        else:
-                            print(f"⚠️  Invalid price received: {current_price}")
-                    elif self.config.exchange == 'MT5':
-                        import MetaTrader5 as mt5
-                        if mt5.initialize():
-                            try:
-                                tick = mt5.symbol_info_tick(self.config.symbol)
-                                if tick and tick.last > 0:
-                                    current_price = tick.last
-                                    print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
-                                elif tick:
-                                    # Try bid/ask if last is not available
-                                    current_price = (tick.bid + tick.ask) / 2 if tick.bid > 0 and tick.ask > 0 else None
-                                    if current_price:
-                                        print(f"💰 Current {self.config.symbol} price: ${current_price:.2f} (from bid/ask)")
+                max_retries = 2
+
+                for attempt in range(max_retries):
+                    try:
+                        if self.config.exchange == 'Binance':
+                            import ccxt
+                            # Use public data (no credentials needed for ticker)
+                            exchange = ccxt.binance({
+                                'enableRateLimit': True,
+                                'options': {'defaultType': 'future'}
+                            })
+                            ticker = exchange.fetch_ticker(self.config.symbol)
+                            current_price = ticker.get('last') or ticker.get('bid')
+                            if current_price and current_price > 0:
+                                print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
+                                break
+                            else:
+                                print(f"⚠️  Invalid price received: {current_price}, retrying...")
+                                if attempt < max_retries - 1:
+                                    import time
+                                    time.sleep(1)
+
+                        elif self.config.exchange == 'MT5':
+                            import MetaTrader5 as mt5
+                            if mt5.initialize():
+                                try:
+                                    tick = mt5.symbol_info_tick(self.config.symbol)
+                                    if tick:
+                                        # Try last price first
+                                        if tick.last and tick.last > 0:
+                                            current_price = tick.last
+                                        # Fallback to bid/ask average
+                                        elif tick.bid > 0 and tick.ask > 0:
+                                            current_price = (tick.bid + tick.ask) / 2
+
+                                        if current_price and current_price > 0:
+                                            print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
+                                            break
+                                        else:
+                                            print(f"⚠️  MT5 tick data invalid: last={tick.last}, bid={tick.bid}, ask={tick.ask}")
+                                            if attempt < max_retries - 1:
+                                                import time
+                                                time.sleep(1)
                                     else:
-                                        print(f"⚠️  MT5 tick data invalid: last={tick.last}, bid={tick.bid}, ask={tick.ask}")
-                                else:
-                                    print(f"⚠️  MT5 symbol_info_tick returned None for {self.config.symbol}")
-                            finally:
-                                mt5.shutdown()
-                        else:
-                            print(f"⚠️  MT5 initialization failed: {mt5.last_error()}")
-                except Exception as e:
-                    print(f"⚠️  Could not fetch current price for P&L: {e}")
-                    import traceback
-                    traceback.print_exc()
+                                        print(f"⚠️  MT5 symbol_info_tick returned None for {self.config.symbol}")
+                                        if attempt < max_retries - 1:
+                                            import time
+                                            time.sleep(1)
+                                finally:
+                                    mt5.shutdown()
+                            else:
+                                print(f"⚠️  MT5 initialization failed: {mt5.last_error()}")
+                                if attempt < max_retries - 1:
+                                    import time
+                                    time.sleep(1)
+                    except Exception as e:
+                        print(f"⚠️  Error fetching current price (attempt {attempt+1}/{max_retries}): {e}")
+                        if attempt < max_retries - 1:
+                            import time
+                            time.sleep(1)
                 
                 # Store current price for signal emission
                 self.current_price = current_price
                 
+                # Check if XAUUSD for correct P&L calculation
+                is_xauusd = 'XAUUSD' in self.config.symbol.upper() or 'XAU' in self.config.symbol.upper()
+
                 for trade in open_trades:
                     # Calculate unrealized P&L if we have current price
                     mark_price = current_price if current_price else trade.entry_price
                     unrealized_pnl = 0.0
-                    
-                    if current_price:
+
+                    if current_price and current_price != trade.entry_price:
+                        # Calculate price difference
                         if trade.trade_type.upper() == 'BUY':
-                            unrealized_pnl = (current_price - trade.entry_price) * trade.amount
+                            price_diff = current_price - trade.entry_price
                         elif trade.trade_type.upper() == 'SELL':
-                            unrealized_pnl = (trade.entry_price - current_price) * trade.amount
-                    
+                            price_diff = trade.entry_price - current_price
+                        else:
+                            price_diff = 0.0
+
+                        # Calculate P&L based on asset type
+                        if is_xauusd:
+                            # XAUUSD: 1 lot = 100 oz, 1 point = $1 per lot
+                            # P&L = price_diff (in points) * lot_size * $1
+                            unrealized_pnl = price_diff * trade.amount
+                        else:
+                            # Crypto: P&L = price_diff (in USD) * amount (in BTC/ETH)
+                            unrealized_pnl = price_diff * trade.amount
+                    else:
+                        # No current price or price hasn't changed
+                        if not current_price:
+                            print(f"   ⚠️  No current price available for {trade.order_id}, P&L = $0.00")
+
                     # Convert database trade record to position format
                     positions.append({
                         'id': trade.order_id or f"DRY-{trade.trade_id}",
@@ -113,7 +153,9 @@ class PositionFetcherThread(QThread):
                         'takeProfit': trade.take_profit,
                         'unrealizedPnl': unrealized_pnl
                     })
-                    print(f"   ✅ Loaded: {trade.trade_type} {trade.amount} @ ${trade.entry_price:.2f} | P&L: ${unrealized_pnl:+.2f}")
+
+                    pnl_status = "No price" if not current_price else f"${unrealized_pnl:+.2f}"
+                    print(f"   ✅ Loaded: {trade.trade_type} {trade.amount} @ ${trade.entry_price:.2f} | Current: ${mark_price:.2f} | P&L: {pnl_status}")
                 
                 return positions
             
@@ -465,37 +507,69 @@ class PositionsMonitor(QDialog):
                             error_count += 1
                             continue
                         
-                        # Get current price for P&L calculation
+                        # Get current price for P&L calculation with retry
                         current_price = None
-                        try:
-                            if self.config.exchange == 'Binance':
-                                import ccxt
-                                exchange = ccxt.binance({
-                                    'enableRateLimit': True,
-                                    'options': {'defaultType': 'future'}
-                                })
-                                ticker = exchange.fetch_ticker(self.config.symbol)
-                                current_price = ticker.get('last')
-                            elif self.config.exchange == 'MT5':
-                                import MetaTrader5 as mt5
-                                if mt5.initialize():
-                                    try:
-                                        tick = mt5.symbol_info_tick(self.config.symbol)
-                                        if tick:
-                                            current_price = tick.last if tick.last > 0 else (tick.bid + tick.ask) / 2
-                                    finally:
-                                        mt5.shutdown()
-                        except:
-                            current_price = matching_trade.entry_price  # Fallback to entry price
-                        
+                        max_retries = 2
+
+                        for attempt in range(max_retries):
+                            try:
+                                if self.config.exchange == 'Binance':
+                                    import ccxt
+                                    exchange = ccxt.binance({
+                                        'enableRateLimit': True,
+                                        'options': {'defaultType': 'future'}
+                                    })
+                                    ticker = exchange.fetch_ticker(self.config.symbol)
+                                    current_price = ticker.get('last') or ticker.get('bid')
+                                    if current_price and current_price > 0:
+                                        break
+                                elif self.config.exchange == 'MT5':
+                                    import MetaTrader5 as mt5
+                                    if mt5.initialize():
+                                        try:
+                                            tick = mt5.symbol_info_tick(self.config.symbol)
+                                            if tick:
+                                                # Try last price first
+                                                if tick.last and tick.last > 0:
+                                                    current_price = tick.last
+                                                # Fallback to bid/ask average
+                                                elif tick.bid > 0 and tick.ask > 0:
+                                                    current_price = (tick.bid + tick.ask) / 2
+
+                                                if current_price and current_price > 0:
+                                                    break
+                                        finally:
+                                            mt5.shutdown()
+
+                                if attempt < max_retries - 1 and (not current_price or current_price <= 0):
+                                    import time
+                                    time.sleep(1)
+                            except Exception as e:
+                                print(f"   ⚠️  Error getting price (attempt {attempt+1}/{max_retries}): {e}")
+                                if attempt < max_retries - 1:
+                                    import time
+                                    time.sleep(1)
+
+                        # Fallback to entry price if all retries failed
                         if not current_price or current_price <= 0:
+                            print(f"   ⚠️  Failed to get current price, using entry price for close")
                             current_price = matching_trade.entry_price
-                        
-                        # Calculate profit
+
+                        # Check if XAUUSD for correct P&L calculation
+                        is_xauusd = 'XAUUSD' in self.config.symbol.upper() or 'XAU' in self.config.symbol.upper()
+
+                        # Calculate profit based on asset type
                         if matching_trade.trade_type.upper() == 'BUY':
-                            profit = (current_price - matching_trade.entry_price) * matching_trade.amount
+                            price_diff = current_price - matching_trade.entry_price
                         else:
-                            profit = (matching_trade.entry_price - current_price) * matching_trade.amount
+                            price_diff = matching_trade.entry_price - current_price
+
+                        if is_xauusd:
+                            # XAUUSD: 1 lot = 100 oz, 1 point = $1 per lot
+                            profit = price_diff * matching_trade.amount
+                        else:
+                            # Crypto: P&L = price_diff * amount
+                            profit = price_diff * matching_trade.amount
                         
                         profit_percent = (profit / (matching_trade.entry_price * matching_trade.amount)) * 100 if matching_trade.entry_price > 0 else 0
                         
