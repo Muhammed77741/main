@@ -8,19 +8,21 @@ The issues you reported about incorrect TP levels in the Signal Analysis GUI CSV
 
 1. **CSV Export Issue:** The CSV showed wrong TP values from the original strategy instead of actual multi-TP levels
 2. **Custom Values Issue:** Custom TP spin boxes (initialized with crypto defaults) were being used for XAUUSD, causing incorrect point values
+3. **Auto-Show Bug:** The custom section automatically appeared when enabling multi-TP, causing crypto defaults (150, 275, etc.) to be used
 
 Examples:
 - **Entry Price:** 3397.2 (XAUUSD)
 - **Regime:** RANGE
 - **Expected TP1:** 3417.2 (entry + 20 points)
 - **CSV showed:** 3440.71 ❌ (wrong - original strategy TP)
-- **If custom section was shown:** Would use 150 points instead of 20 ❌
+- **Bug:** Custom section auto-showed with 150 points instead of 20 ❌
 
 ### What's Fixed
 
 1. **CSV Export:** New columns with actual TP levels used
-2. **Custom Values:** Only use custom TP/SL when user explicitly opens the custom section
-3. **Default Behavior:** Uses correct regime-based defaults for each symbol
+2. **Custom Values:** Only use custom TP/SL when user explicitly checks the custom section
+3. **Auto-Show Bug:** Custom section no longer automatically appears when multi-TP is enabled
+4. **Default Behavior:** Uses correct regime-based defaults for each symbol
 
 | Column Name | Description | Example (XAUUSD RANGE, Entry 3397.2) |
 |------------|-------------|--------------------------------------|
@@ -32,8 +34,11 @@ Examples:
 ### How to Use
 
 1. **Run Signal Analysis** with multi-TP mode enabled
-2. **Default (Recommended):** Just enable "Use Multiple TP Levels" - uses correct defaults
-3. **Custom (Optional):** Expand "Custom TP Levels" section only if you want to override defaults
+2. **Default (Recommended):** Just enable "Use Multiple TP Levels" checkbox
+   - Custom section stays unchecked (collapsed)
+   - Uses correct defaults automatically
+3. **Custom (Optional):** Check "Custom TP Levels" checkbox to override defaults
+   - Only do this if you want different TP values
 4. **Export CSV** - the new columns will be included automatically
 5. **Use the correct columns:**
    - ❌ Don't use: `take_profit` (this is the original strategy TP, not relevant in multi-TP mode)
