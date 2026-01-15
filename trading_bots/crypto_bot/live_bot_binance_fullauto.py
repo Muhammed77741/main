@@ -200,6 +200,7 @@ class LiveBotBinanceFullAuto:
                 trade = TradeRecord(
                     trade_id=0,  # Will be auto-assigned by database
                     bot_id=self.bot_id,
+                    symbol=self.symbol,  # Add symbol field
                     order_id=str(order_id),
                     open_time=open_time,
                     trade_type=position_type,
@@ -255,6 +256,7 @@ class LiveBotBinanceFullAuto:
                 trade = TradeRecord(
                     trade_id=0,  # Not used for update
                     bot_id=self.bot_id,
+                    symbol=self.symbol,  # Add symbol field
                     order_id=str(order_id),
                     open_time=pos['open_time'],
                     close_time=close_time,
@@ -836,6 +838,7 @@ class LiveBotBinanceFullAuto:
                             temp_trade = TradeRecord(
                                 trade_id=0,
                                 bot_id=self.bot_id,
+                                symbol=self.symbol,  # Add symbol field
                                 order_id=str(order_id),
                                 open_time=tracked_pos['open_time'],
                                 trade_type=tracked_pos['type'],

@@ -267,6 +267,7 @@ class BotThread(QThread):
             trade = TradeRecord(
                 trade_id=0,  # Will be assigned by database
                 bot_id=self.config.bot_id,
+                symbol=self.config.symbol,  # Add symbol field
                 order_id=f"DRY-{now.strftime('%Y%m%d%H%M%S')}",
                 open_time=now,
                 trade_type=trade_type,
