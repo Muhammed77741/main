@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
         # Timer for status updates
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.update_status_display)
-        self.status_timer.start(5000)  # Update every 5 seconds
+        self.status_timer.start(60000)  # Update every 60 seconds (1 minute)
 
         # Select first bot
         if self.bot_manager.get_all_bot_ids():
@@ -961,7 +961,7 @@ class MainWindow(QMainWindow):
                 # Reset closing flag and restart timer if user cancels
                 self.is_closing = False
                 if hasattr(self, 'status_timer'):
-                    self.status_timer.start(5000)
+                    self.status_timer.start(60000)
                 return
 
             # Stop all bots
