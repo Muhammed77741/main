@@ -313,13 +313,19 @@ class SignalAnalysisWorker(QThread):
                         else:  # SELL
                             stop_loss = entry_price * (1 + sl_value / 100)
                 else:
-                    # Use original SL (or apply multiplier if set)
-                    if signal_type == 1:  # BUY
-                        risk = entry_price - original_stop_loss
-                        stop_loss = entry_price - (risk * self.sl_multiplier)
-                    else:  # SELL
-                        risk = original_stop_loss - entry_price
-                        stop_loss = entry_price + (risk * self.sl_multiplier)
+                    # Use default SL levels (same as live bot)
+                    if is_xauusd:
+                        sl_value = XAUUSD_TREND_SL if regime == 'TREND' else XAUUSD_RANGE_SL
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price - sl_value
+                        else:  # SELL
+                            stop_loss = entry_price + sl_value
+                    else:
+                        sl_pct = CRYPTO_TREND_SL if regime == 'TREND' else CRYPTO_RANGE_SL
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price * (1 - sl_pct / 100)
+                        else:  # SELL
+                            stop_loss = entry_price * (1 + sl_pct / 100)
             else:
                 # Single TP mode: use custom multipliers
                 if signal_type == 1:  # BUY
@@ -939,13 +945,19 @@ class SignalAnalysisWorkerMT5(QThread):
                         else:  # SELL
                             stop_loss = entry_price * (1 + sl_value / 100)
                 else:
-                    # Use original SL (or apply multiplier if set)
-                    if signal_type == 1:  # BUY
-                        risk = entry_price - original_stop_loss
-                        stop_loss = entry_price - (risk * self.sl_multiplier)
-                    else:  # SELL
-                        risk = original_stop_loss - entry_price
-                        stop_loss = entry_price + (risk * self.sl_multiplier)
+                    # Use default SL levels (same as live bot)
+                    if is_xauusd:
+                        sl_value = XAUUSD_TREND_SL if regime == 'TREND' else XAUUSD_RANGE_SL
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price - sl_value
+                        else:  # SELL
+                            stop_loss = entry_price + sl_value
+                    else:
+                        sl_pct = CRYPTO_TREND_SL if regime == 'TREND' else CRYPTO_RANGE_SL
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price * (1 - sl_pct / 100)
+                        else:  # SELL
+                            stop_loss = entry_price * (1 + sl_pct / 100)
             else:
                 # Single TP mode: use custom multipliers
                 if signal_type == 1:  # BUY
