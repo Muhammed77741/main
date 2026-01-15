@@ -1886,19 +1886,25 @@ class SignalAnalysisDialog(QDialog):
         trailing_pct = self.trailing_pct_spin.value()
         use_multi_tp = self.use_multi_tp_check.isChecked()
         
-        # Get custom TP levels if multi-TP is enabled
+        # Get custom TP levels if multi-TP is enabled AND custom group is visible
+        # Only use custom values if user explicitly opened the customization section
         custom_tp_levels = None
-        if use_multi_tp:
+        custom_sl_levels = None
+        if use_multi_tp and self.multi_tp_custom_group.isVisible():
             # Determine if crypto or XAUUSD
             is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
             
-            # Get values from spin boxes
+            # Get TP values from spin boxes
             trend_tp1 = self.trend_tp1_spin.value()
             trend_tp2 = self.trend_tp2_spin.value()
             trend_tp3 = self.trend_tp3_spin.value()
             range_tp1 = self.range_tp1_spin.value()
             range_tp2 = self.range_tp2_spin.value()
             range_tp3 = self.range_tp3_spin.value()
+            
+            # Get SL values from spin boxes
+            trend_sl = self.trend_sl_spin.value()
+            range_sl = self.range_sl_spin.value()
             
             # Convert values based on symbol type
             if is_xauusd:
@@ -1907,32 +1913,16 @@ class SignalAnalysisDialog(QDialog):
                     'trend': {'tp1': trend_tp1, 'tp2': trend_tp2, 'tp3': trend_tp3},
                     'range': {'tp1': range_tp1, 'tp2': range_tp2, 'tp3': range_tp3}
                 }
-            else:
-                # For crypto, convert from basis points to percentage
-                custom_tp_levels = {
-                    'trend': {'tp1': trend_tp1 / 100.0, 'tp2': trend_tp2 / 100.0, 'tp3': trend_tp3 / 100.0},
-                    'range': {'tp1': range_tp1 / 100.0, 'tp2': range_tp2 / 100.0, 'tp3': range_tp3 / 100.0}
-                }
-        
-        # Get custom SL levels if multi-TP is enabled
-        custom_sl_levels = None
-        if use_multi_tp:
-            # Determine if crypto or XAUUSD
-            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
-            
-            # Get values from spin boxes
-            trend_sl = self.trend_sl_spin.value()
-            range_sl = self.range_sl_spin.value()
-            
-            # Convert values based on symbol type
-            if is_xauusd:
-                # For XAUUSD, values are already in points
                 custom_sl_levels = {
                     'trend': trend_sl,
                     'range': range_sl
                 }
             else:
                 # For crypto, convert from basis points to percentage
+                custom_tp_levels = {
+                    'trend': {'tp1': trend_tp1 / 100.0, 'tp2': trend_tp2 / 100.0, 'tp3': trend_tp3 / 100.0},
+                    'range': {'tp1': range_tp1 / 100.0, 'tp2': range_tp2 / 100.0, 'tp3': range_tp3 / 100.0}
+                }
                 custom_sl_levels = {
                     'trend': trend_sl / 100.0,
                     'range': range_sl / 100.0
