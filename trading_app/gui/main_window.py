@@ -707,13 +707,34 @@ class MainWindow(QMainWindow):
 
         # Confirm if not in dry run mode
         if not config.dry_run:
-            reply = QMessageBox.question(
-                self,
-                'Confirm Start',
-                f'Start {config.name} in LIVE TRADING mode?\n\nThis will trade with real money!',
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Question)
+            msg.setWindowTitle('Confirm Start')
+            msg.setText(f'⚠️  Start {config.name} in LIVE TRADING mode?\n\nThis will trade with real money!')
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            msg.setDefaultButton(QMessageBox.No)
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #696969;
+                }
+            """)
+            reply = msg.exec()
 
             if reply != QMessageBox.Yes:
                 return
@@ -723,7 +744,32 @@ class MainWindow(QMainWindow):
         if success:
             self.log(f"Starting {config.name}...")
         else:
-            QMessageBox.warning(self, 'Error', 'Failed to start bot. Check logs for details.')
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle('Error')
+            msg.setText('❌ Failed to start bot. Check logs for details.')
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #696969;
+                }
+            """)
+            msg.exec()
 
     def stop_bot(self):
         """Stop current bot"""
@@ -732,13 +778,34 @@ class MainWindow(QMainWindow):
 
         config = self.bot_manager.get_config(self.current_bot_id)
 
-        reply = QMessageBox.question(
-            self,
-            'Confirm Stop',
-            f'Stop {config.name}?',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle('Confirm Stop')
+        msg.setText(f'⏹️  Stop {config.name}?')
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: white;
+            }
+            QMessageBox QLabel {
+                color: #333;
+                font-size: 13px;
+            }
+            QPushButton {
+                background-color: #808080;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                min-width: 80px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #696969;
+            }
+        """)
+        reply = msg.exec()
 
         if reply != QMessageBox.Yes:
             return
@@ -771,14 +838,64 @@ class MainWindow(QMainWindow):
         config = self.bot_manager.get_config(self.current_bot_id)
         
         if not config:
-            QMessageBox.warning(self, 'Error', 'Bot configuration not found.')
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle('Error')
+            msg.setText('❌ Bot configuration not found.')
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #696969;
+                }
+            """)
+            msg.exec()
             return
 
         try:
             dialog = PositionsMonitor(config, self.db, self)
             dialog.exec()
         except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed to open positions monitor:\n{str(e)}')
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Critical)
+            msg.setWindowTitle('Error')
+            msg.setText(f'❌ Failed to open positions monitor:\n{str(e)}')
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #696969;
+                }
+            """)
+            msg.exec()
 
     def show_statistics(self):
         """Show statistics dialog"""
@@ -827,11 +944,32 @@ class MainWindow(QMainWindow):
         )
         
         if not is_supported:
-            QMessageBox.information(
-                self,
-                "Not Available",
-                "Signal Analysis is currently available for BTC, ETH, and XAUUSD bots only."
-            )
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowTitle("Not Available")
+            msg.setText("ℹ️  Signal Analysis is currently available for BTC, ETH, and XAUUSD bots only.")
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #696969;
+                }
+            """)
+            msg.exec()
             return
 
         dialog = SignalAnalysisDialog(config, self)
@@ -906,7 +1044,32 @@ class MainWindow(QMainWindow):
             return
         try:
             self.log(f"ERROR: {error}")
-            QMessageBox.critical(self, 'Bot Error', f"Bot {bot_id} error:\n{error}")
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Critical)
+            msg.setWindowTitle('Bot Error')
+            msg.setText(f'❌ Bot {bot_id} error:\n{error}')
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #696969;
+                }
+            """)
+            msg.exec()
         except:
             pass
 
@@ -938,13 +1101,34 @@ class MainWindow(QMainWindow):
                         if self.bot_manager.is_bot_running(bid)]
 
         if running_bots:
-            reply = QMessageBox.question(
-                self,
-                'Confirm Exit',
-                f'{len(running_bots)} bot(s) are still running.\n\nStop all bots and exit?',
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Question)
+            msg.setWindowTitle('Confirm Exit')
+            msg.setText(f'⚠️  {len(running_bots)} bot(s) are still running.\n\nStop all bots and exit?')
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            msg.setDefaultButton(QMessageBox.No)
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #696969;
+                }
+            """)
+            reply = msg.exec()
 
             if reply != QMessageBox.Yes:
                 event.ignore()

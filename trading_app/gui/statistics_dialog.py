@@ -513,8 +513,58 @@ class StatisticsDialog(QDialog):
                     ])
 
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.information(self, 'Export Complete', f'Trades exported to:\n{filename}')
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowTitle('Export Complete')
+            msg.setText(f'✅ Trades exported to:\n{filename}')
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #696969;
+                }
+            """)
+            msg.exec()
 
         except Exception as e:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, 'Export Error', f'Failed to export:\n{str(e)}')
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Critical)
+            msg.setWindowTitle('Export Error')
+            msg.setText(f'❌ Failed to export:\n{str(e)}')
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: white;
+                }
+                QMessageBox QLabel {
+                    color: #333;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    min-width: 80px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #696969;
+                }
+            """)
+            msg.exec()
