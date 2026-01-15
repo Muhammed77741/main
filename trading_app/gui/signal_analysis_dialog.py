@@ -26,12 +26,29 @@ except ImportError as e:
     DEPENDENCIES_AVAILABLE = False
     IMPORT_ERROR = str(e)
 
-# Multi-TP Configuration Constants
-MULTI_TP_LEVELS = {
-    'TP1': {'ratio': 1.0, 'close_pct': 0.5, 'name': 'TP1'},      # 1R, close 50%
-    'TP2': {'ratio': 1.618, 'close_pct': 0.3, 'name': 'TP2'},    # 1.618R, close 30%
-    'TP3': {'ratio': 2.618, 'close_pct': 0.2, 'name': 'TP3'}     # 2.618R, close 20%
-}
+# Live Bot TP Configuration - Matches live bot settings
+# For Crypto (BTC/ETH) - in percentage of price
+CRYPTO_TREND_TP = {'tp1': 1.5, 'tp2': 2.75, 'tp3': 4.5}      # TREND mode
+CRYPTO_RANGE_TP = {'tp1': 1.0, 'tp2': 1.75, 'tp3': 2.5}      # RANGE mode
+
+# For XAUUSD (Gold) - in points
+XAUUSD_TREND_TP = {'tp1': 30, 'tp2': 55, 'tp3': 90}          # TREND mode
+XAUUSD_RANGE_TP = {'tp1': 20, 'tp2': 35, 'tp3': 50}          # RANGE mode
+
+# Live Bot SL Configuration - Matches live bot settings
+# For Crypto (BTC/ETH) - in percentage of price
+CRYPTO_TREND_SL = 0.8     # TREND mode: 0.8% stop loss
+CRYPTO_RANGE_SL = 0.6     # RANGE mode: 0.6% stop loss
+
+# For XAUUSD (Gold) - in points
+XAUUSD_TREND_SL = 16      # TREND mode: 16 points stop loss
+XAUUSD_RANGE_SL = 12      # RANGE mode: 12 points stop loss
+
+# Regime Detection Constants
+REGIME_LOOKBACK = 100                    # Bars to analyze for regime detection
+REGIME_STRUCTURAL_WINDOW = 20            # Window for structural trend analysis
+REGIME_STRUCTURAL_THRESHOLD = 12         # Threshold for higher highs/lower lows
+REGIME_TREND_SIGNALS_REQUIRED = 3        # Signals needed to classify as TREND
 
 
 class SignalAnalysisWorker(QThread):
@@ -42,7 +59,8 @@ class SignalAnalysisWorker(QThread):
     error = Signal(str)  # Error message
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
-                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False):
+                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
+                 custom_tp_levels=None, custom_sl_levels=None):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -54,6 +72,8 @@ class SignalAnalysisWorker(QThread):
         self.trailing_pct = trailing_pct / 100.0  # Convert to decimal (50 -> 0.5)
         self.timeframe = timeframe
         self.use_multi_tp = use_multi_tp
+        self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
+        self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
         
     def run(self):
         """Run signal analysis in background"""
@@ -129,11 +149,73 @@ class SignalAnalysisWorker(QThread):
         except Exception as e:
             self.error.emit(f"Error: {str(e)}")
     
+    def _detect_market_regime(self, full_df, signal_idx, lookback=REGIME_LOOKBACK):
+        """
+        Detect market regime at signal time: TREND or RANGE
+        Uses same logic as live bot
+        """
+        # Get data up to and including signal candle
+        signal_pos = full_df.index.get_loc(signal_idx)
+        start_pos = max(0, signal_pos - lookback + 1)
+        recent_data = full_df.iloc[start_pos:signal_pos + 1]
+        
+        if len(recent_data) < REGIME_LOOKBACK:
+            return 'RANGE'
+        
+        # 1. EMA CROSSOVER
+        closes = recent_data['close']
+        ema_fast = closes.ewm(span=20, adjust=False).mean()
+        ema_slow = closes.ewm(span=50, adjust=False).mean()
+        
+        current_fast = ema_fast.iloc[-1]
+        current_slow = ema_slow.iloc[-1]
+        
+        ema_diff_pct = abs((current_fast - current_slow) / current_slow) * 100
+        ema_trend = ema_diff_pct > 0.5
+        
+        # 2. ATR (volatility)
+        high_low = recent_data['high'] - recent_data['low']
+        atr = high_low.rolling(window=14).mean().iloc[-1]
+        avg_atr = high_low.rolling(window=14).mean().mean()
+        
+        high_volatility = atr > avg_atr * 1.05
+        
+        # 3. Directional movement
+        price_change = recent_data['close'].iloc[-1] - recent_data['close'].iloc[0]
+        price_range = recent_data['high'].max() - recent_data['low'].min()
+        
+        directional_move_pct = abs(price_change) / price_range if price_range > 0 else 0
+        strong_direction = directional_move_pct > 0.35
+        
+        # 4. Consecutive movements
+        closes_arr = recent_data['close'].values
+        up_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] > closes_arr[i-1])
+        down_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] < closes_arr[i-1])
+        total_moves = up_moves + down_moves
+        
+        trend_strength = abs(up_moves - down_moves) / total_moves if total_moves > 0 else 0
+        directional_bias = trend_strength > 0.15
+        
+        # 5. Structural trend
+        highs = recent_data['high'].values[-REGIME_STRUCTURAL_WINDOW:]
+        lows = recent_data['low'].values[-REGIME_STRUCTURAL_WINDOW:]
+        
+        higher_highs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
+        lower_lows = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
+        
+        structural_trend = (higher_highs > REGIME_STRUCTURAL_THRESHOLD) or (lower_lows > REGIME_STRUCTURAL_THRESHOLD)
+        
+        # Count trend signals
+        trend_signals = sum([ema_trend, high_volatility, strong_direction, directional_bias, structural_trend])
+        
+        # Need 3+ signals for TREND
+        return 'TREND' if trend_signals >= REGIME_TREND_SIGNALS_REQUIRED else 'RANGE'
+
     def _calculate_signal_outcomes(self, signals_df, full_df):
         """
         Calculate trade outcome for each signal
         Check if price hit TP or SL in the following candles
-        Applies custom TP/SL multipliers and trailing stop if configured
+        Uses same TP/SL calculation logic as live bot (TREND/RANGE regime-based)
         Supports both single-TP and multi-TP modes
         """
         # Add outcome columns
@@ -144,6 +226,9 @@ class SignalAnalysisWorker(QThread):
         # Add multi-TP column if enabled
         if self.use_multi_tp:
             signals_df['tp_levels_hit'] = 'None'
+        
+        # Add regime column to store market regime detection
+        signals_df['regime'] = 'N/A'
         
         for idx, signal_row in signals_df.iterrows():
             signal_type = signal_row['signal']
@@ -156,15 +241,90 @@ class SignalAnalysisWorker(QThread):
                 signals_df.loc[idx, 'outcome'] = 'No SL/TP'
                 continue
             
-            # Apply custom multipliers
-            if signal_type == 1:  # BUY
-                risk = entry_price - original_stop_loss
-                stop_loss = entry_price - (risk * self.sl_multiplier)
-                take_profit = entry_price + (risk * self.tp_multiplier)
-            else:  # SELL
-                risk = original_stop_loss - entry_price
-                stop_loss = entry_price + (risk * self.sl_multiplier)
-                take_profit = entry_price - (risk * self.tp_multiplier)
+            # Detect market regime at signal time (like live bot)
+            regime = self._detect_market_regime(full_df, idx)
+            
+            # Store regime in dataframe for display
+            signals_df.loc[idx, 'regime'] = regime
+            
+            # Calculate TP levels using live bot's logic
+            if self.use_multi_tp:
+                # Use live bot's regime-based TP levels (or custom overrides)
+                is_xauusd = 'XAUUSD' in self.symbol.upper() or 'XAU' in self.symbol.upper()
+                
+                # Get TP configuration (custom or default)
+                if self.custom_tp_levels:
+                    # Use custom TP levels from GUI
+                    if regime == 'TREND':
+                        tp_config = self.custom_tp_levels['trend']
+                    else:
+                        tp_config = self.custom_tp_levels['range']
+                else:
+                    # Use default TP levels
+                    if is_xauusd:
+                        tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
+                    else:
+                        tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
+                
+                if is_xauusd:
+                    # XAUUSD uses points
+                    if signal_type == 1:  # BUY
+                        tp1 = entry_price + tp_config['tp1']
+                        tp2 = entry_price + tp_config['tp2']
+                        tp3 = entry_price + tp_config['tp3']
+                    else:  # SELL
+                        tp1 = entry_price - tp_config['tp1']
+                        tp2 = entry_price - tp_config['tp2']
+                        tp3 = entry_price - tp_config['tp3']
+                else:
+                    # Crypto uses percentage
+                    if signal_type == 1:  # BUY
+                        tp1 = entry_price * (1 + tp_config['tp1'] / 100)
+                        tp2 = entry_price * (1 + tp_config['tp2'] / 100)
+                        tp3 = entry_price * (1 + tp_config['tp3'] / 100)
+                    else:  # SELL
+                        tp1 = entry_price * (1 - tp_config['tp1'] / 100)
+                        tp2 = entry_price * (1 - tp_config['tp2'] / 100)
+                        tp3 = entry_price * (1 - tp_config['tp3'] / 100)
+                
+                # Calculate SL using custom values or defaults
+                if self.custom_sl_levels:
+                    # Use custom SL levels from GUI
+                    if regime == 'TREND':
+                        sl_value = self.custom_sl_levels['trend']
+                    else:
+                        sl_value = self.custom_sl_levels['range']
+                    
+                    if is_xauusd:
+                        # XAUUSD uses points
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price - sl_value
+                        else:  # SELL
+                            stop_loss = entry_price + sl_value
+                    else:
+                        # Crypto uses percentage
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price * (1 - sl_value / 100)
+                        else:  # SELL
+                            stop_loss = entry_price * (1 + sl_value / 100)
+                else:
+                    # Use original SL (or apply multiplier if set)
+                    if signal_type == 1:  # BUY
+                        risk = entry_price - original_stop_loss
+                        stop_loss = entry_price - (risk * self.sl_multiplier)
+                    else:  # SELL
+                        risk = original_stop_loss - entry_price
+                        stop_loss = entry_price + (risk * self.sl_multiplier)
+            else:
+                # Single TP mode: use custom multipliers
+                if signal_type == 1:  # BUY
+                    risk = entry_price - original_stop_loss
+                    stop_loss = entry_price - (risk * self.sl_multiplier)
+                    take_profit = entry_price + (risk * self.tp_multiplier)
+                else:  # SELL
+                    risk = original_stop_loss - entry_price
+                    stop_loss = entry_price + (risk * self.sl_multiplier)
+                    take_profit = entry_price - (risk * self.tp_multiplier)
             
             # Get future candles after this signal
             future_candles = full_df[full_df.index > idx]
@@ -175,8 +335,8 @@ class SignalAnalysisWorker(QThread):
             
             # Route to appropriate calculation method
             if self.use_multi_tp:
-                result = self._calculate_multi_tp_outcome(
-                    signal_type, entry_price, stop_loss, risk, future_candles
+                result = self._calculate_multi_tp_outcome_live_style(
+                    signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles
                 )
                 signals_df.loc[idx, 'outcome'] = result['outcome']
                 signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
@@ -190,6 +350,124 @@ class SignalAnalysisWorker(QThread):
                 signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
                 signals_df.loc[idx, 'bars_held'] = result['bars']
     
+    def _calculate_multi_tp_outcome_live_style(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles):
+        """
+        Calculate outcome with multiple TP levels using live bot's specific TP prices
+        TP1: close 50%, TP2: close 30%, TP3: close 20%
+        SL moves to breakeven after TP1
+        """
+        # Track position and outcomes
+        remaining_position = 1.0
+        total_pnl_pct = 0.0
+        tps_hit = []
+        outcome = 'Timeout'
+        bars = 0
+        
+        # Track which TPs have been hit
+        tp1_hit = False
+        tp2_hit = False
+        tp3_hit = False
+        
+        # Check each candle
+        for future_idx, future_candle in future_candles.iterrows():
+            bars += 1
+            
+            if signal_type == 1:  # BUY signal
+                # Check SL first
+                if future_candle['low'] <= stop_loss:
+                    # Hit stop loss
+                    pnl = ((stop_loss - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * remaining_position
+                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                    break
+                
+                # Check TP levels in order
+                if not tp1_hit and future_candle['high'] >= tp1:
+                    # TP1 hit - close 50%
+                    pnl = ((tp1 - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.5
+                    remaining_position -= 0.5
+                    tps_hit.append('TP1')
+                    tp1_hit = True
+                    # Move SL to breakeven
+                    stop_loss = entry_price
+                
+                if tp1_hit and not tp2_hit and future_candle['high'] >= tp2:
+                    # TP2 hit - close 30%
+                    pnl = ((tp2 - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.3
+                    remaining_position -= 0.3
+                    tps_hit.append('TP2')
+                    tp2_hit = True
+                
+                if tp2_hit and not tp3_hit and future_candle['high'] >= tp3:
+                    # TP3 hit - close 20%
+                    pnl = ((tp3 - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.2
+                    remaining_position -= 0.2
+                    tps_hit.append('TP3')
+                    tp3_hit = True
+                    outcome = 'Win ✅'
+                    break
+            
+            else:  # SELL signal
+                # Check SL first
+                if future_candle['high'] >= stop_loss:
+                    # Hit stop loss
+                    pnl = ((entry_price - stop_loss) / entry_price) * 100
+                    total_pnl_pct += pnl * remaining_position
+                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                    break
+                
+                # Check TP levels in order
+                if not tp1_hit and future_candle['low'] <= tp1:
+                    # TP1 hit - close 50%
+                    pnl = ((entry_price - tp1) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.5
+                    remaining_position -= 0.5
+                    tps_hit.append('TP1')
+                    tp1_hit = True
+                    # Move SL to breakeven
+                    stop_loss = entry_price
+                
+                if tp1_hit and not tp2_hit and future_candle['low'] <= tp2:
+                    # TP2 hit - close 30%
+                    pnl = ((entry_price - tp2) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.3
+                    remaining_position -= 0.3
+                    tps_hit.append('TP2')
+                    tp2_hit = True
+                
+                if tp2_hit and not tp3_hit and future_candle['low'] <= tp3:
+                    # TP3 hit - close 20%
+                    pnl = ((entry_price - tp3) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.2
+                    remaining_position -= 0.2
+                    tps_hit.append('TP3')
+                    tp3_hit = True
+                    outcome = 'Win ✅'
+                    break
+            
+            # Limit check to 100 bars
+            if bars >= 100:
+                outcome = 'Timeout'
+                # Calculate current P&L for remaining position at timeout
+                current_price = future_candle['close']
+                if signal_type == 1:
+                    pnl = ((current_price - entry_price) / entry_price) * 100
+                else:
+                    pnl = ((entry_price - current_price) / entry_price) * 100
+                total_pnl_pct += pnl * remaining_position
+                break
+        
+        return {
+            'outcome': outcome,
+            'profit_pct': total_pnl_pct,
+            'bars': bars,
+            'tp_levels_hit': '+'.join(tps_hit) if tps_hit else 'None'
+        }
+    
+
     def _calculate_multi_tp_outcome(self, signal_type, entry_price, stop_loss, risk, future_candles):
         """
         Calculate outcome with multiple TP levels and partial closes
@@ -422,7 +700,8 @@ class SignalAnalysisWorkerMT5(QThread):
     error = Signal(str)  # Error message
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
-                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False):
+                 tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
+                 custom_tp_levels=None, custom_sl_levels=None):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -434,6 +713,8 @@ class SignalAnalysisWorkerMT5(QThread):
         self.trailing_pct = trailing_pct / 100.0  # Convert to decimal (50 -> 0.5)
         self.timeframe = timeframe
         self.use_multi_tp = use_multi_tp
+        self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
+        self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
         
     def run(self):
         """Run signal analysis in background using MT5"""
@@ -549,8 +830,8 @@ class SignalAnalysisWorkerMT5(QThread):
     def _calculate_signal_outcomes(self, signals_df, full_df):
         """
         Calculate trade outcome for each signal
+        Uses same TP/SL calculation logic as live bot (TREND/RANGE regime-based)
         Supports both single-TP and multi-TP modes
-        (Same logic as SignalAnalysisWorker)
         """
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
@@ -560,6 +841,9 @@ class SignalAnalysisWorkerMT5(QThread):
         # Add multi-TP column if enabled
         if self.use_multi_tp:
             signals_df['tp_levels_hit'] = 'None'
+        
+        # Add regime column to store market regime detection
+        signals_df['regime'] = 'N/A'
         
         for idx, signal_row in signals_df.iterrows():
             signal_type = signal_row['signal']
@@ -572,15 +856,90 @@ class SignalAnalysisWorkerMT5(QThread):
                 signals_df.loc[idx, 'outcome'] = 'No SL/TP'
                 continue
             
-            # Apply custom multipliers
-            if signal_type == 1:  # BUY
-                risk = entry_price - original_stop_loss
-                stop_loss = entry_price - (risk * self.sl_multiplier)
-                take_profit = entry_price + (risk * self.tp_multiplier)
-            else:  # SELL
-                risk = original_stop_loss - entry_price
-                stop_loss = entry_price + (risk * self.sl_multiplier)
-                take_profit = entry_price - (risk * self.tp_multiplier)
+            # Detect market regime at signal time (like live bot)
+            regime = self._detect_market_regime(full_df, idx)
+            
+            # Store regime in dataframe for display
+            signals_df.loc[idx, 'regime'] = regime
+            
+            # Calculate TP levels using live bot's logic
+            if self.use_multi_tp:
+                # Use live bot's regime-based TP levels (or custom overrides)
+                is_xauusd = 'XAUUSD' in self.symbol.upper() or 'XAU' in self.symbol.upper()
+                
+                # Get TP configuration (custom or default)
+                if self.custom_tp_levels:
+                    # Use custom TP levels from GUI
+                    if regime == 'TREND':
+                        tp_config = self.custom_tp_levels['trend']
+                    else:
+                        tp_config = self.custom_tp_levels['range']
+                else:
+                    # Use default TP levels
+                    if is_xauusd:
+                        tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
+                    else:
+                        tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
+                
+                if is_xauusd:
+                    # XAUUSD uses points
+                    if signal_type == 1:  # BUY
+                        tp1 = entry_price + tp_config['tp1']
+                        tp2 = entry_price + tp_config['tp2']
+                        tp3 = entry_price + tp_config['tp3']
+                    else:  # SELL
+                        tp1 = entry_price - tp_config['tp1']
+                        tp2 = entry_price - tp_config['tp2']
+                        tp3 = entry_price - tp_config['tp3']
+                else:
+                    # Crypto uses percentage
+                    if signal_type == 1:  # BUY
+                        tp1 = entry_price * (1 + tp_config['tp1'] / 100)
+                        tp2 = entry_price * (1 + tp_config['tp2'] / 100)
+                        tp3 = entry_price * (1 + tp_config['tp3'] / 100)
+                    else:  # SELL
+                        tp1 = entry_price * (1 - tp_config['tp1'] / 100)
+                        tp2 = entry_price * (1 - tp_config['tp2'] / 100)
+                        tp3 = entry_price * (1 - tp_config['tp3'] / 100)
+                
+                # Calculate SL using custom values or defaults
+                if self.custom_sl_levels:
+                    # Use custom SL levels from GUI
+                    if regime == 'TREND':
+                        sl_value = self.custom_sl_levels['trend']
+                    else:
+                        sl_value = self.custom_sl_levels['range']
+                    
+                    if is_xauusd:
+                        # XAUUSD uses points
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price - sl_value
+                        else:  # SELL
+                            stop_loss = entry_price + sl_value
+                    else:
+                        # Crypto uses percentage
+                        if signal_type == 1:  # BUY
+                            stop_loss = entry_price * (1 - sl_value / 100)
+                        else:  # SELL
+                            stop_loss = entry_price * (1 + sl_value / 100)
+                else:
+                    # Use original SL (or apply multiplier if set)
+                    if signal_type == 1:  # BUY
+                        risk = entry_price - original_stop_loss
+                        stop_loss = entry_price - (risk * self.sl_multiplier)
+                    else:  # SELL
+                        risk = original_stop_loss - entry_price
+                        stop_loss = entry_price + (risk * self.sl_multiplier)
+            else:
+                # Single TP mode: use custom multipliers
+                if signal_type == 1:  # BUY
+                    risk = entry_price - original_stop_loss
+                    stop_loss = entry_price - (risk * self.sl_multiplier)
+                    take_profit = entry_price + (risk * self.tp_multiplier)
+                else:  # SELL
+                    risk = original_stop_loss - entry_price
+                    stop_loss = entry_price + (risk * self.sl_multiplier)
+                    take_profit = entry_price - (risk * self.tp_multiplier)
             
             # Get future candles after this signal
             future_candles = full_df[full_df.index > idx]
@@ -591,8 +950,8 @@ class SignalAnalysisWorkerMT5(QThread):
             
             # Route to appropriate calculation method
             if self.use_multi_tp:
-                result = self._calculate_multi_tp_outcome(
-                    signal_type, entry_price, stop_loss, risk, future_candles
+                result = self._calculate_multi_tp_outcome_live_style(
+                    signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles
                 )
                 signals_df.loc[idx, 'outcome'] = result['outcome']
                 signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
@@ -606,6 +965,186 @@ class SignalAnalysisWorkerMT5(QThread):
                 signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
                 signals_df.loc[idx, 'bars_held'] = result['bars']
     
+    def _detect_market_regime(self, full_df, signal_idx, lookback=REGIME_LOOKBACK):
+        """
+        Detect market regime at signal time: TREND or RANGE
+        Uses same logic as live bot
+        """
+        # Get data up to and including signal candle
+        signal_pos = full_df.index.get_loc(signal_idx)
+        start_pos = max(0, signal_pos - lookback + 1)
+        recent_data = full_df.iloc[start_pos:signal_pos + 1]
+        
+        if len(recent_data) < REGIME_LOOKBACK:
+            return 'RANGE'
+        
+        # 1. EMA CROSSOVER
+        closes = recent_data['close']
+        ema_fast = closes.ewm(span=20, adjust=False).mean()
+        ema_slow = closes.ewm(span=50, adjust=False).mean()
+        
+        current_fast = ema_fast.iloc[-1]
+        current_slow = ema_slow.iloc[-1]
+        
+        ema_diff_pct = abs((current_fast - current_slow) / current_slow) * 100
+        ema_trend = ema_diff_pct > 0.5
+        
+        # 2. ATR (volatility)
+        high_low = recent_data['high'] - recent_data['low']
+        atr = high_low.rolling(window=14).mean().iloc[-1]
+        avg_atr = high_low.rolling(window=14).mean().mean()
+        
+        high_volatility = atr > avg_atr * 1.05
+        
+        # 3. Directional movement
+        price_change = recent_data['close'].iloc[-1] - recent_data['close'].iloc[0]
+        price_range = recent_data['high'].max() - recent_data['low'].min()
+        
+        directional_move_pct = abs(price_change) / price_range if price_range > 0 else 0
+        strong_direction = directional_move_pct > 0.35
+        
+        # 4. Consecutive movements
+        closes_arr = recent_data['close'].values
+        up_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] > closes_arr[i-1])
+        down_moves = sum(1 for i in range(1, len(closes_arr)) if closes_arr[i] < closes_arr[i-1])
+        total_moves = up_moves + down_moves
+        
+        trend_strength = abs(up_moves - down_moves) / total_moves if total_moves > 0 else 0
+        directional_bias = trend_strength > 0.15
+        
+        # 5. Structural trend
+        highs = recent_data['high'].values[-REGIME_STRUCTURAL_WINDOW:]
+        lows = recent_data['low'].values[-REGIME_STRUCTURAL_WINDOW:]
+        
+        higher_highs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
+        lower_lows = sum(1 for i in range(1, len(lows)) if lows[i] < lows[i-1])
+        
+        structural_trend = (higher_highs > REGIME_STRUCTURAL_THRESHOLD) or (lower_lows > REGIME_STRUCTURAL_THRESHOLD)
+        
+        # Count trend signals
+        trend_signals = sum([ema_trend, high_volatility, strong_direction, directional_bias, structural_trend])
+        
+        # Need 3+ signals for TREND
+        return 'TREND' if trend_signals >= REGIME_TREND_SIGNALS_REQUIRED else 'RANGE'
+
+    def _calculate_multi_tp_outcome_live_style(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles):
+        """
+        Calculate outcome with multiple TP levels using live bot's specific TP prices
+        TP1: close 50%, TP2: close 30%, TP3: close 20%
+        SL moves to breakeven after TP1
+        """
+        # Track position and outcomes
+        remaining_position = 1.0
+        total_pnl_pct = 0.0
+        tps_hit = []
+        outcome = 'Timeout'
+        bars = 0
+        
+        # Track which TPs have been hit
+        tp1_hit = False
+        tp2_hit = False
+        tp3_hit = False
+        
+        # Check each candle
+        for future_idx, future_candle in future_candles.iterrows():
+            bars += 1
+            
+            if signal_type == 1:  # BUY signal
+                # Check SL first
+                if future_candle['low'] <= stop_loss:
+                    # Hit stop loss
+                    pnl = ((stop_loss - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * remaining_position
+                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                    break
+                
+                # Check TP levels in order
+                if not tp1_hit and future_candle['high'] >= tp1:
+                    # TP1 hit - close 50%
+                    pnl = ((tp1 - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.5
+                    remaining_position -= 0.5
+                    tps_hit.append('TP1')
+                    tp1_hit = True
+                    # Move SL to breakeven
+                    stop_loss = entry_price
+                
+                if tp1_hit and not tp2_hit and future_candle['high'] >= tp2:
+                    # TP2 hit - close 30%
+                    pnl = ((tp2 - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.3
+                    remaining_position -= 0.3
+                    tps_hit.append('TP2')
+                    tp2_hit = True
+                
+                if tp2_hit and not tp3_hit and future_candle['high'] >= tp3:
+                    # TP3 hit - close 20%
+                    pnl = ((tp3 - entry_price) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.2
+                    remaining_position -= 0.2
+                    tps_hit.append('TP3')
+                    tp3_hit = True
+                    outcome = 'Win ✅'
+                    break
+            
+            else:  # SELL signal
+                # Check SL first
+                if future_candle['high'] >= stop_loss:
+                    # Hit stop loss
+                    pnl = ((entry_price - stop_loss) / entry_price) * 100
+                    total_pnl_pct += pnl * remaining_position
+                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                    break
+                
+                # Check TP levels in order
+                if not tp1_hit and future_candle['low'] <= tp1:
+                    # TP1 hit - close 50%
+                    pnl = ((entry_price - tp1) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.5
+                    remaining_position -= 0.5
+                    tps_hit.append('TP1')
+                    tp1_hit = True
+                    # Move SL to breakeven
+                    stop_loss = entry_price
+                
+                if tp1_hit and not tp2_hit and future_candle['low'] <= tp2:
+                    # TP2 hit - close 30%
+                    pnl = ((entry_price - tp2) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.3
+                    remaining_position -= 0.3
+                    tps_hit.append('TP2')
+                    tp2_hit = True
+                
+                if tp2_hit and not tp3_hit and future_candle['low'] <= tp3:
+                    # TP3 hit - close 20%
+                    pnl = ((entry_price - tp3) / entry_price) * 100
+                    total_pnl_pct += pnl * 0.2
+                    remaining_position -= 0.2
+                    tps_hit.append('TP3')
+                    tp3_hit = True
+                    outcome = 'Win ✅'
+                    break
+            
+            # Limit check to 100 bars
+            if bars >= 100:
+                outcome = 'Timeout'
+                # Calculate current P&L for remaining position at timeout
+                current_price = future_candle['close']
+                if signal_type == 1:
+                    pnl = ((current_price - entry_price) / entry_price) * 100
+                else:
+                    pnl = ((entry_price - current_price) / entry_price) * 100
+                total_pnl_pct += pnl * remaining_position
+                break
+        
+        return {
+            'outcome': outcome,
+            'profit_pct': total_pnl_pct,
+            'bars': bars,
+            'tp_levels_hit': '+'.join(tps_hit) if tps_hit else 'None'
+        }
+
+
     def _calculate_multi_tp_outcome(self, signal_type, entry_price, stop_loss, risk, future_candles):
         """
         Calculate outcome with multiple TP levels and partial closes
@@ -861,7 +1400,8 @@ class SignalAnalysisDialog(QDialog):
         info_label = QLabel(
             "📊 <b>Signal Analysis (Backtest)</b><br>"
             "Analyze which trading signals would have been generated in a date range.<br>"
-            "This uses the same strategy as the live bot."
+            "This uses the same strategy and TP/SL levels as the live bot.<br>"
+            "<i>Multi-TP mode uses regime-based TP levels (TREND vs RANGE detection).</i>"
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -1080,20 +1620,136 @@ class SignalAnalysisDialog(QDialog):
         # Multi-TP mode
         row5 = QHBoxLayout()
         
-        self.use_multi_tp_check = QCheckBox("Use Multiple TP Levels")
+        self.use_multi_tp_check = QCheckBox("Use Multiple TP Levels (Live Bot Mode)")
         self.use_multi_tp_check.setChecked(False)
         self.use_multi_tp_check.setToolTip(
-            "Enable partial position closing at multiple TP levels:\n"
-            "TP1: Close 50%, TP2: Close 30%, TP3: Close 20%\n"
-            "SL moves to breakeven after TP1"
+            "Enable regime-based TP levels matching live bot:\n\n"
+            "Crypto (BTC/ETH):\n"
+            "  TREND: TP1=1.5%, TP2=2.75%, TP3=4.5%\n"
+            "  RANGE: TP1=1.0%, TP2=1.75%, TP3=2.5%\n\n"
+            "XAUUSD (Gold):\n"
+            "  TREND: TP1=30p, TP2=55p, TP3=90p\n"
+            "  RANGE: TP1=20p, TP2=35p, TP3=50p\n\n"
+            "Partial closes: TP1=50%, TP2=30%, TP3=20%\n"
+            "SL moves to breakeven after TP1\n"
+            "Market regime auto-detected (TREND/RANGE)"
         )
         row5.addWidget(self.use_multi_tp_check)
         
         row5.addStretch()
         layout.addLayout(row5)
         
+        # Multi-TP customization section (collapsible)
+        self.multi_tp_custom_group = QGroupBox("Custom TP Levels (Optional - Override Defaults)")
+        self.multi_tp_custom_group.setCheckable(False)
+        self.multi_tp_custom_group.setVisible(False)  # Hidden by default
+        multi_tp_layout = QVBoxLayout(self.multi_tp_custom_group)
+        
+        # Connect checkbox to show/hide customization
+        self.use_multi_tp_check.stateChanged.connect(self.on_multi_tp_changed)
+        
+        # TREND mode TP levels
+        trend_row = QHBoxLayout()
+        trend_row.addWidget(QLabel("<b>TREND Mode:</b>"))
+        trend_row.addWidget(QLabel("TP1:"))
+        self.trend_tp1_spin = QSpinBox()
+        self.trend_tp1_spin.setRange(1, 1000)
+        self.trend_tp1_spin.setValue(int(CRYPTO_TREND_TP['tp1'] * 100))  # Convert to basis points for crypto
+        self.trend_tp1_spin.setSuffix(" (1.5% or 30p)")
+        self.trend_tp1_spin.setToolTip("TP1 for TREND mode. For Crypto: 150 = 1.5%. For XAUUSD: 30 = 30 points")
+        trend_row.addWidget(self.trend_tp1_spin)
+        
+        trend_row.addWidget(QLabel("  TP2:"))
+        self.trend_tp2_spin = QSpinBox()
+        self.trend_tp2_spin.setRange(1, 1000)
+        self.trend_tp2_spin.setValue(int(CRYPTO_TREND_TP['tp2'] * 100))
+        self.trend_tp2_spin.setSuffix(" (2.75% or 55p)")
+        self.trend_tp2_spin.setToolTip("TP2 for TREND mode. For Crypto: 275 = 2.75%. For XAUUSD: 55 = 55 points")
+        trend_row.addWidget(self.trend_tp2_spin)
+        
+        trend_row.addWidget(QLabel("  TP3:"))
+        self.trend_tp3_spin = QSpinBox()
+        self.trend_tp3_spin.setRange(1, 1000)
+        self.trend_tp3_spin.setValue(int(CRYPTO_TREND_TP['tp3'] * 100))
+        self.trend_tp3_spin.setSuffix(" (4.5% or 90p)")
+        self.trend_tp3_spin.setToolTip("TP3 for TREND mode. For Crypto: 450 = 4.5%. For XAUUSD: 90 = 90 points")
+        trend_row.addWidget(self.trend_tp3_spin)
+        
+        trend_row.addStretch()
+        multi_tp_layout.addLayout(trend_row)
+        
+        # RANGE mode TP levels
+        range_row = QHBoxLayout()
+        range_row.addWidget(QLabel("<b>RANGE Mode:</b>"))
+        range_row.addWidget(QLabel("TP1:"))
+        self.range_tp1_spin = QSpinBox()
+        self.range_tp1_spin.setRange(1, 1000)
+        self.range_tp1_spin.setValue(int(CRYPTO_RANGE_TP['tp1'] * 100))
+        self.range_tp1_spin.setSuffix(" (1.0% or 20p)")
+        self.range_tp1_spin.setToolTip("TP1 for RANGE mode. For Crypto: 100 = 1.0%. For XAUUSD: 20 = 20 points")
+        range_row.addWidget(self.range_tp1_spin)
+        
+        range_row.addWidget(QLabel("  TP2:"))
+        self.range_tp2_spin = QSpinBox()
+        self.range_tp2_spin.setRange(1, 1000)
+        self.range_tp2_spin.setValue(int(CRYPTO_RANGE_TP['tp2'] * 100))
+        self.range_tp2_spin.setSuffix(" (1.75% or 35p)")
+        self.range_tp2_spin.setToolTip("TP2 for RANGE mode. For Crypto: 175 = 1.75%. For XAUUSD: 35 = 35 points")
+        range_row.addWidget(self.range_tp2_spin)
+        
+        range_row.addWidget(QLabel("  TP3:"))
+        self.range_tp3_spin = QSpinBox()
+        self.range_tp3_spin.setRange(1, 1000)
+        self.range_tp3_spin.setValue(int(CRYPTO_RANGE_TP['tp3'] * 100))
+        self.range_tp3_spin.setSuffix(" (2.5% or 50p)")
+        self.range_tp3_spin.setToolTip("TP3 for RANGE mode. For Crypto: 250 = 2.5%. For XAUUSD: 50 = 50 points")
+        range_row.addWidget(self.range_tp3_spin)
+        
+        range_row.addStretch()
+        multi_tp_layout.addLayout(range_row)
+        
+        # Add spacing
+        multi_tp_layout.addSpacing(10)
+        
+        # TREND mode SL levels
+        trend_sl_row = QHBoxLayout()
+        trend_sl_row.addWidget(QLabel("<b>TREND Mode SL:</b>"))
+        self.trend_sl_spin = QSpinBox()
+        self.trend_sl_spin.setRange(1, 500)
+        self.trend_sl_spin.setValue(int(CRYPTO_TREND_SL * 100))  # Convert to basis points for crypto
+        self.trend_sl_spin.setSuffix(" (0.8% or 16p)")
+        self.trend_sl_spin.setToolTip("Stop Loss for TREND mode. For Crypto: 80 = 0.8%. For XAUUSD: 16 = 16 points")
+        trend_sl_row.addWidget(self.trend_sl_spin)
+        trend_sl_row.addStretch()
+        multi_tp_layout.addLayout(trend_sl_row)
+        
+        # RANGE mode SL levels
+        range_sl_row = QHBoxLayout()
+        range_sl_row.addWidget(QLabel("<b>RANGE Mode SL:</b>"))
+        self.range_sl_spin = QSpinBox()
+        self.range_sl_spin.setRange(1, 500)
+        self.range_sl_spin.setValue(int(CRYPTO_RANGE_SL * 100))  # Convert to basis points for crypto
+        self.range_sl_spin.setSuffix(" (0.6% or 12p)")
+        self.range_sl_spin.setToolTip("Stop Loss for RANGE mode. For Crypto: 60 = 0.6%. For XAUUSD: 12 = 12 points")
+        range_sl_row.addWidget(self.range_sl_spin)
+        range_sl_row.addStretch()
+        multi_tp_layout.addLayout(range_sl_row)
+        
+        # Help text for TP/SL values
+        help_label = QLabel(
+            "<i><small>For Crypto (BTC/ETH): Values are in basis points (100 = 1.0%)<br>"
+            "For XAUUSD (Gold): Values are in points directly</small></i>"
+        )
+        help_label.setStyleSheet("color: gray;")
+        multi_tp_layout.addWidget(help_label)
+        
+        layout.addWidget(self.multi_tp_custom_group)
+        
         # Note about default strategy
-        note_label = QLabel("<i>Leave at defaults to use bot's configured strategy settings</i>")
+        note_label = QLabel(
+            "<i>Single-TP mode: Use TP/SL multipliers above (Fibonacci-style)<br>"
+            "Multi-TP mode: Uses live bot's regime-based TP levels (TREND/RANGE auto-detected)</i>"
+        )
         note_label.setStyleSheet("color: gray;")
         layout.addWidget(note_label)
         
@@ -1102,6 +1758,10 @@ class SignalAnalysisDialog(QDialog):
     def on_trailing_changed(self, state):
         """Enable/disable trailing percentage when checkbox changes"""
         self.trailing_pct_spin.setEnabled(state == 2)  # 2 = Qt.Checked
+    
+    def on_multi_tp_changed(self, state):
+        """Show/hide custom TP levels section when Multi-TP checkbox changes"""
+        self.multi_tp_custom_group.setVisible(state == 2)  # 2 = Qt.Checked
         
     def create_summary_section(self):
         """Create summary section - compact layout"""
@@ -1195,6 +1855,58 @@ class SignalAnalysisDialog(QDialog):
         trailing_pct = self.trailing_pct_spin.value()
         use_multi_tp = self.use_multi_tp_check.isChecked()
         
+        # Get custom TP levels if multi-TP is enabled
+        custom_tp_levels = None
+        if use_multi_tp:
+            # Determine if crypto or XAUUSD
+            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+            
+            # Get values from spin boxes
+            trend_tp1 = self.trend_tp1_spin.value()
+            trend_tp2 = self.trend_tp2_spin.value()
+            trend_tp3 = self.trend_tp3_spin.value()
+            range_tp1 = self.range_tp1_spin.value()
+            range_tp2 = self.range_tp2_spin.value()
+            range_tp3 = self.range_tp3_spin.value()
+            
+            # Convert values based on symbol type
+            if is_xauusd:
+                # For XAUUSD, values are already in points
+                custom_tp_levels = {
+                    'trend': {'tp1': trend_tp1, 'tp2': trend_tp2, 'tp3': trend_tp3},
+                    'range': {'tp1': range_tp1, 'tp2': range_tp2, 'tp3': range_tp3}
+                }
+            else:
+                # For crypto, convert from basis points to percentage
+                custom_tp_levels = {
+                    'trend': {'tp1': trend_tp1 / 100.0, 'tp2': trend_tp2 / 100.0, 'tp3': trend_tp3 / 100.0},
+                    'range': {'tp1': range_tp1 / 100.0, 'tp2': range_tp2 / 100.0, 'tp3': range_tp3 / 100.0}
+                }
+        
+        # Get custom SL levels if multi-TP is enabled
+        custom_sl_levels = None
+        if use_multi_tp:
+            # Determine if crypto or XAUUSD
+            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+            
+            # Get values from spin boxes
+            trend_sl = self.trend_sl_spin.value()
+            range_sl = self.range_sl_spin.value()
+            
+            # Convert values based on symbol type
+            if is_xauusd:
+                # For XAUUSD, values are already in points
+                custom_sl_levels = {
+                    'trend': trend_sl,
+                    'range': range_sl
+                }
+            else:
+                # For crypto, convert from basis points to percentage
+                custom_sl_levels = {
+                    'trend': trend_sl / 100.0,
+                    'range': range_sl / 100.0
+                }
+        
         # Clear previous results
         self.results_table.setRowCount(0)
         self.summary_label.setText("Analyzing...")
@@ -1211,13 +1923,15 @@ class SignalAnalysisDialog(QDialog):
             # Use MT5 worker for XAUUSD
             self.worker = SignalAnalysisWorkerMT5(
                 symbol, days, start, end,
-                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp
+                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
+                custom_tp_levels, custom_sl_levels
             )
         else:
             # Use Binance worker for BTC/ETH
             self.worker = SignalAnalysisWorker(
                 symbol, days, start, end,
-                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp
+                tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
+                custom_tp_levels, custom_sl_levels
             )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)

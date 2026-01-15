@@ -92,20 +92,35 @@ Market may be in consolidation
 
 ### What Strategy is Used?
 The analysis uses the **exact same PatternRecognitionStrategy** that the live bot uses:
-- Fibonacci 1.618 extension for Take Profit
 - Pattern recognition (flags, triangles, wedges, etc.)
 - SMC (Smart Money Concepts) indicators
 - Gold-optimized filters adapted for crypto
+- **Market regime detection (TREND vs RANGE)**
+- **Adaptive TP/SL levels based on market regime**
+
+### TP/SL Levels (Multi-TP Mode)
+The backtest now uses **the exact same TP/SL levels as the live bot**:
+
+#### For Crypto (BTC/ETH):
+- **TREND Mode:** TP1: 1.5% | TP2: 2.75% | TP3: 4.5%
+- **RANGE Mode:** TP1: 1.0% | TP2: 1.75% | TP3: 2.5%
+
+#### For XAUUSD (Gold):
+- **TREND Mode:** TP1: 30 points | TP2: 55 points | TP3: 90 points  
+- **RANGE Mode:** TP1: 20 points | TP2: 35 points | TP3: 50 points
+
+The backtest automatically detects market regime for each signal using the same algorithm as the live bot.
 
 ### Data Source
-- **Exchange:** Binance Futures
-- **Timeframe:** 1 Hour (1H)
-- **Symbol:** BTC/USDT or ETH/USDT
+- **Exchange:** Binance Futures (crypto) or MetaTrader5 (XAUUSD)
+- **Timeframe:** Configurable (default: 1 Hour)
+- **Symbol:** BTC/USDT, ETH/USDT, or XAUUSD
 
 ### Requirements
 To use this feature, you need:
-- Internet connection (to download data from Binance)
+- Internet connection (to download data from Binance/MT5)
 - Python packages: `ccxt`, `pandas`, `numpy`
+- For XAUUSD: MetaTrader5 installed and running
 
 ---
 
