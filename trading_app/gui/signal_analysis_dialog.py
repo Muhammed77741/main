@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QGroupBox, QHeaderView, QDateEdit, QComboBox,
-    QSpinBox, QDoubleSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
+    QSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QDate
 from models import BotConfig
@@ -1674,7 +1674,7 @@ class SignalAnalysisDialog(QDialog):
     def on_multi_tp_changed(self, state):
         """Show/hide custom TP levels section when Multi-TP checkbox changes"""
         self.multi_tp_custom_group.setVisible(state == 2)  # 2 = Qt.Checked
-    
+        
     def create_summary_section(self):
         """Create summary section - compact layout"""
         group = QGroupBox("Summary")
@@ -1704,9 +1704,6 @@ class SignalAnalysisDialog(QDialog):
             'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
         ])
         
-        # Set minimum height for better visibility
-        self.results_table.setMinimumHeight(400)
-        
         # Configure table
         header = self.results_table.horizontalHeader()
         header.setStretchLastSection(True)
@@ -1716,11 +1713,6 @@ class SignalAnalysisDialog(QDialog):
         
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
-        
-        # Make font slightly larger for better readability
-        font = self.results_table.font()
-        font.setPointSize(font.pointSize() + 1)
-        self.results_table.setFont(font)
         
         layout.addWidget(self.results_table)
         
