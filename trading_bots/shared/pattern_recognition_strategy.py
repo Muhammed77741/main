@@ -1,5 +1,4 @@
 """
-"""
 Pattern Recognition Strategy with Fibonacci Extensions
 Recognizes chart patterns: Double Top/Bottom, Head & Shoulders, Triangles, Wedges, Flags
 Uses Fibonacci 1.618 or 2.618 for dynamic TP (switchable mode)
@@ -600,9 +599,7 @@ class MultiSignalPatternStrategy(PatternRecognitionStrategy):
         print(f"   Mode: MULTI-SIGNAL + PATTERNS")
 
     def run_strategy(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Combine pattern recognition with BOS signals
-        """
+        """Combine pattern recognition with BOS signals"""
         # Run pattern recognition
         df = super().run_strategy(df)
 
