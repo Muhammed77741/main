@@ -352,112 +352,123 @@ class SignalAnalysisWorker(QThread):
     
     def _calculate_multi_tp_outcome_live_style(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles):
         """
-        Calculate outcome with multiple TP levels using live bot's specific TP prices
-        TP1: close 50%, TP2: close 30%, TP3: close 20%
-        SL moves to breakeven after TP1
+        Calculate outcome with 3 SEPARATE positions (matches backtest_v3_adaptive_fixed.py)
+
+        Opens 3 independent positions:
+        - Position 1: 33% size, TP=TP1
+        - Position 2: 33% size, TP=TP2
+        - Position 3: 34% size, TP=TP3
+
+        All positions share the SAME stop loss.
+        If SL is hit on ANY position, ALL 3 positions are closed (group SL).
         """
-        # Track position and outcomes
-        remaining_position = 1.0
+        # Track 3 separate positions
+        positions = [
+            {'size': 0.33, 'tp': tp1, 'sl': stop_loss, 'status': 'OPEN', 'tp_level': 'TP1'},
+            {'size': 0.33, 'tp': tp2, 'sl': stop_loss, 'status': 'OPEN', 'tp_level': 'TP2'},
+            {'size': 0.34, 'tp': tp3, 'sl': stop_loss, 'status': 'OPEN', 'tp_level': 'TP3'},
+        ]
+
         total_pnl_pct = 0.0
         tps_hit = []
         outcome = 'Timeout'
         bars = 0
-        
-        # Track which TPs have been hit
-        tp1_hit = False
-        tp2_hit = False
-        tp3_hit = False
+
+        sl_hit = False
         
         # Check each candle
         for future_idx, future_candle in future_candles.iterrows():
             bars += 1
-            
+
+            # Check if all positions are closed
+            open_positions = [p for p in positions if p['status'] == 'OPEN']
+            if not open_positions:
+                break
+
             if signal_type == 1:  # BUY signal
-                # Check SL first
-                if future_candle['low'] <= stop_loss:
-                    # Hit stop loss
-                    pnl = ((stop_loss - entry_price) / entry_price) * 100
-                    total_pnl_pct += pnl * remaining_position
-                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                # Check SL FIRST for ALL open positions (critical!)
+                # If ANY position hits SL, close ALL positions (group SL)
+                for pos in open_positions:
+                    if future_candle['low'] <= pos['sl']:
+                        # SL hit - close ALL positions in group
+                        sl_hit = True
+                        for p in positions:
+                            if p['status'] == 'OPEN':
+                                pnl = ((pos['sl'] - entry_price) / entry_price) * 100
+                                total_pnl_pct += pnl * p['size']
+                                p['status'] = 'CLOSED'
+                        # Determine outcome based on how many TPs were hit
+                        if tps_hit:
+                            outcome = 'Partial Win ✅'
+                        else:
+                            outcome = 'Loss ❌'
+                        break
+
+                if sl_hit:
                     break
-                
-                # Check TP levels in order
-                if not tp1_hit and future_candle['high'] >= tp1:
-                    # TP1 hit - close 50%
-                    pnl = ((tp1 - entry_price) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.5
-                    remaining_position -= 0.5
-                    tps_hit.append('TP1')
-                    tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
-                
-                if tp1_hit and not tp2_hit and future_candle['high'] >= tp2:
-                    # TP2 hit - close 30%
-                    pnl = ((tp2 - entry_price) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.3
-                    remaining_position -= 0.3
-                    tps_hit.append('TP2')
-                    tp2_hit = True
-                
-                if tp2_hit and not tp3_hit and future_candle['high'] >= tp3:
-                    # TP3 hit - close 20%
-                    pnl = ((tp3 - entry_price) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.2
-                    remaining_position -= 0.2
-                    tps_hit.append('TP3')
-                    tp3_hit = True
+
+                # Check TP for each open position independently
+                for pos in open_positions:
+                    if future_candle['high'] >= pos['tp']:
+                        # TP hit - close THIS position only
+                        pnl = ((pos['tp'] - entry_price) / entry_price) * 100
+                        total_pnl_pct += pnl * pos['size']
+                        pos['status'] = 'CLOSED'
+                        tps_hit.append(pos['tp_level'])
+
+                # If all 3 TPs hit, it's a full win
+                if len(tps_hit) == 3:
                     outcome = 'Win ✅'
                     break
-            
+
             else:  # SELL signal
-                # Check SL first
-                if future_candle['high'] >= stop_loss:
-                    # Hit stop loss
-                    pnl = ((entry_price - stop_loss) / entry_price) * 100
-                    total_pnl_pct += pnl * remaining_position
-                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                # Check SL FIRST for ALL open positions
+                # If ANY position hits SL, close ALL positions (group SL)
+                for pos in open_positions:
+                    if future_candle['high'] >= pos['sl']:
+                        # SL hit - close ALL positions in group
+                        sl_hit = True
+                        for p in positions:
+                            if p['status'] == 'OPEN':
+                                pnl = ((entry_price - pos['sl']) / entry_price) * 100
+                                total_pnl_pct += pnl * p['size']
+                                p['status'] = 'CLOSED'
+                        # Determine outcome based on how many TPs were hit
+                        if tps_hit:
+                            outcome = 'Partial Win ✅'
+                        else:
+                            outcome = 'Loss ❌'
+                        break
+
+                if sl_hit:
                     break
-                
-                # Check TP levels in order
-                if not tp1_hit and future_candle['low'] <= tp1:
-                    # TP1 hit - close 50%
-                    pnl = ((entry_price - tp1) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.5
-                    remaining_position -= 0.5
-                    tps_hit.append('TP1')
-                    tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
-                
-                if tp1_hit and not tp2_hit and future_candle['low'] <= tp2:
-                    # TP2 hit - close 30%
-                    pnl = ((entry_price - tp2) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.3
-                    remaining_position -= 0.3
-                    tps_hit.append('TP2')
-                    tp2_hit = True
-                
-                if tp2_hit and not tp3_hit and future_candle['low'] <= tp3:
-                    # TP3 hit - close 20%
-                    pnl = ((entry_price - tp3) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.2
-                    remaining_position -= 0.2
-                    tps_hit.append('TP3')
-                    tp3_hit = True
+
+                # Check TP for each open position independently
+                for pos in open_positions:
+                    if future_candle['low'] <= pos['tp']:
+                        # TP hit - close THIS position only
+                        pnl = ((entry_price - pos['tp']) / entry_price) * 100
+                        total_pnl_pct += pnl * pos['size']
+                        pos['status'] = 'CLOSED'
+                        tps_hit.append(pos['tp_level'])
+
+                # If all 3 TPs hit, it's a full win
+                if len(tps_hit) == 3:
                     outcome = 'Win ✅'
                     break
-            
+
             # Limit check to 100 bars
             if bars >= 100:
                 outcome = 'Timeout'
-                # Calculate current P&L for remaining position at timeout
+                # Calculate current P&L for remaining open positions
                 current_price = future_candle['close']
-                if signal_type == 1:
-                    pnl = ((current_price - entry_price) / entry_price) * 100
-                else:
-                    pnl = ((entry_price - current_price) / entry_price) * 100
-                total_pnl_pct += pnl * remaining_position
+                for pos in positions:
+                    if pos['status'] == 'OPEN':
+                        if signal_type == 1:
+                            pnl = ((current_price - entry_price) / entry_price) * 100
+                        else:
+                            pnl = ((entry_price - current_price) / entry_price) * 100
+                        total_pnl_pct += pnl * pos['size']
                 break
         
         return {
@@ -767,17 +778,48 @@ class SignalAnalysisWorkerMT5(QThread):
                 }
                 mt5_timeframe = timeframe_map.get(self.timeframe, mt5.TIMEFRAME_H1)
                 
-                # Download data from MT5
-                rates = mt5.copy_rates_range(self.symbol, mt5_timeframe, start_time, end_time)
-                
+                # Download data from MT5 with retry logic
+                rates = None
+                max_retries = 3
+                retry_delay = 2  # seconds
+
+                for attempt in range(max_retries):
+                    if attempt > 0:
+                        self.progress.emit(f"⏳ Retry attempt {attempt + 1}/{max_retries}...")
+                        import time
+                        time.sleep(retry_delay)
+
+                    try:
+                        rates = mt5.copy_rates_range(self.symbol, mt5_timeframe, start_time, end_time)
+
+                        if rates is not None and len(rates) > 0:
+                            break  # Success!
+                        else:
+                            if attempt < max_retries - 1:
+                                self.progress.emit(f"⚠️ No data received (attempt {attempt + 1}/{max_retries}), retrying...")
+                            else:
+                                self.error.emit(
+                                    f"❌ Failed to get data for {self.symbol} after {max_retries} attempts.\n\n"
+                                    f"Please ensure:\n"
+                                    f"  • MT5 terminal is running and logged in\n"
+                                    f"  • {self.symbol} is available in Market Watch\n"
+                                    f"  • You have historical data for this period\n"
+                                    f"  • Internet connection is stable\n\n"
+                                    f"Try using the Retry button to attempt again."
+                                )
+                                return
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            self.progress.emit(f"⚠️ Error: {str(e)}, retrying...")
+                        else:
+                            self.error.emit(
+                                f"❌ Failed to get market data after {max_retries} attempts.\n\n"
+                                f"Error: {str(e)}\n\n"
+                                f"Please check your MT5 connection and try again."
+                            )
+                            return
+
                 if rates is None or len(rates) == 0:
-                    self.error.emit(
-                        f"No data received from MT5 for {self.symbol}.\n\n"
-                        f"Please ensure:\n"
-                        f"  • {self.symbol} is available in Market Watch\n"
-                        f"  • You have historical data for this period\n"
-                        f"  • The symbol name is correct"
-                    )
                     return
                 
                 self.progress.emit(f"✅ Downloaded {len(rates)} candles from MT5")
@@ -1029,112 +1071,123 @@ class SignalAnalysisWorkerMT5(QThread):
 
     def _calculate_multi_tp_outcome_live_style(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles):
         """
-        Calculate outcome with multiple TP levels using live bot's specific TP prices
-        TP1: close 50%, TP2: close 30%, TP3: close 20%
-        SL moves to breakeven after TP1
+        Calculate outcome with 3 SEPARATE positions (matches backtest_v3_adaptive_fixed.py)
+
+        Opens 3 independent positions:
+        - Position 1: 33% size, TP=TP1
+        - Position 2: 33% size, TP=TP2
+        - Position 3: 34% size, TP=TP3
+
+        All positions share the SAME stop loss.
+        If SL is hit on ANY position, ALL 3 positions are closed (group SL).
         """
-        # Track position and outcomes
-        remaining_position = 1.0
+        # Track 3 separate positions
+        positions = [
+            {'size': 0.33, 'tp': tp1, 'sl': stop_loss, 'status': 'OPEN', 'tp_level': 'TP1'},
+            {'size': 0.33, 'tp': tp2, 'sl': stop_loss, 'status': 'OPEN', 'tp_level': 'TP2'},
+            {'size': 0.34, 'tp': tp3, 'sl': stop_loss, 'status': 'OPEN', 'tp_level': 'TP3'},
+        ]
+
         total_pnl_pct = 0.0
         tps_hit = []
         outcome = 'Timeout'
         bars = 0
-        
-        # Track which TPs have been hit
-        tp1_hit = False
-        tp2_hit = False
-        tp3_hit = False
+
+        sl_hit = False
         
         # Check each candle
         for future_idx, future_candle in future_candles.iterrows():
             bars += 1
-            
+
+            # Check if all positions are closed
+            open_positions = [p for p in positions if p['status'] == 'OPEN']
+            if not open_positions:
+                break
+
             if signal_type == 1:  # BUY signal
-                # Check SL first
-                if future_candle['low'] <= stop_loss:
-                    # Hit stop loss
-                    pnl = ((stop_loss - entry_price) / entry_price) * 100
-                    total_pnl_pct += pnl * remaining_position
-                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                # Check SL FIRST for ALL open positions (critical!)
+                # If ANY position hits SL, close ALL positions (group SL)
+                for pos in open_positions:
+                    if future_candle['low'] <= pos['sl']:
+                        # SL hit - close ALL positions in group
+                        sl_hit = True
+                        for p in positions:
+                            if p['status'] == 'OPEN':
+                                pnl = ((pos['sl'] - entry_price) / entry_price) * 100
+                                total_pnl_pct += pnl * p['size']
+                                p['status'] = 'CLOSED'
+                        # Determine outcome based on how many TPs were hit
+                        if tps_hit:
+                            outcome = 'Partial Win ✅'
+                        else:
+                            outcome = 'Loss ❌'
+                        break
+
+                if sl_hit:
                     break
-                
-                # Check TP levels in order
-                if not tp1_hit and future_candle['high'] >= tp1:
-                    # TP1 hit - close 50%
-                    pnl = ((tp1 - entry_price) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.5
-                    remaining_position -= 0.5
-                    tps_hit.append('TP1')
-                    tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
-                
-                if tp1_hit and not tp2_hit and future_candle['high'] >= tp2:
-                    # TP2 hit - close 30%
-                    pnl = ((tp2 - entry_price) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.3
-                    remaining_position -= 0.3
-                    tps_hit.append('TP2')
-                    tp2_hit = True
-                
-                if tp2_hit and not tp3_hit and future_candle['high'] >= tp3:
-                    # TP3 hit - close 20%
-                    pnl = ((tp3 - entry_price) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.2
-                    remaining_position -= 0.2
-                    tps_hit.append('TP3')
-                    tp3_hit = True
+
+                # Check TP for each open position independently
+                for pos in open_positions:
+                    if future_candle['high'] >= pos['tp']:
+                        # TP hit - close THIS position only
+                        pnl = ((pos['tp'] - entry_price) / entry_price) * 100
+                        total_pnl_pct += pnl * pos['size']
+                        pos['status'] = 'CLOSED'
+                        tps_hit.append(pos['tp_level'])
+
+                # If all 3 TPs hit, it's a full win
+                if len(tps_hit) == 3:
                     outcome = 'Win ✅'
                     break
-            
+
             else:  # SELL signal
-                # Check SL first
-                if future_candle['high'] >= stop_loss:
-                    # Hit stop loss
-                    pnl = ((entry_price - stop_loss) / entry_price) * 100
-                    total_pnl_pct += pnl * remaining_position
-                    outcome = 'Loss ❌' if not tp1_hit else 'Partial Win ✅'
+                # Check SL FIRST for ALL open positions
+                # If ANY position hits SL, close ALL positions (group SL)
+                for pos in open_positions:
+                    if future_candle['high'] >= pos['sl']:
+                        # SL hit - close ALL positions in group
+                        sl_hit = True
+                        for p in positions:
+                            if p['status'] == 'OPEN':
+                                pnl = ((entry_price - pos['sl']) / entry_price) * 100
+                                total_pnl_pct += pnl * p['size']
+                                p['status'] = 'CLOSED'
+                        # Determine outcome based on how many TPs were hit
+                        if tps_hit:
+                            outcome = 'Partial Win ✅'
+                        else:
+                            outcome = 'Loss ❌'
+                        break
+
+                if sl_hit:
                     break
-                
-                # Check TP levels in order
-                if not tp1_hit and future_candle['low'] <= tp1:
-                    # TP1 hit - close 50%
-                    pnl = ((entry_price - tp1) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.5
-                    remaining_position -= 0.5
-                    tps_hit.append('TP1')
-                    tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
-                
-                if tp1_hit and not tp2_hit and future_candle['low'] <= tp2:
-                    # TP2 hit - close 30%
-                    pnl = ((entry_price - tp2) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.3
-                    remaining_position -= 0.3
-                    tps_hit.append('TP2')
-                    tp2_hit = True
-                
-                if tp2_hit and not tp3_hit and future_candle['low'] <= tp3:
-                    # TP3 hit - close 20%
-                    pnl = ((entry_price - tp3) / entry_price) * 100
-                    total_pnl_pct += pnl * 0.2
-                    remaining_position -= 0.2
-                    tps_hit.append('TP3')
-                    tp3_hit = True
+
+                # Check TP for each open position independently
+                for pos in open_positions:
+                    if future_candle['low'] <= pos['tp']:
+                        # TP hit - close THIS position only
+                        pnl = ((entry_price - pos['tp']) / entry_price) * 100
+                        total_pnl_pct += pnl * pos['size']
+                        pos['status'] = 'CLOSED'
+                        tps_hit.append(pos['tp_level'])
+
+                # If all 3 TPs hit, it's a full win
+                if len(tps_hit) == 3:
                     outcome = 'Win ✅'
                     break
-            
+
             # Limit check to 100 bars
             if bars >= 100:
                 outcome = 'Timeout'
-                # Calculate current P&L for remaining position at timeout
+                # Calculate current P&L for remaining open positions
                 current_price = future_candle['close']
-                if signal_type == 1:
-                    pnl = ((current_price - entry_price) / entry_price) * 100
-                else:
-                    pnl = ((entry_price - current_price) / entry_price) * 100
-                total_pnl_pct += pnl * remaining_position
+                for pos in positions:
+                    if pos['status'] == 'OPEN':
+                        if signal_type == 1:
+                            pnl = ((current_price - entry_price) / entry_price) * 100
+                        else:
+                            pnl = ((entry_price - current_price) / entry_price) * 100
+                        total_pnl_pct += pnl * pos['size']
                 break
         
         return {
@@ -2067,20 +2120,31 @@ class SignalAnalysisDialog(QDialog):
         self.populate_results_table(signals_df)
         
     def on_analysis_error(self, error_msg):
-        """Handle analysis error"""
+        """Handle analysis error with retry option"""
         self.progress_bar.hide()
         self.analyze_btn.setEnabled(True)
-        self.progress_label.setText(f"❌ Error: {error_msg}")
-        
-        QMessageBox.critical(
-            self,
-            "Analysis Error",
-            f"Failed to analyze signals:\n\n{error_msg}\n\n"
-            f"Common issues:\n"
-            f"• No internet connection\n"
-            f"• Binance API rate limit\n"
-            f"• Invalid date range"
-        )
+        self.progress_label.setText(f"❌ Error occurred")
+
+        # Create message box with Retry and Cancel buttons
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setWindowTitle("Analysis Error")
+        msg_box.setText("Failed to analyze signals")
+        msg_box.setInformativeText(error_msg)
+
+        # Add custom buttons
+        retry_btn = msg_box.addButton("Retry", QMessageBox.AcceptRole)
+        cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+
+        msg_box.setDefaultButton(retry_btn)
+
+        # Show and handle result
+        msg_box.exec()
+
+        if msg_box.clickedButton() == retry_btn:
+            # User clicked Retry - run analysis again
+            self.progress_label.setText("🔄 Retrying analysis...")
+            self.run_analysis()
         
     def populate_results_table(self, signals_df):
         """Populate results table with signals"""
