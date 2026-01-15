@@ -43,7 +43,8 @@ class LiveBotBinanceFullAuto:
                  check_interval=3600, risk_percent=2.0, max_positions=3,
                  dry_run=False, testnet=True, api_key=None, api_secret=None,
                  trailing_stop_enabled=True, trailing_stop_percent=1.5,
-                 bot_id=None, use_database=True):
+                 bot_id=None, use_database=True,
+                 position_size_mode='auto', fixed_position_size=0.01):
         """
         Initialize bot
 
@@ -63,6 +64,8 @@ class LiveBotBinanceFullAuto:
             trailing_stop_percent: Trailing stop activation threshold (%)
             bot_id: Unique bot identifier for database tracking
             use_database: If True, use database for position tracking
+            position_size_mode: 'auto' (risk-based) or 'fixed' (fixed amount)
+            fixed_position_size: Fixed position size (for 'fixed' mode) - BTC/ETH amount
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -75,6 +78,10 @@ class LiveBotBinanceFullAuto:
         self.testnet = testnet
         self.api_key = api_key
         self.api_secret = api_secret
+
+        # Position sizing mode
+        self.position_size_mode = position_size_mode  # 'auto' or 'fixed'
+        self.fixed_position_size = fixed_position_size  # For fixed mode
         
         # Bot identification for database
         self.bot_id = bot_id or f"crypto_bot_{symbol.replace('/', '_')}"
@@ -1114,26 +1121,14 @@ class LiveBotBinanceFullAuto:
             return None
 
     def calculate_position_size(self, entry, sl):
-        """Calculate position size based on risk"""
+        """Calculate position size based on mode (auto or fixed)"""
         if not self.exchange_connected:
             return 0.0
 
         try:
-            balance = self.exchange.fetch_balance()
-            usdt_balance = balance['USDT']['free']
-
-            risk_amount = usdt_balance * (self.risk_percent / 100.0)
-
-            # Risk per unit
-            risk_per_unit = abs(entry - sl)
-            risk_pct = risk_per_unit / entry
-
-            # Position size in base currency
-            position_size = risk_amount / risk_per_unit
-
-            # Get minimum trade size
+            # Get market info for min/max limits
             markets = self.exchange.load_markets()
-            
+
             # Try to find the correct symbol format
             # Binance futures uses format like ETH/USDT:USDT
             market_symbol = self.symbol
@@ -1147,17 +1142,49 @@ class LiveBotBinanceFullAuto:
                     print(f"   Available symbols: {', '.join(list(markets.keys())[:5])}...")
                     # Use default minimum for this asset type
                     min_amount = 0.001 if 'BTC' in self.symbol else 0.01
+                    max_amount = 10.0 if 'BTC' in self.symbol else 100.0
                     market_symbol = None
-            
+
             if market_symbol and market_symbol in markets:
                 market = markets[market_symbol]
                 min_amount = market['limits']['amount']['min']
+                max_amount = market['limits']['amount']['max'] if market['limits']['amount']['max'] else 1000.0
             else:
                 # Fallback to defaults
                 min_amount = 0.001 if 'BTC' in self.symbol else 0.01
+                max_amount = 10.0 if 'BTC' in self.symbol else 100.0
 
-            # Round to market precision
-            position_size = max(min_amount, position_size)
+            # FIXED MODE: Use fixed position size
+            if self.position_size_mode == 'fixed':
+                position_size = self.fixed_position_size
+
+                # Clamp to min/max
+                position_size = max(min_amount, min(position_size, max_amount))
+
+                # Round to appropriate decimals
+                if 'BTC' in self.symbol:
+                    position_size = round(position_size, 3)
+                else:
+                    position_size = round(position_size, 2)
+
+                print(f"   Position size (FIXED): {position_size} {self.symbol.split('/')[0]}")
+                return position_size
+
+            # AUTO MODE: Calculate based on risk
+            balance = self.exchange.fetch_balance()
+            usdt_balance = balance['USDT']['free']
+
+            risk_amount = usdt_balance * (self.risk_percent / 100.0)
+
+            # Risk per unit
+            risk_per_unit = abs(entry - sl)
+            risk_pct = risk_per_unit / entry
+
+            # Position size in base currency
+            position_size = risk_amount / risk_per_unit
+
+            # Clamp to min/max
+            position_size = max(min_amount, min(position_size, max_amount))
 
             # Round to appropriate decimals
             if 'BTC' in self.symbol:
@@ -1165,6 +1192,7 @@ class LiveBotBinanceFullAuto:
             else:
                 position_size = round(position_size, 2)
 
+            print(f"   Position size (AUTO): {position_size} {self.symbol.split('/')[0]}")
             return position_size
 
         except KeyError as e:

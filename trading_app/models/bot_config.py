@@ -25,6 +25,10 @@ class BotConfig:
     max_positions: int = 3
     timeframe: str = '1h'
 
+    # Position sizing mode: 'auto' (based on risk_percent) or 'fixed' (fixed size)
+    position_size_mode: str = 'auto'
+    fixed_position_size: float = 0.1  # For 'fixed' mode: lots for XAUUSD, crypto amount for BTC/ETH
+
     # Strategy parameters
     strategy: str = 'v3_adaptive'
 
@@ -80,6 +84,25 @@ class BotConfig:
         if not self.symbol or self.symbol.strip() == '':
             errors.append("Symbol cannot be empty")
 
+        # Position size mode validation
+        if self.position_size_mode not in ['auto', 'fixed']:
+            errors.append(f"Position size mode must be 'auto' or 'fixed' (got: {self.position_size_mode})")
+
+        # Fixed position size validation
+        if self.position_size_mode == 'fixed':
+            if self.fixed_position_size <= 0:
+                errors.append(f"Fixed position size must be positive (got: {self.fixed_position_size})")
+
+            # Check reasonable ranges based on exchange
+            if self.exchange == 'MT5':  # XAUUSD
+                if self.fixed_position_size < 0.01 or self.fixed_position_size > 100:
+                    errors.append(f"For MT5/XAUUSD, position size should be 0.01-100 lots (got: {self.fixed_position_size})")
+            elif self.exchange == 'Binance':  # Crypto
+                if self.symbol.startswith('BTC') and (self.fixed_position_size < 0.0001 or self.fixed_position_size > 10):
+                    errors.append(f"For BTC, position size should be 0.0001-10 BTC (got: {self.fixed_position_size})")
+                elif self.symbol.startswith('ETH') and (self.fixed_position_size < 0.001 or self.fixed_position_size > 100):
+                    errors.append(f"For ETH, position size should be 0.001-100 ETH (got: {self.fixed_position_size})")
+
         return (len(errors) == 0, errors)
 
     def to_dict(self):
@@ -113,6 +136,8 @@ class BotConfig:
             name='XAUUSD (Gold)',
             symbol='XAUUSD',
             exchange='MT5',
+            position_size_mode='auto',  # Auto by default
+            fixed_position_size=0.1,    # 0.1 lot if switched to fixed
             trend_tp1=30,  # points
             trend_tp2=55,
             trend_tp3=90,
@@ -129,6 +154,8 @@ class BotConfig:
             name='Bitcoin',
             symbol='BTC/USDT',
             exchange='Binance',
+            position_size_mode='auto',  # Auto by default
+            fixed_position_size=0.01,   # 0.01 BTC if switched to fixed (~$900 at $90k BTC)
             trend_tp1=1.5,  # percent
             trend_tp2=2.75,
             trend_tp3=4.5,
@@ -145,6 +172,8 @@ class BotConfig:
             name='Ethereum',
             symbol='ETH/USDT',
             exchange='Binance',
+            position_size_mode='auto',  # Auto by default
+            fixed_position_size=0.1,    # 0.1 ETH if switched to fixed (~$330 at $3.3k ETH)
             trend_tp1=1.5,  # percent
             trend_tp2=2.75,
             trend_tp3=4.5,

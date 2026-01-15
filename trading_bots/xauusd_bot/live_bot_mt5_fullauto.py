@@ -39,10 +39,11 @@ class LiveBotMT5FullAuto:
     def __init__(self, telegram_token=None, telegram_chat_id=None,
                  symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1,
                  check_interval=3600, risk_percent=2.0, max_positions=9,
-                 dry_run=False, bot_id=None, use_database=True):
+                 dry_run=False, bot_id=None, use_database=True,
+                 position_size_mode='auto', fixed_position_size=0.1):
         """
         Initialize bot
-        
+
         Args:
             telegram_token: Telegram bot token (optional)
             telegram_chat_id: Telegram chat ID (optional)
@@ -54,6 +55,8 @@ class LiveBotMT5FullAuto:
             dry_run: If True, no real trades
             bot_id: Unique bot identifier for database tracking
             use_database: If True, use database for position tracking
+            position_size_mode: 'auto' (risk-based) or 'fixed' (fixed lot size)
+            fixed_position_size: Fixed lot size when mode='fixed' (in lots)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -63,6 +66,10 @@ class LiveBotMT5FullAuto:
         self.risk_percent = risk_percent
         self.max_positions = max_positions
         self.dry_run = dry_run
+
+        # Position sizing
+        self.position_size_mode = position_size_mode
+        self.fixed_position_size = fixed_position_size
         
         # Bot identification for database
         self.bot_id = bot_id or f"xauusd_bot_{symbol}"
@@ -1181,37 +1188,58 @@ class LiveBotMT5FullAuto:
             return None
             
     def calculate_position_size(self, entry, sl):
-        """Calculate position size based on risk"""
+        """
+        Calculate position size based on risk or return fixed size
+
+        Returns:
+            float: Lot size to trade
+        """
+        # Check if fixed size mode
+        if self.position_size_mode == 'fixed':
+            symbol_info = mt5.symbol_info(self.symbol)
+            if symbol_info is None:
+                return 0.01
+
+            # Return fixed size, clamped to min/max
+            lot_size = self.fixed_position_size
+            lot_size = max(symbol_info.volume_min, lot_size)
+            lot_size = min(symbol_info.volume_max, lot_size)
+
+            print(f"   Position size (FIXED): {lot_size} lot")
+            return lot_size
+
+        # Auto mode: calculate based on risk
         if not self.mt5_connected:
             return 0.0
-            
+
         account_info = mt5.account_info()
         if account_info is None:
             return 0.0
-            
+
         balance = account_info.balance
         risk_amount = balance * (self.risk_percent / 100.0)
-        
+
         # Risk per lot (in account currency)
         risk_per_point = abs(entry - sl)
-        
+
         # For XAUUSD, 1 lot = 100 oz, point value depends on broker
         # Typical: 1 point = $100 for 1 lot
         symbol_info = mt5.symbol_info(self.symbol)
         if symbol_info is None:
             return 0.01  # Fallback
-            
+
         # Calculate lot size
         point_value = 100.0  # Approx for gold
         lot_size = risk_amount / (risk_per_point * point_value)
-        
+
         # Round to 0.01
         lot_size = round(lot_size, 2)
-        
+
         # Min/max lot size
         lot_size = max(symbol_info.volume_min, lot_size)
         lot_size = min(symbol_info.volume_max, lot_size)
-        
+
+        print(f"   Position size (AUTO): {lot_size} lot (Risk: {self.risk_percent}%, Amount: ${risk_amount:.2f})")
         return lot_size
         
     def get_open_positions(self):

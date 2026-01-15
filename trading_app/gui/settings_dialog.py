@@ -143,13 +143,48 @@ class SettingsDialog(QDialog):
         self.timeframe_combo.addItems(['1m', '5m', '15m', '30m', '1h', '4h', '1d'])
         layout.addRow("Timeframe:", self.timeframe_combo)
 
-        # Risk percent
+        # Position sizing mode
+        position_size_layout = QHBoxLayout()
+        self.position_mode_combo = QComboBox()
+        self.position_mode_combo.addItems(['Auto (Risk %)', 'Fixed Size'])
+        self.position_mode_combo.currentTextChanged.connect(self._on_position_mode_changed)
+        position_size_layout.addWidget(self.position_mode_combo)
+        layout.addRow("Position Size Mode:", position_size_layout)
+
+        # Risk percent (for Auto mode)
         self.risk_spin = QDoubleSpinBox()
         self.risk_spin.setRange(0.1, 10.0)
         self.risk_spin.setSingleStep(0.1)
         self.risk_spin.setDecimals(1)
         self.risk_spin.setSuffix("%")
         layout.addRow("Risk per trade:", self.risk_spin)
+
+        # Fixed position size (for Fixed mode)
+        self.fixed_size_spin = QDoubleSpinBox()
+        self.fixed_size_spin.setRange(0.0001, 1000.0)
+        self.fixed_size_spin.setSingleStep(0.01)
+        self.fixed_size_spin.setDecimals(4)
+
+        # Set suffix based on exchange
+        if self.original_config.exchange == 'MT5':
+            self.fixed_size_spin.setSuffix(" lot")
+            self.fixed_size_spin.setRange(0.01, 100.0)
+            self.fixed_size_spin.setDecimals(2)
+        elif self.original_config.symbol.startswith('BTC'):
+            self.fixed_size_spin.setSuffix(" BTC")
+            self.fixed_size_spin.setRange(0.0001, 10.0)
+            self.fixed_size_spin.setDecimals(4)
+        elif self.original_config.symbol.startswith('ETH'):
+            self.fixed_size_spin.setSuffix(" ETH")
+            self.fixed_size_spin.setRange(0.001, 100.0)
+            self.fixed_size_spin.setDecimals(3)
+        else:
+            # Generic crypto
+            self.fixed_size_spin.setSuffix("")
+            self.fixed_size_spin.setRange(0.001, 100.0)
+            self.fixed_size_spin.setDecimals(3)
+
+        layout.addRow("Fixed Position Size:", self.fixed_size_spin)
 
         # Max positions
         self.max_pos_spin = QSpinBox()
@@ -244,6 +279,20 @@ class SettingsDialog(QDialog):
 
         return group
 
+    def _on_position_mode_changed(self, mode_text):
+        """Handle position size mode change"""
+        if mode_text == 'Auto (Risk %)':
+            # Show risk_spin, hide fixed_size_spin
+            self.risk_spin.setEnabled(True)
+            self.fixed_size_spin.setEnabled(False)
+            self.fixed_size_spin.setStyleSheet("QDoubleSpinBox { color: gray; }")
+        else:  # Fixed Size
+            # Hide risk_spin, show fixed_size_spin
+            self.risk_spin.setEnabled(False)
+            self.risk_spin.setStyleSheet("QDoubleSpinBox { color: gray; }")
+            self.fixed_size_spin.setEnabled(True)
+            self.fixed_size_spin.setStyleSheet("")
+
     def load_config(self):
         """Load configuration into form"""
         # Binance API
@@ -257,7 +306,17 @@ class SettingsDialog(QDialog):
         # Trading parameters
         self.symbol_label.setText(self.config['symbol'])
         self.timeframe_combo.setCurrentText(self.config.get('timeframe', '1h'))
+
+        # Position sizing
+        position_mode = self.config.get('position_size_mode', 'auto')
+        if position_mode == 'auto':
+            self.position_mode_combo.setCurrentText('Auto (Risk %)')
+        else:
+            self.position_mode_combo.setCurrentText('Fixed Size')
+
         self.risk_spin.setValue(self.config.get('risk_percent', 2.0))
+        self.fixed_size_spin.setValue(self.config.get('fixed_position_size', 0.1))
+
         self.max_pos_spin.setValue(self.config.get('max_positions', 3))
         self.dry_run_check.setChecked(self.config.get('dry_run', True))
 
@@ -285,7 +344,15 @@ class SettingsDialog(QDialog):
             self.config['testnet'] = self.testnet_check.isChecked()
 
         self.config['timeframe'] = self.timeframe_combo.currentText()
+
+        # Position sizing
+        if self.position_mode_combo.currentText() == 'Auto (Risk %)':
+            self.config['position_size_mode'] = 'auto'
+        else:
+            self.config['position_size_mode'] = 'fixed'
+
         self.config['risk_percent'] = self.risk_spin.value()
+        self.config['fixed_position_size'] = self.fixed_size_spin.value()
         self.config['max_positions'] = self.max_pos_spin.value()
         self.config['dry_run'] = self.dry_run_check.isChecked()
 
