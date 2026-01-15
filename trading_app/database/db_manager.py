@@ -104,6 +104,7 @@ class DatabaseManager:
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 bot_id TEXT NOT NULL,
+                symbol TEXT,
                 order_id TEXT,
                 open_time TIMESTAMP NOT NULL,
                 close_time TIMESTAMP,
@@ -133,6 +134,17 @@ class DatabaseManager:
                 message TEXT NOT NULL
             )
         """)
+
+        # Migrate existing tables - add symbol column if it doesn't exist
+        try:
+            cursor.execute("PRAGMA table_info(trades)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if 'symbol' not in columns:
+                print("📊 Migrating trades table: adding symbol column...")
+                cursor.execute("ALTER TABLE trades ADD COLUMN symbol TEXT")
+                print("✅ Migration complete")
+        except Exception as e:
+            print(f"⚠️  Migration warning: {e}")
 
         self.conn.commit()
 
@@ -270,13 +282,13 @@ class DatabaseManager:
 
             cursor.execute("""
                 INSERT INTO trades (
-                    bot_id, order_id, open_time, close_time, duration_hours,
+                    bot_id, symbol, order_id, open_time, close_time, duration_hours,
                     trade_type, amount, entry_price, close_price,
                     stop_loss, take_profit, profit, profit_percent,
                     status, market_regime, comment
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                trade.bot_id, trade.order_id, trade.open_time, trade.close_time, trade.duration_hours,
+                trade.bot_id, trade.symbol, trade.order_id, trade.open_time, trade.close_time, trade.duration_hours,
                 trade.trade_type, trade.amount, trade.entry_price, trade.close_price,
                 trade.stop_loss, trade.take_profit, trade.profit, trade.profit_percent,
                 trade.status, trade.market_regime, trade.comment
@@ -303,6 +315,7 @@ class DatabaseManager:
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
+                symbol=row['symbol'] if 'symbol' in row.keys() else None,
                 order_id=row['order_id'],
                 open_time=self._parse_datetime(row['open_time']),
                 close_time=self._parse_datetime(row['close_time']),
@@ -336,6 +349,7 @@ class DatabaseManager:
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
+                symbol=row['symbol'] if 'symbol' in row.keys() else None,
                 order_id=row['order_id'],
                 open_time=self._parse_datetime(row['open_time']),
                 close_time=self._parse_datetime(row['close_time']),
@@ -372,11 +386,12 @@ class DatabaseManager:
                     close_price = ?,
                     profit = ?,
                     profit_percent = ?,
-                    status = ?
+                    status = ?,
+                    comment = ?
                 WHERE bot_id = ? AND order_id = ?
             """, (
                 trade.close_time, trade.duration_hours, trade.close_price,
-                trade.profit, trade.profit_percent, trade.status,
+                trade.profit, trade.profit_percent, trade.status, trade.comment,
                 trade.bot_id, trade.order_id
             ))
 

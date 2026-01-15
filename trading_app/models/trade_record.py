@@ -20,6 +20,9 @@ class TradeRecord:
 
     # Trade details (required)
     trade_type: str  # 'BUY' or 'SELL'
+    
+    # Symbol (optional but recommended)
+    symbol: Optional[str] = None
 
     # Optional fields with defaults
     # Timing

@@ -891,15 +891,59 @@ class SignalAnalysisDialog(QDialog):
         button_layout = QHBoxLayout()
         
         self.analyze_btn = QPushButton("🔍 Analyze Signals")
+        self.analyze_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #808080;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 40px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #696969;
+            }
+        """)
         self.analyze_btn.clicked.connect(self.run_analysis)
-        self.analyze_btn.setMinimumHeight(40)
         button_layout.addWidget(self.analyze_btn)
         
         export_btn = QPushButton("💾 Export CSV")
+        export_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #808080;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #696969;
+            }
+        """)
         export_btn.clicked.connect(self.export_csv)
         button_layout.addWidget(export_btn)
         
         close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #808080;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+                min-height: 28px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #696969;
+            }
+        """)
         close_btn.clicked.connect(self.accept)
         button_layout.addWidget(close_btn)
         

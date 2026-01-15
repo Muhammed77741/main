@@ -215,6 +215,12 @@ class MainWindow(QMainWindow):
 
         # Bot list
         self.bot_list = QListWidget()
+        self.bot_list.setStyleSheet("""
+            QListWidget::item {
+                font-size: 14px;
+                font-weight: 600;
+            }
+        """)
         self.bot_list.currentItemChanged.connect(self.on_bot_selection_changed)
 
         # Add bots
@@ -643,7 +649,7 @@ class MainWindow(QMainWindow):
                 positions_html += f"""
                 <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
                     <p style='margin: 2px 0;'>
-                        <b>{type_icon} {trade.symbol if hasattr(trade, 'symbol') else 'N/A'}</b> 
+                        <b>{type_icon} {trade.symbol if trade.symbol else 'N/A'}</b> 
                         <span style='color: #666;'>{trade.trade_type}</span>
                     </p>
                     <p style='margin: 2px 0; font-size: 11px; color: #666;'>
