@@ -1988,6 +1988,9 @@ class SignalAnalysisDialog(QDialog):
         
         layout.addLayout(button_layout)
         
+        # Load saved TP/SL defaults after UI is initialized
+        self.load_tp_defaults()
+        
     def create_params_section(self):
         """Create parameters section"""
         group = QGroupBox("Analysis Parameters")
@@ -2030,8 +2033,8 @@ class SignalAnalysisDialog(QDialog):
             # Default: add both
             self.symbol_combo.addItems(['BTC/USDT', 'ETH/USDT'])
         
-        # Connect symbol change to update TP/SL labels dynamically
-        self.symbol_combo.currentTextChanged.connect(self.update_tp_sl_labels)
+        # Connect symbol change to update TP/SL labels dynamically and load saved defaults
+        self.symbol_combo.currentTextChanged.connect(self.on_symbol_changed)
         
         row1.addWidget(self.symbol_combo)
         
@@ -2246,6 +2249,21 @@ class SignalAnalysisDialog(QDialog):
         help_label.setStyleSheet("color: gray;")
         multi_tp_layout.addWidget(help_label)
         
+        # Save as Default button
+        save_button_row = QHBoxLayout()
+        save_button_row.addStretch()
+        self.save_tp_defaults_btn = QPushButton("💾 Save as Default")
+        self.save_tp_defaults_btn.setToolTip(
+            "Save current TP/SL values as defaults.\n"
+            "These values will be loaded automatically\n"
+            "when you open the Signal Analysis dialog."
+        )
+        self.save_tp_defaults_btn.clicked.connect(self.on_save_tp_defaults)
+        self.save_tp_defaults_btn.setMaximumWidth(150)
+        save_button_row.addWidget(self.save_tp_defaults_btn)
+        save_button_row.addStretch()
+        multi_tp_layout.addLayout(save_button_row)
+        
         layout.addWidget(self.multi_tp_custom_group)
         
         # Initialize TP/SL labels based on selected symbol
@@ -2270,6 +2288,11 @@ class SignalAnalysisDialog(QDialog):
         # Don't automatically show custom section - let user decide if they want to customize
         # The custom section should remain collapsed by default to use correct regime-based defaults
         pass
+    
+    def on_symbol_changed(self, symbol):
+        """Handle symbol change - update labels and load saved defaults"""
+        self.update_tp_sl_labels()
+        self.load_tp_defaults()
     
     def update_tp_sl_labels(self):
         """Update TP/SL spin box labels based on selected symbol"""
@@ -2342,6 +2365,90 @@ class SignalAnalysisDialog(QDialog):
             self.range_sl_spin.setSuffix(" (0.6%)")
             self.range_sl_spin.setToolTip("Stop Loss for RANGE mode (Crypto): 60 basis points = 0.6%")
             self.range_sl_spin.setValue(int(CRYPTO_RANGE_SL * 100))
+    
+    def on_save_tp_defaults(self):
+        """Save current TP/SL values as defaults"""
+        try:
+            import json
+            import os
+            
+            # Get current symbol to determine which format to save
+            symbol = self.symbol_combo.currentText()
+            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+            
+            # Collect values from spin boxes
+            settings = {
+                'is_xauusd': is_xauusd,
+                'trend_tp1': self.trend_tp1_spin.value(),
+                'trend_tp2': self.trend_tp2_spin.value(),
+                'trend_tp3': self.trend_tp3_spin.value(),
+                'trend_sl': self.trend_sl_spin.value(),
+                'range_tp1': self.range_tp1_spin.value(),
+                'range_tp2': self.range_tp2_spin.value(),
+                'range_tp3': self.range_tp3_spin.value(),
+                'range_sl': self.range_sl_spin.value(),
+            }
+            
+            # Save to config file in user's home directory
+            config_dir = os.path.expanduser("~/.trading_app")
+            os.makedirs(config_dir, exist_ok=True)
+            config_file = os.path.join(config_dir, "signal_analysis_tp_defaults.json")
+            
+            with open(config_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+            
+            # Show success message
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                "Settings Saved",
+                f"TP/SL defaults saved successfully!\n\n"
+                f"Values saved for: {symbol}\n"
+                f"Config file: {config_file}\n\n"
+                f"These values will be loaded automatically next time."
+            )
+            
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Save Failed",
+                f"Failed to save settings:\n{str(e)}"
+            )
+    
+    def load_tp_defaults(self):
+        """Load saved TP/SL defaults if they exist"""
+        try:
+            import json
+            import os
+            
+            config_dir = os.path.expanduser("~/.trading_app")
+            config_file = os.path.join(config_dir, "signal_analysis_tp_defaults.json")
+            
+            if not os.path.exists(config_file):
+                return  # No saved defaults, use built-in defaults
+            
+            with open(config_file, 'r') as f:
+                settings = json.load(f)
+            
+            # Get current symbol
+            symbol = self.symbol_combo.currentText()
+            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+            
+            # Only apply saved settings if they match the current symbol type
+            if settings.get('is_xauusd') == is_xauusd:
+                self.trend_tp1_spin.setValue(settings.get('trend_tp1', self.trend_tp1_spin.value()))
+                self.trend_tp2_spin.setValue(settings.get('trend_tp2', self.trend_tp2_spin.value()))
+                self.trend_tp3_spin.setValue(settings.get('trend_tp3', self.trend_tp3_spin.value()))
+                self.trend_sl_spin.setValue(settings.get('trend_sl', self.trend_sl_spin.value()))
+                self.range_tp1_spin.setValue(settings.get('range_tp1', self.range_tp1_spin.value()))
+                self.range_tp2_spin.setValue(settings.get('range_tp2', self.range_tp2_spin.value()))
+                self.range_tp3_spin.setValue(settings.get('range_tp3', self.range_tp3_spin.value()))
+                self.range_sl_spin.setValue(settings.get('range_sl', self.range_sl_spin.value()))
+        
+        except Exception as e:
+            # Silently fail - just use defaults
+            pass
         
     def create_summary_section(self):
         """Create summary section - compact layout"""
