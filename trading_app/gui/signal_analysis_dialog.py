@@ -3,6 +3,7 @@ Signal Analysis Dialog - Backtest signal generation for BTC/ETH
 Shows signals that would have been generated in a date range
 """
 import sys
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
@@ -139,9 +140,9 @@ class SignalAnalysisWorker(QThread):
             self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals...")
             
             # Calculate outcomes for each signal
-            self._calculate_signal_outcomes(signals_df, df_signals)
+            signals_df = self._calculate_signal_outcomes(signals_df, df_signals)
             
-            self.progress.emit(f"✅ Analysis complete! Found {len(signals_df)} signals")
+            self.progress.emit(f"✅ Analysis complete! Found {len(signals_df)} {'positions' if self.use_multi_tp else 'signals'}")
             
             # Return results
             self.finished.emit(signals_df)
@@ -216,7 +217,7 @@ class SignalAnalysisWorker(QThread):
         Calculate trade outcome for each signal
         Check if price hit TP or SL in the following candles
         Uses same TP/SL calculation logic as live bot (TREND/RANGE regime-based)
-        Supports both single-TP and multi-TP modes
+        Supports both single-TP and multi-TP modes (3-position)
         """
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
@@ -231,9 +232,15 @@ class SignalAnalysisWorker(QThread):
             signals_df['tp2_used'] = 0.0
             signals_df['tp3_used'] = 0.0
             signals_df['sl_used'] = 0.0
+            # Add position group ID and position number columns
+            signals_df['position_group_id'] = ''
+            signals_df['position_num'] = 0
         
         # Add regime column to store market regime detection
         signals_df['regime'] = 'N/A'
+        
+        # List to collect new position rows
+        new_rows = []
         
         for idx, signal_row in signals_df.iterrows():
             signal_type = signal_row['signal']
@@ -366,6 +373,184 @@ class SignalAnalysisWorker(QThread):
                 signals_df.loc[idx, 'outcome'] = result['outcome']
                 signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
                 signals_df.loc[idx, 'bars_held'] = result['bars']
+    
+    def _calculate_3_position_outcome(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles, trailing_pct):
+        """
+        Calculate outcomes for 3 separate positions with different TP targets and trailing stops.
+        
+        Position 1: Targets TP1 only, no trailing
+        Position 2: Targets TP2, trailing activates after TP1 hits
+        Position 3: Targets TP3, trailing activates after TP1 hits
+        
+        Returns list of 3 position dictionaries with outcomes
+        """
+        # Track TP1 hit for trailing activation
+        tp1_hit = False
+        tp1_hit_bar = -1
+        
+        # Initialize positions
+        positions = [
+            {'position_num': 1, 'target_tp': tp1, 'use_trailing': False, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
+            {'position_num': 2, 'target_tp': tp2, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
+            {'position_num': 3, 'target_tp': tp3, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
+        ]
+        
+        # Tracking for trailing stops (positions 2 and 3)
+        max_price_since_tp1 = entry_price  # For BUY
+        min_price_since_tp1 = entry_price  # For SELL
+        
+        bars = 0
+        for future_idx, future_candle in future_candles.iterrows():
+            bars += 1
+            
+            # Check if any positions still active
+            if not any(p['active'] for p in positions):
+                break
+            
+            if signal_type == 1:  # BUY signal
+                # Check if TP1 hit (for trailing activation)
+                if not tp1_hit and future_candle['high'] >= tp1:
+                    tp1_hit = True
+                    tp1_hit_bar = bars
+                    max_price_since_tp1 = future_candle['high']
+                
+                # Update max price since TP1 for trailing calculation
+                if tp1_hit:
+                    max_price_since_tp1 = max(max_price_since_tp1, future_candle['high'])
+                
+                # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
+                if tp1_hit:
+                    trailing_stop = max_price_since_tp1 - (max_price_since_tp1 - entry_price) * trailing_pct
+                else:
+                    trailing_stop = stop_loss
+                
+                # Check each position
+                for pos in positions:
+                    if not pos['active']:
+                        continue
+                    
+                    # Determine active stop for this position
+                    if pos['use_trailing'] and tp1_hit:
+                        active_stop = trailing_stop
+                    else:
+                        active_stop = stop_loss
+                    
+                    # Check SL/Trailing Stop hit
+                    if future_candle['low'] <= active_stop:
+                        pnl = ((active_stop - entry_price) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        if pnl < 0:
+                            pos['outcome'] = 'Loss ❌'
+                            pos['tp_level_hit'] = 'SL'
+                            pos['close_reason'] = 'SL'
+                        else:
+                            pos['outcome'] = 'Win ✅'
+                            pos['tp_level_hit'] = 'Trailing'
+                            pos['close_reason'] = 'Trailing Stop'
+                        continue
+                    
+                    # Check TP hit
+                    if future_candle['high'] >= pos['target_tp']:
+                        pnl = ((pos['target_tp'] - entry_price) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        pos['outcome'] = 'Win ✅'
+                        # Determine which TP level
+                        if pos['position_num'] == 1:
+                            pos['tp_level_hit'] = 'TP1'
+                            pos['close_reason'] = 'TP1'
+                        elif pos['position_num'] == 2:
+                            pos['tp_level_hit'] = 'TP2'
+                            pos['close_reason'] = 'TP2'
+                        else:
+                            pos['tp_level_hit'] = 'TP3'
+                            pos['close_reason'] = 'TP3'
+                        continue
+            
+            else:  # SELL signal
+                # Check if TP1 hit (for trailing activation)
+                if not tp1_hit and future_candle['low'] <= tp1:
+                    tp1_hit = True
+                    tp1_hit_bar = bars
+                    min_price_since_tp1 = future_candle['low']
+                
+                # Update min price since TP1 for trailing calculation
+                if tp1_hit:
+                    min_price_since_tp1 = min(min_price_since_tp1, future_candle['low'])
+                
+                # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
+                if tp1_hit:
+                    trailing_stop = min_price_since_tp1 + (entry_price - min_price_since_tp1) * trailing_pct
+                else:
+                    trailing_stop = stop_loss
+                
+                # Check each position
+                for pos in positions:
+                    if not pos['active']:
+                        continue
+                    
+                    # Determine active stop for this position
+                    if pos['use_trailing'] and tp1_hit:
+                        active_stop = trailing_stop
+                    else:
+                        active_stop = stop_loss
+                    
+                    # Check SL/Trailing Stop hit
+                    if future_candle['high'] >= active_stop:
+                        pnl = ((entry_price - active_stop) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        if pnl < 0:
+                            pos['outcome'] = 'Loss ❌'
+                            pos['tp_level_hit'] = 'SL'
+                            pos['close_reason'] = 'SL'
+                        else:
+                            pos['outcome'] = 'Win ✅'
+                            pos['tp_level_hit'] = 'Trailing'
+                            pos['close_reason'] = 'Trailing Stop'
+                        continue
+                    
+                    # Check TP hit
+                    if future_candle['low'] <= pos['target_tp']:
+                        pnl = ((entry_price - pos['target_tp']) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        pos['outcome'] = 'Win ✅'
+                        # Determine which TP level
+                        if pos['position_num'] == 1:
+                            pos['tp_level_hit'] = 'TP1'
+                            pos['close_reason'] = 'TP1'
+                        elif pos['position_num'] == 2:
+                            pos['tp_level_hit'] = 'TP2'
+                            pos['close_reason'] = 'TP2'
+                        else:
+                            pos['tp_level_hit'] = 'TP3'
+                            pos['close_reason'] = 'TP3'
+                        continue
+            
+            # Limit check to 100 bars
+            if bars >= 100:
+                for pos in positions:
+                    if pos['active']:
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        # Calculate P&L at timeout
+                        current_price = future_candle['close']
+                        if signal_type == 1:
+                            pnl = ((current_price - entry_price) / entry_price) * 100
+                        else:
+                            pnl = ((entry_price - current_price) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['outcome'] = 'Timeout'
+                        pos['close_reason'] = 'Timeout'
+                break
+        
+        return positions
     
     def _calculate_multi_tp_outcome_live_style(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles):
         """
@@ -830,9 +1015,9 @@ class SignalAnalysisWorkerMT5(QThread):
                 self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals...")
                 
                 # Calculate outcomes for each signal (reuse the same logic)
-                self._calculate_signal_outcomes(signals_df, df_signals)
+                signals_df = self._calculate_signal_outcomes(signals_df, df_signals)
                 
-                self.progress.emit(f"✅ Analysis complete! Found {len(signals_df)} signals")
+                self.progress.emit(f"✅ Analysis complete! Found {len(signals_df)} {'positions' if self.use_multi_tp else 'signals'}")
                 
                 # Return results
                 self.finished.emit(signals_df)
@@ -848,7 +1033,7 @@ class SignalAnalysisWorkerMT5(QThread):
         """
         Calculate trade outcome for each signal
         Uses same TP/SL calculation logic as live bot (TREND/RANGE regime-based)
-        Supports both single-TP and multi-TP modes
+        Supports both single-TP and multi-TP modes (3-position)
         """
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
@@ -863,9 +1048,15 @@ class SignalAnalysisWorkerMT5(QThread):
             signals_df['tp2_used'] = 0.0
             signals_df['tp3_used'] = 0.0
             signals_df['sl_used'] = 0.0
+            # Add position group ID and position number columns
+            signals_df['position_group_id'] = ''
+            signals_df['position_num'] = 0
         
         # Add regime column to store market regime detection
         signals_df['regime'] = 'N/A'
+        
+        # List to collect new position rows
+        new_rows = []
         
         for idx, signal_row in signals_df.iterrows():
             signal_type = signal_row['signal']
@@ -984,13 +1175,37 @@ class SignalAnalysisWorkerMT5(QThread):
                 signals_df.loc[idx, 'tp3_used'] = tp3
                 signals_df.loc[idx, 'sl_used'] = stop_loss
                 
-                result = self._calculate_multi_tp_outcome_live_style(
-                    signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles
+                # Calculate 3-position outcomes
+                position_results = self._calculate_3_position_outcome(
+                    signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles, self.trailing_pct
                 )
-                signals_df.loc[idx, 'outcome'] = result['outcome']
-                signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
-                signals_df.loc[idx, 'bars_held'] = result['bars']
-                signals_df.loc[idx, 'tp_levels_hit'] = result['tp_levels_hit']
+                
+                # Generate unique group ID for these 3 positions
+                group_id = str(uuid.uuid4())
+                
+                # Create a row for each position
+                for pos_result in position_results:
+                    # Create a copy of the original signal row
+                    new_row = signal_row.copy()
+                    
+                    # Update with position-specific data
+                    new_row['position_group_id'] = group_id
+                    new_row['position_num'] = pos_result['position_num']
+                    new_row['outcome'] = pos_result['outcome']
+                    new_row['profit_pct'] = pos_result['profit_pct']
+                    new_row['bars_held'] = pos_result['bars']
+                    new_row['tp_levels_hit'] = pos_result['tp_level_hit']
+                    new_row['tp1_used'] = tp1
+                    new_row['tp2_used'] = tp2
+                    new_row['tp3_used'] = tp3
+                    new_row['sl_used'] = stop_loss
+                    new_row['regime'] = regime
+                    
+                    # Add to new rows list
+                    new_rows.append((idx, new_row))
+                
+                # Mark original row for deletion (we'll replace with 3 position rows)
+                signals_df.loc[idx, 'outcome'] = '_DELETE_'
             else:
                 result = self._calculate_single_tp_outcome(
                     signal_type, entry_price, stop_loss, take_profit, future_candles
@@ -998,6 +1213,21 @@ class SignalAnalysisWorkerMT5(QThread):
                 signals_df.loc[idx, 'outcome'] = result['outcome']
                 signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
                 signals_df.loc[idx, 'bars_held'] = result['bars']
+        
+        # If multi-TP mode, replace original rows with position rows
+        if self.use_multi_tp and new_rows:
+            # Remove original signal rows (marked for deletion)
+            signals_df = signals_df[signals_df['outcome'] != '_DELETE_'].copy()
+            
+            # Add new position rows
+            for orig_idx, new_row in new_rows:
+                # Use original timestamp with a small offset for each position to keep ordering
+                signals_df.loc[orig_idx] = new_row
+            
+            # Sort by timestamp
+            signals_df = signals_df.sort_index()
+        
+        return signals_df
     
     def _detect_market_regime(self, full_df, signal_idx, lookback=REGIME_LOOKBACK):
         """
@@ -1060,6 +1290,184 @@ class SignalAnalysisWorkerMT5(QThread):
         
         # Need 3+ signals for TREND
         return 'TREND' if trend_signals >= REGIME_TREND_SIGNALS_REQUIRED else 'RANGE'
+
+    def _calculate_3_position_outcome(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles, trailing_pct):
+        """
+        Calculate outcomes for 3 separate positions with different TP targets and trailing stops.
+        
+        Position 1: Targets TP1 only, no trailing
+        Position 2: Targets TP2, trailing activates after TP1 hits
+        Position 3: Targets TP3, trailing activates after TP1 hits
+        
+        Returns list of 3 position dictionaries with outcomes
+        """
+        # Track TP1 hit for trailing activation
+        tp1_hit = False
+        tp1_hit_bar = -1
+        
+        # Initialize positions
+        positions = [
+            {'position_num': 1, 'target_tp': tp1, 'use_trailing': False, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
+            {'position_num': 2, 'target_tp': tp2, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
+            {'position_num': 3, 'target_tp': tp3, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
+        ]
+        
+        # Tracking for trailing stops (positions 2 and 3)
+        max_price_since_tp1 = entry_price  # For BUY
+        min_price_since_tp1 = entry_price  # For SELL
+        
+        bars = 0
+        for future_idx, future_candle in future_candles.iterrows():
+            bars += 1
+            
+            # Check if any positions still active
+            if not any(p['active'] for p in positions):
+                break
+            
+            if signal_type == 1:  # BUY signal
+                # Check if TP1 hit (for trailing activation)
+                if not tp1_hit and future_candle['high'] >= tp1:
+                    tp1_hit = True
+                    tp1_hit_bar = bars
+                    max_price_since_tp1 = future_candle['high']
+                
+                # Update max price since TP1 for trailing calculation
+                if tp1_hit:
+                    max_price_since_tp1 = max(max_price_since_tp1, future_candle['high'])
+                
+                # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
+                if tp1_hit:
+                    trailing_stop = max_price_since_tp1 - (max_price_since_tp1 - entry_price) * trailing_pct
+                else:
+                    trailing_stop = stop_loss
+                
+                # Check each position
+                for pos in positions:
+                    if not pos['active']:
+                        continue
+                    
+                    # Determine active stop for this position
+                    if pos['use_trailing'] and tp1_hit:
+                        active_stop = trailing_stop
+                    else:
+                        active_stop = stop_loss
+                    
+                    # Check SL/Trailing Stop hit
+                    if future_candle['low'] <= active_stop:
+                        pnl = ((active_stop - entry_price) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        if pnl < 0:
+                            pos['outcome'] = 'Loss ❌'
+                            pos['tp_level_hit'] = 'SL'
+                            pos['close_reason'] = 'SL'
+                        else:
+                            pos['outcome'] = 'Win ✅'
+                            pos['tp_level_hit'] = 'Trailing'
+                            pos['close_reason'] = 'Trailing Stop'
+                        continue
+                    
+                    # Check TP hit
+                    if future_candle['high'] >= pos['target_tp']:
+                        pnl = ((pos['target_tp'] - entry_price) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        pos['outcome'] = 'Win ✅'
+                        # Determine which TP level
+                        if pos['position_num'] == 1:
+                            pos['tp_level_hit'] = 'TP1'
+                            pos['close_reason'] = 'TP1'
+                        elif pos['position_num'] == 2:
+                            pos['tp_level_hit'] = 'TP2'
+                            pos['close_reason'] = 'TP2'
+                        else:
+                            pos['tp_level_hit'] = 'TP3'
+                            pos['close_reason'] = 'TP3'
+                        continue
+            
+            else:  # SELL signal
+                # Check if TP1 hit (for trailing activation)
+                if not tp1_hit and future_candle['low'] <= tp1:
+                    tp1_hit = True
+                    tp1_hit_bar = bars
+                    min_price_since_tp1 = future_candle['low']
+                
+                # Update min price since TP1 for trailing calculation
+                if tp1_hit:
+                    min_price_since_tp1 = min(min_price_since_tp1, future_candle['low'])
+                
+                # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
+                if tp1_hit:
+                    trailing_stop = min_price_since_tp1 + (entry_price - min_price_since_tp1) * trailing_pct
+                else:
+                    trailing_stop = stop_loss
+                
+                # Check each position
+                for pos in positions:
+                    if not pos['active']:
+                        continue
+                    
+                    # Determine active stop for this position
+                    if pos['use_trailing'] and tp1_hit:
+                        active_stop = trailing_stop
+                    else:
+                        active_stop = stop_loss
+                    
+                    # Check SL/Trailing Stop hit
+                    if future_candle['high'] >= active_stop:
+                        pnl = ((entry_price - active_stop) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        if pnl < 0:
+                            pos['outcome'] = 'Loss ❌'
+                            pos['tp_level_hit'] = 'SL'
+                            pos['close_reason'] = 'SL'
+                        else:
+                            pos['outcome'] = 'Win ✅'
+                            pos['tp_level_hit'] = 'Trailing'
+                            pos['close_reason'] = 'Trailing Stop'
+                        continue
+                    
+                    # Check TP hit
+                    if future_candle['low'] <= pos['target_tp']:
+                        pnl = ((entry_price - pos['target_tp']) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        pos['outcome'] = 'Win ✅'
+                        # Determine which TP level
+                        if pos['position_num'] == 1:
+                            pos['tp_level_hit'] = 'TP1'
+                            pos['close_reason'] = 'TP1'
+                        elif pos['position_num'] == 2:
+                            pos['tp_level_hit'] = 'TP2'
+                            pos['close_reason'] = 'TP2'
+                        else:
+                            pos['tp_level_hit'] = 'TP3'
+                            pos['close_reason'] = 'TP3'
+                        continue
+            
+            # Limit check to 100 bars
+            if bars >= 100:
+                for pos in positions:
+                    if pos['active']:
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        # Calculate P&L at timeout
+                        current_price = future_candle['close']
+                        if signal_type == 1:
+                            pnl = ((current_price - entry_price) / entry_price) * 100
+                        else:
+                            pnl = ((entry_price - current_price) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['outcome'] = 'Timeout'
+                        pos['close_reason'] = 'Timeout'
+                break
+        
+        return positions
 
     def _calculate_multi_tp_outcome_live_style(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles):
         """
@@ -2199,11 +2607,18 @@ class SignalAnalysisDialog(QDialog):
         
     def populate_results_table(self, signals_df):
         """Populate results table with signals"""
-        # Check if multi-TP mode was used
+        # Check if multi-TP mode was used and if it has position groups
         has_tp_levels = 'tp_levels_hit' in signals_df.columns
+        has_position_groups = 'position_group_id' in signals_df.columns and signals_df['position_group_id'].notna().any()
         
         # Update table columns dynamically
-        if has_tp_levels:
+        if has_position_groups:
+            # Show position column in 3-position mode
+            self.results_table.setColumnCount(12)
+            self.results_table.setHorizontalHeaderLabels([
+                'Date/Time', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
+            ])
+        elif has_tp_levels:
             self.results_table.setColumnCount(11)
             self.results_table.setHorizontalHeaderLabels([
                 'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
@@ -2223,13 +2638,34 @@ class SignalAnalysisDialog(QDialog):
         
         self.results_table.setRowCount(len(signals_df))
         
+        # Track current group for alternating colors
+        current_group_id = None
+        group_color_toggle = False
+        
         for row_idx, (timestamp, row) in enumerate(signals_df.iterrows()):
             col_idx = 0
+            
+            # Track group changes for visual separation
+            if has_position_groups:
+                group_id = row.get('position_group_id', '')
+                if group_id != current_group_id:
+                    current_group_id = group_id
+                    group_color_toggle = not group_color_toggle
             
             # Date/Time
             date_item = QTableWidgetItem(timestamp.strftime('%Y-%m-%d %H:%M'))
             self.results_table.setItem(row_idx, col_idx, date_item)
             col_idx += 1
+            
+            # Position number (only in 3-position mode)
+            if has_position_groups:
+                pos_num = row.get('position_num', 0)
+                pos_item = QTableWidgetItem(str(int(pos_num)) if pos_num else '-')
+                # Add visual indicator for position groups
+                if group_color_toggle:
+                    pos_item.setBackground(Qt.lightGray)
+                self.results_table.setItem(row_idx, col_idx, pos_item)
+                col_idx += 1
             
             # Type
             signal_type = "BUY 📈" if row['signal'] == 1 else "SELL 📉"
@@ -2238,11 +2674,15 @@ class SignalAnalysisDialog(QDialog):
                 type_item.setForeground(Qt.darkGreen)
             else:
                 type_item.setForeground(Qt.darkRed)
+            if has_position_groups and group_color_toggle:
+                type_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, type_item)
             col_idx += 1
             
             # Price
             price_item = QTableWidgetItem(f"${row['close']:.2f}")
+            if has_position_groups and group_color_toggle:
+                price_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, price_item)
             col_idx += 1
             
@@ -2255,6 +2695,8 @@ class SignalAnalysisDialog(QDialog):
                 if pd.isna(sl_value):
                     sl_value = 0
             sl_item = QTableWidgetItem(f"${sl_value:.2f}" if sl_value else "N/A")
+            if has_position_groups and group_color_toggle:
+                sl_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, sl_item)
             col_idx += 1
             
@@ -2270,6 +2712,8 @@ class SignalAnalysisDialog(QDialog):
                 if pd.isna(tp_value):
                     tp_value = 0
                 tp_item = QTableWidgetItem(f"${tp_value:.2f}" if tp_value else "N/A")
+            if has_position_groups and group_color_toggle:
+                tp_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, tp_item)
             col_idx += 1
             
@@ -2280,6 +2724,8 @@ class SignalAnalysisDialog(QDialog):
                 result_item.setForeground(Qt.darkGreen)
             elif 'Loss' in str(outcome):
                 result_item.setForeground(Qt.darkRed)
+            if has_position_groups and group_color_toggle:
+                result_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, result_item)
             col_idx += 1
             
@@ -2292,11 +2738,13 @@ class SignalAnalysisDialog(QDialog):
                 profit_item.setForeground(Qt.darkGreen)
             elif profit_pct < 0:
                 profit_item.setForeground(Qt.darkRed)
+            if has_position_groups and group_color_toggle:
+                profit_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, profit_item)
             col_idx += 1
             
             # TP Levels Hit (only in multi-TP mode)
-            if has_tp_levels:
+            if has_tp_levels and not has_position_groups:
                 tp_levels = row.get('tp_levels_hit', 'None')
                 if pd.isna(tp_levels) or not tp_levels:
                     tp_levels = 'None'
@@ -2309,12 +2757,31 @@ class SignalAnalysisDialog(QDialog):
                     tp_levels_item.setForeground(Qt.darkBlue)
                 self.results_table.setItem(row_idx, col_idx, tp_levels_item)
                 col_idx += 1
+            elif has_position_groups:
+                # In 3-position mode, show individual TP hit instead
+                tp_level = row.get('tp_levels_hit', 'None')
+                if pd.isna(tp_level) or not tp_level:
+                    tp_level = 'None'
+                tp_level_item = QTableWidgetItem(str(tp_level))
+                # Color code
+                if tp_level in ['TP1', 'TP2', 'TP3']:
+                    tp_level_item.setForeground(Qt.darkGreen)
+                elif tp_level == 'SL':
+                    tp_level_item.setForeground(Qt.darkRed)
+                elif tp_level == 'Trailing':
+                    tp_level_item.setForeground(Qt.darkBlue)
+                if group_color_toggle:
+                    tp_level_item.setBackground(Qt.lightGray)
+                self.results_table.setItem(row_idx, col_idx, tp_level_item)
+                col_idx += 1
             
             # Bars Held
             bars = row.get('bars_held', 0)
             if pd.isna(bars):
                 bars = 0
             bars_item = QTableWidgetItem(f"{int(bars)}" if bars > 0 else "-")
+            if has_position_groups and group_color_toggle:
+                bars_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, bars_item)
             col_idx += 1
             
@@ -2323,6 +2790,8 @@ class SignalAnalysisDialog(QDialog):
             if pd.isna(reason) or not reason:
                 reason = 'N/A'
             reason_item = QTableWidgetItem(str(reason))
+            if has_position_groups and group_color_toggle:
+                reason_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, reason_item)
             col_idx += 1
             
@@ -2331,6 +2800,8 @@ class SignalAnalysisDialog(QDialog):
             if pd.isna(regime) or not regime:
                 regime = 'N/A'
             regime_item = QTableWidgetItem(str(regime))
+            if has_position_groups and group_color_toggle:
+                regime_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, regime_item)
             
     def export_csv(self):
