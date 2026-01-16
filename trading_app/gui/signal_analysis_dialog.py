@@ -386,7 +386,6 @@ class SignalAnalysisWorker(QThread):
         """
         # Track TP1 hit for trailing activation
         tp1_hit = False
-        tp1_hit_bar = -1
         
         # Initialize positions
         positions = [
@@ -411,7 +410,6 @@ class SignalAnalysisWorker(QThread):
                 # Check if TP1 hit (for trailing activation)
                 if not tp1_hit and future_candle['high'] >= tp1:
                     tp1_hit = True
-                    tp1_hit_bar = bars
                     max_price_since_tp1 = future_candle['high']
                 
                 # Update max price since TP1 for trailing calculation
@@ -474,7 +472,6 @@ class SignalAnalysisWorker(QThread):
                 # Check if TP1 hit (for trailing activation)
                 if not tp1_hit and future_candle['low'] <= tp1:
                     tp1_hit = True
-                    tp1_hit_bar = bars
                     min_price_since_tp1 = future_candle['low']
                 
                 # Update min price since TP1 for trailing calculation
@@ -500,7 +497,6 @@ class SignalAnalysisWorker(QThread):
                     
                     # Check SL/Trailing Stop hit
                     if future_candle['high'] >= active_stop:
-                        pnl = ((entry_price - active_stop) / entry_price) * 100
                         pos['profit_pct'] = pnl
                         pos['bars'] = bars
                         pos['active'] = False
@@ -1219,12 +1215,19 @@ class SignalAnalysisWorkerMT5(QThread):
             # Remove original signal rows (marked for deletion)
             signals_df = signals_df[signals_df['outcome'] != '_DELETE_'].copy()
             
-            # Add new position rows
+            # Add new position rows with unique indices
+            # Flatten new_rows: each entry is (timestamp, row_data)
+            rows_to_add = []
             for orig_idx, new_row in new_rows:
-                # Use original timestamp with a small offset for each position to keep ordering
-                signals_df.loc[orig_idx] = new_row
+                rows_to_add.append(new_row)
             
-            # Sort by timestamp
+            # Create new DataFrame from position rows
+            if rows_to_add:
+                positions_df = pd.DataFrame(rows_to_add)
+                # Concatenate with remaining signals
+                signals_df = pd.concat([signals_df, positions_df])
+            
+            # Sort by timestamp and position number
             signals_df = signals_df.sort_index()
         
         return signals_df
@@ -1303,7 +1306,6 @@ class SignalAnalysisWorkerMT5(QThread):
         """
         # Track TP1 hit for trailing activation
         tp1_hit = False
-        tp1_hit_bar = -1
         
         # Initialize positions
         positions = [
@@ -1328,7 +1330,6 @@ class SignalAnalysisWorkerMT5(QThread):
                 # Check if TP1 hit (for trailing activation)
                 if not tp1_hit and future_candle['high'] >= tp1:
                     tp1_hit = True
-                    tp1_hit_bar = bars
                     max_price_since_tp1 = future_candle['high']
                 
                 # Update max price since TP1 for trailing calculation
@@ -1391,7 +1392,6 @@ class SignalAnalysisWorkerMT5(QThread):
                 # Check if TP1 hit (for trailing activation)
                 if not tp1_hit and future_candle['low'] <= tp1:
                     tp1_hit = True
-                    tp1_hit_bar = bars
                     min_price_since_tp1 = future_candle['low']
                 
                 # Update min price since TP1 for trailing calculation
