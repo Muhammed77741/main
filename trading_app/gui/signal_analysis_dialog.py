@@ -359,13 +359,37 @@ class SignalAnalysisWorker(QThread):
                 signals_df.loc[idx, 'tp3_used'] = tp3
                 signals_df.loc[idx, 'sl_used'] = stop_loss
                 
-                result = self._calculate_multi_tp_outcome_live_style(
-                    signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles
+                # Calculate 3-position outcomes
+                position_results = self._calculate_3_position_outcome(
+                    signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles, self.trailing_pct
                 )
-                signals_df.loc[idx, 'outcome'] = result['outcome']
-                signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
-                signals_df.loc[idx, 'bars_held'] = result['bars']
-                signals_df.loc[idx, 'tp_levels_hit'] = result['tp_levels_hit']
+                
+                # Generate unique group ID for these 3 positions
+                group_id = str(uuid.uuid4())
+                
+                # Create a row for each position
+                for pos_result in position_results:
+                    # Create a copy of the original signal row
+                    new_row = signal_row.copy()
+                    
+                    # Update with position-specific data
+                    new_row['position_group_id'] = group_id
+                    new_row['position_num'] = pos_result['position_num']
+                    new_row['outcome'] = pos_result['outcome']
+                    new_row['profit_pct'] = pos_result['profit_pct']
+                    new_row['bars_held'] = pos_result['bars']
+                    new_row['tp_levels_hit'] = pos_result['tp_level_hit']
+                    new_row['tp1_used'] = tp1
+                    new_row['tp2_used'] = tp2
+                    new_row['tp3_used'] = tp3
+                    new_row['sl_used'] = stop_loss
+                    new_row['regime'] = regime
+                    
+                    # Add to new rows list
+                    new_rows.append((idx, new_row))
+                
+                # Mark original row for deletion (we'll replace with 3 position rows)
+                signals_df.loc[idx, 'outcome'] = '_DELETE_'
             else:
                 result = self._calculate_single_tp_outcome(
                     signal_type, entry_price, stop_loss, take_profit, future_candles
@@ -373,6 +397,28 @@ class SignalAnalysisWorker(QThread):
                 signals_df.loc[idx, 'outcome'] = result['outcome']
                 signals_df.loc[idx, 'profit_pct'] = result['profit_pct']
                 signals_df.loc[idx, 'bars_held'] = result['bars']
+        
+        # If multi-TP mode, replace original rows with position rows
+        if self.use_multi_tp and new_rows:
+            # Remove original signal rows (marked for deletion)
+            signals_df = signals_df[signals_df['outcome'] != '_DELETE_'].copy()
+            
+            # Add new position rows with unique indices
+            # Flatten new_rows: each entry is (timestamp, row_data)
+            rows_to_add = []
+            for orig_idx, new_row in new_rows:
+                rows_to_add.append(new_row)
+            
+            # Create new DataFrame from position rows
+            if rows_to_add:
+                positions_df = pd.DataFrame(rows_to_add)
+                # Concatenate with remaining signals
+                signals_df = pd.concat([signals_df, positions_df])
+            
+            # Sort by timestamp and position number
+            signals_df = signals_df.sort_index()
+        
+        return signals_df
     
     def _calculate_3_position_outcome(self, signal_type, entry_price, stop_loss, tp1, tp2, tp3, future_candles, trailing_pct):
         """
@@ -497,6 +543,7 @@ class SignalAnalysisWorker(QThread):
                     
                     # Check SL/Trailing Stop hit
                     if future_candle['high'] >= active_stop:
+                        pnl = ((entry_price - active_stop) / entry_price) * 100
                         pos['profit_pct'] = pnl
                         pos['bars'] = bars
                         pos['active'] = False
