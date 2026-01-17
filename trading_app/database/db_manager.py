@@ -339,13 +339,14 @@ class DatabaseManager:
                     bot_id, symbol, order_id, open_time, close_time, duration_hours,
                     trade_type, amount, entry_price, close_price,
                     stop_loss, take_profit, profit, profit_percent,
-                    status, market_regime, comment
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, market_regime, comment, position_group_id, position_num
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade.bot_id, trade.symbol, trade.order_id, trade.open_time, trade.close_time, trade.duration_hours,
                 trade.trade_type, trade.amount, trade.entry_price, trade.close_price,
                 trade.stop_loss, trade.take_profit, trade.profit, trade.profit_percent,
-                trade.status, trade.market_regime, trade.comment
+                trade.status, trade.market_regime, trade.comment,
+                trade.position_group_id, trade.position_num
             ))
 
             self.conn.commit()
@@ -366,10 +367,11 @@ class DatabaseManager:
 
         trades = []
         for row in cursor.fetchall():
+            columns = row.keys()
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
-                symbol=row['symbol'] if 'symbol' in row.keys() else None,
+                symbol=row['symbol'] if 'symbol' in columns else None,
                 order_id=row['order_id'],
                 open_time=self._parse_datetime(row['open_time']),
                 close_time=self._parse_datetime(row['close_time']),
@@ -384,7 +386,9 @@ class DatabaseManager:
                 profit_percent=row['profit_percent'],
                 status=row['status'],
                 market_regime=row['market_regime'],
-                comment=row['comment']
+                comment=row['comment'],
+                position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
+                position_num=row['position_num'] if 'position_num' in columns else 0
             ))
 
         return trades
@@ -400,10 +404,11 @@ class DatabaseManager:
 
         trades = []
         for row in cursor.fetchall():
+            columns = row.keys()
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
-                symbol=row['symbol'] if 'symbol' in row.keys() else None,
+                symbol=row['symbol'] if 'symbol' in columns else None,
                 order_id=row['order_id'],
                 open_time=self._parse_datetime(row['open_time']),
                 close_time=self._parse_datetime(row['close_time']),
@@ -418,7 +423,9 @@ class DatabaseManager:
                 profit_percent=row['profit_percent'],
                 status=row['status'],
                 market_regime=row['market_regime'],
-                comment=row['comment']
+                comment=row['comment'],
+                position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
+                position_num=row['position_num'] if 'position_num' in columns else 0
             ))
 
         return trades

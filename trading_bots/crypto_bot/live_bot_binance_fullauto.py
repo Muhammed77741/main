@@ -16,6 +16,7 @@ from pathlib import Path
 import csv
 import os
 import asyncio
+import uuid
 
 # Add parent directory to path to access shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -43,7 +44,8 @@ class LiveBotBinanceFullAuto:
                  check_interval=3600, risk_percent=2.0, max_positions=3,
                  dry_run=False, testnet=True, api_key=None, api_secret=None,
                  trailing_stop_enabled=True, trailing_stop_percent=1.5,
-                 bot_id=None, use_database=True):
+                 bot_id=None, use_database=True, use_3_position_mode=False,
+                 total_position_size=None, min_order_size=None):
         """
         Initialize bot
 
@@ -79,6 +81,11 @@ class LiveBotBinanceFullAuto:
         # Bot identification for database
         self.bot_id = bot_id or f"crypto_bot_{symbol.replace('/', '_')}"
         self.use_database = use_database
+
+        # Phase 2: 3-Position Mode settings
+        self.use_3_position_mode = use_3_position_mode
+        self.total_position_size = total_position_size
+        self.min_order_size = min_order_size
 
         # Trailing stop settings
         self.trailing_stop_enabled = trailing_stop_enabled
@@ -169,7 +176,7 @@ class LiveBotBinanceFullAuto:
             print(f"📝 Created TP hits log file: {self.tp_hits_file}")
 
     def _log_position_opened(self, order_id, position_type, amount, entry_price,
-                             sl, tp, regime, comment=''):
+                             sl, tp, regime, comment='', position_group_id=None, position_num=0):
         """Log when position is opened"""
         open_time = datetime.now()
         
@@ -210,7 +217,9 @@ class LiveBotBinanceFullAuto:
                     take_profit=tp,
                     status='OPEN',
                     market_regime=regime,
-                    comment=comment
+                    comment=comment,
+                    position_group_id=position_group_id,
+                    position_num=position_num
                 )
                 self.db.add_trade(trade)
                 print(f"📊 Position saved to database: Order={order_id}")

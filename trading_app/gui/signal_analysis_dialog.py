@@ -2266,72 +2266,13 @@ class SignalAnalysisDialog(QDialog):
         
         layout.addWidget(self.multi_tp_custom_group)
 
-        # Phase 2: Position Sizing & 3-Position Mode
-        position_sizing_group = QGroupBox("Position Sizing (Phase 2)")
-        position_sizing_layout = QVBoxLayout(position_sizing_group)
-
-        # Row 1: 3-Position Mode toggle
-        row_3pos = QHBoxLayout()
-        self.use_3_position_check = QCheckBox("Enable 3-Position Mode")
-        self.use_3_position_check.setChecked(False)
-        self.use_3_position_check.setToolTip(
-            "Enable 3-position trading mode:\n\n"
-            "Creates 3 independent positions per signal:\n"
-            "  Position 1: Targets TP1 (no trailing)\n"
-            "  Position 2: Targets TP2 (trails after TP1)\n"
-            "  Position 3: Targets TP3 (trails after TP1)\n\n"
-            "Requires Multi-TP mode to be enabled"
-        )
-        self.use_3_position_check.stateChanged.connect(self.on_3_position_changed)
-        row_3pos.addWidget(self.use_3_position_check)
-        row_3pos.addStretch()
-        position_sizing_layout.addLayout(row_3pos)
-
-        # Row 2: Total Position Size and Min Order Size
-        row_sizing = QHBoxLayout()
-
-        row_sizing.addWidget(QLabel("Total Position Size:"))
-        self.total_position_size_spin = QSpinBox()
-        self.total_position_size_spin.setRange(0, 1000000)
-        self.total_position_size_spin.setValue(0)
-        self.total_position_size_spin.setSuffix(" USD")
-        self.total_position_size_spin.setToolTip(
-            "Total position size in USD (0 = use risk %)\n"
-            "In 3-position mode, this is split across 3 positions"
-        )
-        self.total_position_size_spin.valueChanged.connect(self.on_position_size_changed)
-        row_sizing.addWidget(self.total_position_size_spin)
-
-        row_sizing.addWidget(QLabel("  Min Order Size:"))
-        self.min_order_size_spin = QSpinBox()
-        self.min_order_size_spin.setRange(1, 10000)
-        self.min_order_size_spin.setValue(10)
-        self.min_order_size_spin.setSuffix(" USD")
-        self.min_order_size_spin.setToolTip(
-            "Minimum order size for exchange\n"
-            "Positions will be auto-adjusted if below minimum"
-        )
-        row_sizing.addWidget(self.min_order_size_spin)
-
-        row_sizing.addStretch()
-        position_sizing_layout.addLayout(row_sizing)
-
-        # Row 3: Capital Warning Label
-        self.capital_warning_label = QLabel("")
-        self.capital_warning_label.setStyleSheet("color: orange; font-weight: bold;")
-        self.capital_warning_label.hide()
-        position_sizing_layout.addWidget(self.capital_warning_label)
-
-        layout.addWidget(position_sizing_group)
-
         # Initialize TP/SL labels based on selected symbol
         self.update_tp_sl_labels()
 
         # Note about default strategy
         note_label = QLabel(
             "<i>Single-TP mode: Use TP/SL multipliers above (Fibonacci-style)<br>"
-            "Multi-TP mode: Uses live bot's regime-based TP levels (TREND/RANGE auto-detected)<br>"
-            "3-Position mode: Creates 3 separate positions with group tracking</i>"
+            "Multi-TP mode: Uses live bot's regime-based TP levels (TREND/RANGE auto-detected)</i>"
         )
         note_label.setStyleSheet("color: gray;")
         layout.addWidget(note_label)
@@ -2348,61 +2289,6 @@ class SignalAnalysisDialog(QDialog):
         # The custom section should remain collapsed by default to use correct regime-based defaults
         pass
 
-    def on_3_position_changed(self, state):
-        """Handle 3-position mode checkbox change"""
-        is_checked = (state == 2)  # 2 = Qt.Checked
-
-        # 3-position mode requires multi-TP mode
-        if is_checked and not self.use_multi_tp_check.isChecked():
-            QMessageBox.warning(
-                self,
-                "Multi-TP Required",
-                "3-Position mode requires Multi-TP mode to be enabled.\n"
-                "Enabling Multi-TP mode automatically."
-            )
-            self.use_multi_tp_check.setChecked(True)
-
-        # Update position size warning
-        self.on_position_size_changed(self.total_position_size_spin.value())
-
-    def on_position_size_changed(self, value):
-        """Handle position size change and show capital warning if >50%"""
-        if value == 0:
-            self.capital_warning_label.hide()
-            return
-
-        # Get account balance from config or use default
-        account_balance = 10000  # Default for backtest
-        if hasattr(self.config, 'balance') and self.config.balance:
-            account_balance = self.config.balance
-
-        # Calculate percentage of capital
-        capital_pct = (value / account_balance) * 100
-
-        # Show warning if >50% capital
-        if capital_pct > 50:
-            self.capital_warning_label.setText(
-                f"⚠️  Warning: Position size is {capital_pct:.1f}% of capital (>${50}% threshold)"
-            )
-            self.capital_warning_label.show()
-        else:
-            self.capital_warning_label.hide()
-
-        # Check minimum order size in 3-position mode
-        if self.use_3_position_check.isChecked():
-            min_order = self.min_order_size_spin.value()
-            position_per_part = value / 3  # Split across 3 positions
-
-            if position_per_part < min_order:
-                adjusted_total = min_order * 3
-                QMessageBox.information(
-                    self,
-                    "Position Size Adjusted",
-                    f"Each position would be ${position_per_part:.2f}, below minimum ${min_order}.\n"
-                    f"Auto-adjusting total position size to ${adjusted_total} (${min_order} × 3)"
-                )
-                self.total_position_size_spin.setValue(adjusted_total)
-    
     def on_symbol_changed(self, symbol):
         """Handle symbol change - update labels and load saved defaults"""
         self.update_tp_sl_labels()
