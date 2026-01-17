@@ -2074,11 +2074,13 @@ class SignalAnalysisDialog(QDialog):
         
         row2.addStretch()
         layout.addLayout(row2)
-        
-        # Row 3: Backtest Parameters (expandable)
-        params_label = QLabel("<b>Backtest Parameters</b> (optional - override strategy defaults):")
-        layout.addWidget(params_label)
-        
+
+        # Backtest Parameters (collapsible group)
+        self.backtest_params_group = QGroupBox("Backtest Parameters (optional - override strategy defaults)")
+        self.backtest_params_group.setCheckable(True)
+        self.backtest_params_group.setChecked(False)  # Collapsed by default
+        backtest_layout = QVBoxLayout(self.backtest_params_group)
+
         # TP/SL parameters
         row3 = QHBoxLayout()
         
@@ -2099,10 +2101,10 @@ class SignalAnalysisDialog(QDialog):
         self.sl_multiplier_spin.setSuffix("% (x1.0)")
         self.sl_multiplier_spin.setToolTip("Stop Loss multiplier. 100% = default, 150% = wider SL")
         row3.addWidget(self.sl_multiplier_spin)
-        
+
         row3.addStretch()
-        layout.addLayout(row3)
-        
+        backtest_layout.addLayout(row3)
+
         # Trailing stop
         row4 = QHBoxLayout()
         
@@ -2119,10 +2121,10 @@ class SignalAnalysisDialog(QDialog):
         self.trailing_pct_spin.setEnabled(False)
         self.trailing_pct_spin.setToolTip("When profit reaches TP, trail stop at this % of profit")
         row4.addWidget(self.trailing_pct_spin)
-        
+
         row4.addStretch()
-        layout.addLayout(row4)
-        
+        backtest_layout.addLayout(row4)
+
         # Multi-TP mode
         row5 = QHBoxLayout()
         
@@ -2141,10 +2143,10 @@ class SignalAnalysisDialog(QDialog):
             "Market regime auto-detected (TREND/RANGE)"
         )
         row5.addWidget(self.use_multi_tp_check)
-        
+
         row5.addStretch()
-        layout.addLayout(row5)
-        
+        backtest_layout.addLayout(row5)
+
         # Multi-TP customization section (collapsible)
         self.multi_tp_custom_group = QGroupBox("Custom TP Levels (Optional - Override Defaults)")
         self.multi_tp_custom_group.setCheckable(True)
@@ -2278,19 +2280,21 @@ class SignalAnalysisDialog(QDialog):
         save_button_row.addWidget(self.save_tp_defaults_btn)
         save_button_row.addStretch()
         multi_tp_layout.addLayout(save_button_row)
-        
-        layout.addWidget(self.multi_tp_custom_group)
 
-        # Initialize TP/SL labels based on selected symbol
-        self.update_tp_sl_labels()
+        backtest_layout.addWidget(self.multi_tp_custom_group)
 
         # Note about default strategy
         note_label = QLabel(
-            "<i>Single-TP mode: Use TP/SL multipliers above (Fibonacci-style)<br>"
-            "Multi-TP mode: Uses live bot's regime-based TP levels (TREND/RANGE auto-detected)</i>"
+            "<i>Single-TP: TP/SL multipliers (Fibonacci-style) | Multi-TP: Regime-based TP (TREND/RANGE)</i>"
         )
         note_label.setStyleSheet("color: gray;")
-        layout.addWidget(note_label)
+        backtest_layout.addWidget(note_label)
+
+        # Add the backtest params group to main layout
+        layout.addWidget(self.backtest_params_group)
+
+        # Initialize TP/SL labels based on selected symbol
+        self.update_tp_sl_labels()
 
         return group
     
@@ -2390,9 +2394,13 @@ class SignalAnalysisDialog(QDialog):
             # Get current symbol to determine which format to save
             symbol = self.symbol_combo.currentText()
             is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
-            
+
+            # Normalize symbol name for filename (BTC/USDT -> BTC, ETH/USDT -> ETH, XAUUSD -> XAUUSD)
+            symbol_key = symbol.split('/')[0] if '/' in symbol else symbol
+
             # Collect values from spin boxes
             settings = {
+                'symbol': symbol,
                 'is_xauusd': is_xauusd,
                 'trend_tp1': self.trend_tp1_spin.value(),
                 'trend_tp2': self.trend_tp2_spin.value(),
@@ -2404,11 +2412,11 @@ class SignalAnalysisDialog(QDialog):
                 'range_sl': self.range_sl_spin.value(),
                 'trailing_stop_pct': self.trailing_stop_spin.value(),
             }
-            
-            # Save to config file in user's home directory
+
+            # Save to config file in user's home directory - separate file per symbol
             config_dir = os.path.expanduser("~/.trading_app")
             os.makedirs(config_dir, exist_ok=True)
-            config_file = os.path.join(config_dir, "signal_analysis_tp_defaults.json")
+            config_file = os.path.join(config_dir, f"signal_analysis_tp_defaults_{symbol_key}.json")
             
             with open(config_file, 'w') as f:
                 json.dump(settings, f, indent=2)
@@ -2433,35 +2441,37 @@ class SignalAnalysisDialog(QDialog):
             )
     
     def load_tp_defaults(self):
-        """Load saved TP/SL defaults if they exist"""
+        """Load saved TP/SL defaults if they exist for current symbol"""
         try:
             import json
             import os
-            
-            config_dir = os.path.expanduser("~/.trading_app")
-            config_file = os.path.join(config_dir, "signal_analysis_tp_defaults.json")
-            
-            if not os.path.exists(config_file):
-                return  # No saved defaults, use built-in defaults
-            
-            with open(config_file, 'r') as f:
-                settings = json.load(f)
-            
+
             # Get current symbol
             symbol = self.symbol_combo.currentText()
             is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
-            
-            # Only apply saved settings if they match the current symbol type
-            if settings.get('is_xauusd') == is_xauusd:
-                self.trend_tp1_spin.setValue(settings.get('trend_tp1', self.trend_tp1_spin.value()))
-                self.trend_tp2_spin.setValue(settings.get('trend_tp2', self.trend_tp2_spin.value()))
-                self.trend_tp3_spin.setValue(settings.get('trend_tp3', self.trend_tp3_spin.value()))
-                self.trend_sl_spin.setValue(settings.get('trend_sl', self.trend_sl_spin.value()))
-                self.range_tp1_spin.setValue(settings.get('range_tp1', self.range_tp1_spin.value()))
-                self.range_tp2_spin.setValue(settings.get('range_tp2', self.range_tp2_spin.value()))
-                self.range_tp3_spin.setValue(settings.get('range_tp3', self.range_tp3_spin.value()))
-                self.range_sl_spin.setValue(settings.get('range_sl', self.range_sl_spin.value()))
-                self.trailing_stop_spin.setValue(settings.get('trailing_stop_pct', 50))
+
+            # Normalize symbol name for filename
+            symbol_key = symbol.split('/')[0] if '/' in symbol else symbol
+
+            config_dir = os.path.expanduser("~/.trading_app")
+            config_file = os.path.join(config_dir, f"signal_analysis_tp_defaults_{symbol_key}.json")
+
+            if not os.path.exists(config_file):
+                return  # No saved defaults for this symbol, use built-in defaults
+
+            with open(config_file, 'r') as f:
+                settings = json.load(f)
+
+            # Apply saved settings for this symbol
+            self.trend_tp1_spin.setValue(settings.get('trend_tp1', self.trend_tp1_spin.value()))
+            self.trend_tp2_spin.setValue(settings.get('trend_tp2', self.trend_tp2_spin.value()))
+            self.trend_tp3_spin.setValue(settings.get('trend_tp3', self.trend_tp3_spin.value()))
+            self.trend_sl_spin.setValue(settings.get('trend_sl', self.trend_sl_spin.value()))
+            self.range_tp1_spin.setValue(settings.get('range_tp1', self.range_tp1_spin.value()))
+            self.range_tp2_spin.setValue(settings.get('range_tp2', self.range_tp2_spin.value()))
+            self.range_tp3_spin.setValue(settings.get('range_tp3', self.range_tp3_spin.value()))
+            self.range_sl_spin.setValue(settings.get('range_sl', self.range_sl_spin.value()))
+            self.trailing_stop_spin.setValue(settings.get('trailing_stop_pct', 50))
 
         except Exception as e:
             # Silently fail - just use defaults

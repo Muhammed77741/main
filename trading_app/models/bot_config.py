@@ -27,7 +27,7 @@ class BotConfig:
 
     # Position sizing (Phase 2)
     total_position_size: Optional[float] = None  # Total position size in base currency
-    use_3_position_mode: bool = False  # Enable 3-position trading mode
+    use_3_position_mode: bool = True  # Enable 3-position trading mode (TP1, TP2, TP3)
     min_order_size: Optional[float] = None  # Minimum order size for exchange
     trailing_stop_pct: float = 0.5  # Trailing stop percentage (0.5 = 50% retracement from max profit)
 
