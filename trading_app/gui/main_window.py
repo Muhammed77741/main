@@ -611,46 +611,85 @@ class MainWindow(QMainWindow):
         """Update live open positions display"""
         if not hasattr(self, 'live_positions_label') or self.live_positions_label is None:
             return
-            
+
         if not self.current_bot_id:
             self.live_positions_label.setText("No bot selected")
             return
-        
+
         try:
             # Get open positions from database
             open_trades = self.db.get_open_trades(self.current_bot_id)
-            
+
             if not open_trades or len(open_trades) == 0:
                 self.live_positions_label.setText("<p style='color: #666; font-size: 12px;'>No open positions</p>")
                 return
-            
-            # Calculate total P&L
-            total_pnl = sum(trade.profit if trade.profit else 0.0 for trade in open_trades)
-            
+
+            # Get bot config to fetch current price
+            config = self.db.load_config(self.current_bot_id)
+            if not config:
+                self.live_positions_label.setText("<p style='color: #F44336;'>Bot config not found</p>")
+                return
+
+            # Fetch current price from exchange
+            current_price = None
+            try:
+                if config.exchange == 'Binance':
+                    import ccxt
+                    # Use public data (no credentials needed for ticker)
+                    exchange = ccxt.binance({
+                        'enableRateLimit': True,
+                        'options': {'defaultType': 'future'}
+                    })
+                    ticker = exchange.fetch_ticker(config.symbol)
+                    current_price = ticker.get('last')
+                elif config.exchange == 'MT5':
+                    import MetaTrader5 as mt5
+                    if mt5.initialize():
+                        try:
+                            tick = mt5.symbol_info_tick(config.symbol)
+                            if tick and tick.last > 0:
+                                current_price = tick.last
+                            elif tick:
+                                # Try bid/ask if last is not available
+                                current_price = (tick.bid + tick.ask) / 2 if tick.bid > 0 and tick.ask > 0 else None
+                        finally:
+                            mt5.shutdown()
+            except Exception as e:
+                print(f"⚠️  Could not fetch current price: {e}")
+                current_price = None
+
+            # Calculate total P&L with current price
+            total_pnl = 0.0
+            for trade in open_trades:
+                if current_price and trade.entry_price > 0:
+                    if trade.trade_type.upper() == 'BUY':
+                        trade.profit = (current_price - trade.entry_price) * trade.amount
+                    elif trade.trade_type.upper() == 'SELL':
+                        trade.profit = (trade.entry_price - current_price) * trade.amount
+                total_pnl += (trade.profit or 0.0)
+
             # Build HTML display
             positions_html = f"""
             <div style='font-size: 12px;'>
             <p style='font-weight: bold; font-size: 13px; margin-bottom: 8px;'>
-                {len(open_trades)} position{'s' if len(open_trades) != 1 else ''} open | 
+                {len(open_trades)} position{'s' if len(open_trades) != 1 else ''} open |
                 Total P&L: <span style='color: {'#4CAF50' if total_pnl >= 0 else '#F44336'}; font-weight: bold;'>
                 ${total_pnl:+,.2f}</span>
             </p>
             """
-            
+
             # Add each position
             for trade in open_trades[:5]:  # Show max 5 positions
                 # Determine color based on profit
                 pnl_color = '#4CAF50' if (trade.profit or 0) >= 0 else '#F44336'
                 type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
 
-                # Get current price (if available from trade data)
-                current_price = trade.close_price if trade.close_price else trade.entry_price
+                # Use fetched current price or fallback to entry price
+                display_price = current_price if current_price else trade.entry_price
 
                 # Calculate P&L percentage
                 profit_pct = 0.0
-                if trade.profit_percent is not None:
-                    profit_pct = trade.profit_percent
-                elif trade.entry_price > 0 and trade.amount > 0:
+                if trade.entry_price > 0 and trade.amount > 0:
                     entry_value = trade.entry_price * trade.amount
                     profit_pct = ((trade.profit or 0) / entry_value * 100) if entry_value > 0 else 0.0
 
@@ -661,7 +700,7 @@ class MainWindow(QMainWindow):
                         <span style='color: #666;'>{trade.trade_type}</span>
                     </p>
                     <p style='margin: 2px 0; font-size: 11px; color: #666;'>
-                        Entry: {trade.entry_price:,.4f} → Current: {current_price:,.4f}
+                        Entry: {trade.entry_price:,.4f} → Current: {display_price:,.4f}
                     </p>
                     <p style='margin: 2px 0; font-size: 11px;'>
                         P&L: <span style='color: {pnl_color}; font-weight: bold;'>
