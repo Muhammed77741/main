@@ -66,6 +66,9 @@ class DatabaseManager:
                 range_tp1 REAL,
                 range_tp2 REAL,
                 range_tp3 REAL,
+                total_position_size REAL,
+                use_3_position_mode INTEGER DEFAULT 0,
+                min_order_size REAL,
                 telegram_enabled INTEGER DEFAULT 0,
                 telegram_token TEXT,
                 telegram_chat_id TEXT,
@@ -146,6 +149,47 @@ class DatabaseManager:
         except Exception as e:
             print(f"⚠️  Migration warning: {e}")
 
+        # Migrate trades table - add 3-position mode columns
+        try:
+            cursor.execute("PRAGMA table_info(trades)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'position_group_id' not in columns:
+                print("📊 Migrating trades table: adding position_group_id column...")
+                cursor.execute("ALTER TABLE trades ADD COLUMN position_group_id TEXT")
+                print("✅ position_group_id column added")
+
+            if 'position_num' not in columns:
+                print("📊 Migrating trades table: adding position_num column...")
+                cursor.execute("ALTER TABLE trades ADD COLUMN position_num INTEGER DEFAULT 0")
+                print("✅ position_num column added")
+
+        except Exception as e:
+            print(f"⚠️  3-position migration warning: {e}")
+
+        # Migrate bot_configs table - add Phase 2 position sizing columns
+        try:
+            cursor.execute("PRAGMA table_info(bot_configs)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'total_position_size' not in columns:
+                print("📊 Migrating bot_configs: adding total_position_size column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN total_position_size REAL")
+                print("✅ total_position_size column added")
+
+            if 'use_3_position_mode' not in columns:
+                print("📊 Migrating bot_configs: adding use_3_position_mode column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_3_position_mode INTEGER DEFAULT 0")
+                print("✅ use_3_position_mode column added")
+
+            if 'min_order_size' not in columns:
+                print("📊 Migrating bot_configs: adding min_order_size column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN min_order_size REAL")
+                print("✅ min_order_size column added")
+
+        except Exception as e:
+            print(f"⚠️  Phase 2 config migration warning: {e}")
+
         self.conn.commit()
 
     def save_config(self, config: BotConfig):
@@ -158,15 +202,19 @@ class DatabaseManager:
                 risk_percent, max_positions, timeframe, strategy,
                 trend_tp1, trend_tp2, trend_tp3,
                 range_tp1, range_tp2, range_tp3,
+                total_position_size, use_3_position_mode, min_order_size,
                 telegram_enabled, telegram_token, telegram_chat_id,
                 dry_run, testnet, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             config.bot_id, config.name, config.symbol, config.exchange,
             config.api_key, config.api_secret,
             config.risk_percent, config.max_positions, config.timeframe, config.strategy,
             config.trend_tp1, config.trend_tp2, config.trend_tp3,
             config.range_tp1, config.range_tp2, config.range_tp3,
+            getattr(config, 'total_position_size', None),
+            1 if getattr(config, 'use_3_position_mode', False) else 0,
+            getattr(config, 'min_order_size', None),
             1 if config.telegram_enabled else 0,
             config.telegram_token, config.telegram_chat_id,
             1 if config.dry_run else 0,
@@ -193,6 +241,9 @@ class DatabaseManager:
                 risk_percent=row['risk_percent'],
                 max_positions=row['max_positions'],
                 timeframe=row['timeframe'],
+                total_position_size=row.get('total_position_size'),
+                use_3_position_mode=bool(row.get('use_3_position_mode', 0)),
+                min_order_size=row.get('min_order_size'),
                 strategy=row['strategy'],
                 trend_tp1=row['trend_tp1'],
                 trend_tp2=row['trend_tp2'],

@@ -25,6 +25,11 @@ class BotConfig:
     max_positions: int = 3
     timeframe: str = '1h'
 
+    # Position sizing (Phase 2)
+    total_position_size: Optional[float] = None  # Total position size in base currency
+    use_3_position_mode: bool = False  # Enable 3-position trading mode
+    min_order_size: Optional[float] = None  # Minimum order size for exchange
+
     # Strategy parameters
     strategy: str = 'v3_adaptive'
 
