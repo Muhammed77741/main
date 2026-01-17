@@ -1866,8 +1866,8 @@ class SignalAnalysisDialog(QDialog):
         self.worker = None
         
         self.setWindowTitle(f"Signal Analysis - {config.name}")
-        self.setMinimumSize(1700, 1100)  # Increased height for buttons visibility
-        self.resize(1900, 1150)  # Set initial size larger and make it resizable
+        self.setMinimumSize(1700, 1300)  # Increased height to ensure buttons always visible
+        self.resize(1900, 1350)  # Set initial size larger and make it resizable
         
         # Check dependencies
         if not DEPENDENCIES_AVAILABLE:
@@ -2502,26 +2502,30 @@ class SignalAnalysisDialog(QDialog):
         """Create results table section"""
         group = QGroupBox("Signals Found")
         layout = QVBoxLayout(group)
-        
+
         # Table
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(10)
         self.results_table.setHorizontalHeaderLabels([
             'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
         ])
-        
+
+        # Set maximum height to prevent table from pushing buttons off screen
+        # This ensures buttons remain visible even with many results
+        self.results_table.setMaximumHeight(600)
+
         # Configure table
         header = self.results_table.horizontalHeader()
         header.setStretchLastSection(True)
         # Resize all columns to contents for better visibility
         for i in range(9):  # All columns except last
             header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
-        
+
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
-        
+
         layout.addWidget(self.results_table)
-        
+
         return group
         
     def on_days_changed(self, days):
