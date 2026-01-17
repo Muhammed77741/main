@@ -2106,27 +2106,6 @@ class SignalAnalysisDialog(QDialog):
         row3.addStretch()
         backtest_layout.addLayout(row3)
 
-        # Trailing stop
-        row4 = QHBoxLayout()
-        row4.setSpacing(5)
-
-        self.use_trailing_check = QCheckBox("Use Trailing Stop")
-        self.use_trailing_check.setChecked(False)
-        self.use_trailing_check.stateChanged.connect(self.on_trailing_changed)
-        row4.addWidget(self.use_trailing_check)
-        
-        row4.addWidget(QLabel("  Trailing %:"))
-        self.trailing_pct_spin = QSpinBox()
-        self.trailing_pct_spin.setRange(10, 100)
-        self.trailing_pct_spin.setValue(50)  # Default 50% of profit
-        self.trailing_pct_spin.setSuffix("% of profit")
-        self.trailing_pct_spin.setEnabled(False)
-        self.trailing_pct_spin.setToolTip("When profit reaches TP, trail stop at this % of profit")
-        row4.addWidget(self.trailing_pct_spin)
-
-        row4.addStretch()
-        backtest_layout.addLayout(row4)
-
         # Multi-TP mode
         row5 = QHBoxLayout()
         row5.setSpacing(5)
@@ -2270,17 +2249,31 @@ class SignalAnalysisDialog(QDialog):
         help_label.setStyleSheet("color: gray;")
         multi_tp_layout.addWidget(help_label)
         
-        # Save as Default button
+        # Save as Default button - compact
         save_button_row = QHBoxLayout()
         save_button_row.addStretch()
-        self.save_tp_defaults_btn = QPushButton("💾 Save as Default")
+        self.save_tp_defaults_btn = QPushButton("💾 Save")
         self.save_tp_defaults_btn.setToolTip(
             "Save current TP/SL values as defaults.\n"
             "These values will be loaded automatically\n"
             "when you open the Signal Analysis dialog."
         )
         self.save_tp_defaults_btn.clicked.connect(self.on_save_tp_defaults)
-        self.save_tp_defaults_btn.setMaximumWidth(150)
+        self.save_tp_defaults_btn.setMaximumWidth(80)
+        self.save_tp_defaults_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 4px 8px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
         save_button_row.addWidget(self.save_tp_defaults_btn)
         save_button_row.addStretch()
         multi_tp_layout.addLayout(save_button_row)
@@ -2301,10 +2294,6 @@ class SignalAnalysisDialog(QDialog):
         self.update_tp_sl_labels()
 
         return group
-    
-    def on_trailing_changed(self, state):
-        """Enable/disable trailing percentage when checkbox changes"""
-        self.trailing_pct_spin.setEnabled(state == 2)  # 2 = Qt.Checked
 
     def on_multi_tp_changed(self, state):
         """Show/hide custom TP levels section when Multi-TP checkbox changes"""
@@ -2573,7 +2562,7 @@ class SignalAnalysisDialog(QDialog):
         # Get backtest parameters
         tp_multiplier = self.tp_multiplier_spin.value()
         sl_multiplier = self.sl_multiplier_spin.value()
-        use_trailing = self.use_trailing_check.isChecked()
+        use_trailing = False  # Fibonacci trailing stop removed
         use_multi_tp = self.use_multi_tp_check.isChecked()
 
         # Use different trailing percentage based on mode
@@ -2663,7 +2652,11 @@ class SignalAnalysisDialog(QDialog):
         """Handle analysis completion"""
         self.progress_bar.hide()
         self.analyze_btn.setEnabled(True)
-        
+
+        # Hide Backtest Parameters after analysis is complete
+        if hasattr(self, 'backtest_params_group'):
+            self.backtest_params_group.setChecked(False)
+
         if signals_df is None or len(signals_df) == 0:
             self.progress_label.setText("❌ No signals found in this period")
             self.summary_label.setText(
