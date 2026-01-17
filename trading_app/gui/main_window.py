@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QPlainTextEdit, QListWidget, QListWidgetItem,
     QGroupBox, QMessageBox, QSplitter, QApplication, QFrame, QGridLayout
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QFont, QIcon, QColor
 from core import BotManager
 from database import DatabaseManager
@@ -15,6 +15,61 @@ from gui.settings_dialog import SettingsDialog
 from gui.positions_monitor import PositionsMonitor
 from gui.statistics_dialog import StatisticsDialog
 from gui.signal_analysis_dialog import SignalAnalysisDialog
+
+
+class PriceFetcherWorker(QThread):
+    """Background worker for fetching current prices from exchange"""
+
+    price_updated = Signal(str, float)  # Signal(bot_id, price)
+    error = Signal(str)  # Error message
+
+    def __init__(self, bot_id, config):
+        super().__init__()
+        self.bot_id = bot_id
+        self.config = config
+        self._is_running = True
+
+    def run(self):
+        """Fetch price in background"""
+        if not self._is_running:
+            return
+
+        try:
+            current_price = None
+
+            if self.config.exchange == 'Binance':
+                import ccxt
+                # Use public data (no credentials needed for ticker)
+                exchange = ccxt.binance({
+                    'enableRateLimit': True,
+                    'options': {'defaultType': 'future'}
+                })
+                ticker = exchange.fetch_ticker(self.config.symbol)
+                current_price = ticker.get('last')
+
+            elif self.config.exchange == 'MT5':
+                import MetaTrader5 as mt5
+                if mt5.initialize():
+                    try:
+                        tick = mt5.symbol_info_tick(self.config.symbol)
+                        if tick and tick.last > 0:
+                            current_price = tick.last
+                        elif tick:
+                            # Try bid/ask if last is not available
+                            current_price = (tick.bid + tick.ask) / 2 if tick.bid > 0 and tick.ask > 0 else None
+                    finally:
+                        mt5.shutdown()
+
+            if current_price and self._is_running:
+                self.price_updated.emit(self.bot_id, current_price)
+
+        except Exception as e:
+            if self._is_running:
+                self.error.emit(f"Error fetching price: {e}")
+
+    def stop(self):
+        """Stop the worker"""
+        self._is_running = False
 
 
 class MainWindow(QMainWindow):
@@ -43,6 +98,10 @@ class MainWindow(QMainWindow):
         # Status cache
         self.status_cache = {}
 
+        # Price cache for live positions - prevents UI freezing
+        self.current_prices = {}  # {bot_id: price}
+        self.price_fetcher = None
+
         # Initialize UI
         self.init_ui()
 
@@ -50,6 +109,11 @@ class MainWindow(QMainWindow):
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.update_status_display)
         self.status_timer.start(5000)  # Update every 5 seconds
+
+        # Timer for background price fetching (less frequent to avoid API rate limits)
+        self.price_timer = QTimer()
+        self.price_timer.timeout.connect(self.start_price_fetching)
+        self.price_timer.start(10000)  # Fetch price every 10 seconds
 
         # Select first bot
         if self.bot_manager.get_all_bot_ids():
@@ -607,57 +671,127 @@ class MainWindow(QMainWindow):
         # Update live positions
         self.update_live_positions_display()
 
+    def start_price_fetching(self):
+        """Start background price fetching for current bot"""
+        if self.is_closing or not self.current_bot_id:
+            return
+
+        # Don't start new fetcher if one is already running
+        if self.price_fetcher and self.price_fetcher.isRunning():
+            return
+
+        # Get open trades to see if we need to fetch price
+        try:
+            open_trades = self.db.get_open_trades(self.current_bot_id)
+            if not open_trades or len(open_trades) == 0:
+                return  # No positions, no need to fetch price
+        except:
+            return
+
+        # Get bot config
+        config = self.db.load_config(self.current_bot_id)
+        if not config:
+            return
+
+        # Start background fetcher
+        self.price_fetcher = PriceFetcherWorker(self.current_bot_id, config)
+        self.price_fetcher.price_updated.connect(self.on_price_updated)
+        self.price_fetcher.error.connect(self.on_price_error)
+        self.price_fetcher.finished.connect(self.on_price_fetch_finished)
+        self.price_fetcher.start()
+
+    def on_price_updated(self, bot_id, price):
+        """Handle price update from background fetcher"""
+        if not self.is_closing:
+            self.current_prices[bot_id] = price
+            # Update display if this is the current bot
+            if bot_id == self.current_bot_id:
+                self.update_live_positions_display()
+
+    def on_price_error(self, error):
+        """Handle price fetch error"""
+        # Silently fail - price will be fetched next time
+        pass
+
+    def on_price_fetch_finished(self):
+        """Clean up when fetcher finishes"""
+        if self.price_fetcher:
+            self.price_fetcher.deleteLater()
+            self.price_fetcher = None
+
     def update_live_positions_display(self):
         """Update live open positions display"""
         if not hasattr(self, 'live_positions_label') or self.live_positions_label is None:
             return
-            
+
         if not self.current_bot_id:
             self.live_positions_label.setText("No bot selected")
             return
-        
+
         try:
             # Get open positions from database
             open_trades = self.db.get_open_trades(self.current_bot_id)
-            
+
             if not open_trades or len(open_trades) == 0:
                 self.live_positions_label.setText("<p style='color: #666; font-size: 12px;'>No open positions</p>")
                 return
-            
-            # Calculate total P&L
-            total_pnl = sum(trade.profit if trade.profit else 0.0 for trade in open_trades)
-            
+
+            # Get bot config
+            config = self.db.load_config(self.current_bot_id)
+            if not config:
+                self.live_positions_label.setText("<p style='color: #F44336;'>Bot config not found</p>")
+                return
+
+            # Use cached price from background fetcher (non-blocking)
+            current_price = self.current_prices.get(self.current_bot_id)
+
+            # Calculate total P&L with current price
+            total_pnl = 0.0
+            for trade in open_trades:
+                if current_price and trade.entry_price > 0:
+                    if trade.trade_type.upper() == 'BUY':
+                        trade.profit = (current_price - trade.entry_price) * trade.amount
+                    elif trade.trade_type.upper() == 'SELL':
+                        trade.profit = (trade.entry_price - current_price) * trade.amount
+                total_pnl += (trade.profit or 0.0)
+
             # Build HTML display
             positions_html = f"""
             <div style='font-size: 12px;'>
             <p style='font-weight: bold; font-size: 13px; margin-bottom: 8px;'>
-                {len(open_trades)} position{'s' if len(open_trades) != 1 else ''} open | 
+                {len(open_trades)} position{'s' if len(open_trades) != 1 else ''} open |
                 Total P&L: <span style='color: {'#4CAF50' if total_pnl >= 0 else '#F44336'}; font-weight: bold;'>
                 ${total_pnl:+,.2f}</span>
             </p>
             """
-            
+
             # Add each position
             for trade in open_trades[:5]:  # Show max 5 positions
                 # Determine color based on profit
                 pnl_color = '#4CAF50' if (trade.profit or 0) >= 0 else '#F44336'
                 type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
-                
-                # Get current price (if available from trade data)
-                current_price = trade.close_price if trade.close_price else trade.entry_price
-                
+
+                # Use fetched current price or fallback to entry price
+                display_price = current_price if current_price else trade.entry_price
+
+                # Calculate P&L percentage
+                profit_pct = 0.0
+                if trade.entry_price > 0 and trade.amount > 0:
+                    entry_value = trade.entry_price * trade.amount
+                    profit_pct = ((trade.profit or 0) / entry_value * 100) if entry_value > 0 else 0.0
+
                 positions_html += f"""
                 <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
                     <p style='margin: 2px 0;'>
-                        <b>{type_icon} {trade.symbol if trade.symbol else 'N/A'}</b> 
+                        <b>{type_icon} {trade.symbol if trade.symbol else 'N/A'}</b>
                         <span style='color: #666;'>{trade.trade_type}</span>
                     </p>
                     <p style='margin: 2px 0; font-size: 11px; color: #666;'>
-                        Entry: {trade.entry_price:,.4f} → Current: {current_price:,.4f}
+                        Entry: {trade.entry_price:,.4f} → Current: {display_price:,.4f}
                     </p>
                     <p style='margin: 2px 0; font-size: 11px;'>
                         P&L: <span style='color: {pnl_color}; font-weight: bold;'>
-                        ${(trade.profit or 0):+,.2f}</span>
+                        ${(trade.profit or 0):+,.2f} ({profit_pct:+.2f}%)</span>
                     </p>
                 </div>
                 """
@@ -1092,9 +1226,17 @@ class MainWindow(QMainWindow):
         # Set closing flag to prevent further operations
         self.is_closing = True
 
-        # Stop status update timer first
+        # Stop all timers
         if hasattr(self, 'status_timer'):
             self.status_timer.stop()
+        if hasattr(self, 'price_timer'):
+            self.price_timer.stop()
+
+        # Stop price fetcher thread if running
+        if hasattr(self, 'price_fetcher') and self.price_fetcher:
+            if self.price_fetcher.isRunning():
+                self.price_fetcher.stop()
+                self.price_fetcher.wait(2000)  # Wait max 2 seconds
 
         # Check if any bots are running
         running_bots = [bid for bid in self.bot_manager.get_all_bot_ids()
@@ -1132,10 +1274,12 @@ class MainWindow(QMainWindow):
 
             if reply != QMessageBox.Yes:
                 event.ignore()
-                # Reset closing flag and restart timer if user cancels
+                # Reset closing flag and restart timers if user cancels
                 self.is_closing = False
                 if hasattr(self, 'status_timer'):
                     self.status_timer.start(5000)
+                if hasattr(self, 'price_timer'):
+                    self.price_timer.start(10000)
                 return
 
             # Stop all bots

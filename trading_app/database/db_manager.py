@@ -66,6 +66,10 @@ class DatabaseManager:
                 range_tp1 REAL,
                 range_tp2 REAL,
                 range_tp3 REAL,
+                total_position_size REAL,
+                use_3_position_mode INTEGER DEFAULT 0,
+                min_order_size REAL,
+                trailing_stop_pct REAL DEFAULT 0.5,
                 telegram_enabled INTEGER DEFAULT 0,
                 telegram_token TEXT,
                 telegram_chat_id TEXT,
@@ -146,6 +150,52 @@ class DatabaseManager:
         except Exception as e:
             print(f"⚠️  Migration warning: {e}")
 
+        # Migrate trades table - add 3-position mode columns
+        try:
+            cursor.execute("PRAGMA table_info(trades)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'position_group_id' not in columns:
+                print("📊 Migrating trades table: adding position_group_id column...")
+                cursor.execute("ALTER TABLE trades ADD COLUMN position_group_id TEXT")
+                print("✅ position_group_id column added")
+
+            if 'position_num' not in columns:
+                print("📊 Migrating trades table: adding position_num column...")
+                cursor.execute("ALTER TABLE trades ADD COLUMN position_num INTEGER DEFAULT 0")
+                print("✅ position_num column added")
+
+        except Exception as e:
+            print(f"⚠️  3-position migration warning: {e}")
+
+        # Migrate bot_configs table - add Phase 2 position sizing columns
+        try:
+            cursor.execute("PRAGMA table_info(bot_configs)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'total_position_size' not in columns:
+                print("📊 Migrating bot_configs: adding total_position_size column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN total_position_size REAL")
+                print("✅ total_position_size column added")
+
+            if 'use_3_position_mode' not in columns:
+                print("📊 Migrating bot_configs: adding use_3_position_mode column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_3_position_mode INTEGER DEFAULT 0")
+                print("✅ use_3_position_mode column added")
+
+            if 'min_order_size' not in columns:
+                print("📊 Migrating bot_configs: adding min_order_size column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN min_order_size REAL")
+                print("✅ min_order_size column added")
+
+            if 'trailing_stop_pct' not in columns:
+                print("📊 Migrating bot_configs: adding trailing_stop_pct column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN trailing_stop_pct REAL DEFAULT 0.5")
+                print("✅ trailing_stop_pct column added")
+
+        except Exception as e:
+            print(f"⚠️  Phase 2 config migration warning: {e}")
+
         self.conn.commit()
 
     def save_config(self, config: BotConfig):
@@ -158,15 +208,20 @@ class DatabaseManager:
                 risk_percent, max_positions, timeframe, strategy,
                 trend_tp1, trend_tp2, trend_tp3,
                 range_tp1, range_tp2, range_tp3,
+                total_position_size, use_3_position_mode, min_order_size, trailing_stop_pct,
                 telegram_enabled, telegram_token, telegram_chat_id,
                 dry_run, testnet, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             config.bot_id, config.name, config.symbol, config.exchange,
             config.api_key, config.api_secret,
             config.risk_percent, config.max_positions, config.timeframe, config.strategy,
             config.trend_tp1, config.trend_tp2, config.trend_tp3,
             config.range_tp1, config.range_tp2, config.range_tp3,
+            getattr(config, 'total_position_size', None),
+            1 if getattr(config, 'use_3_position_mode', False) else 0,
+            getattr(config, 'min_order_size', None),
+            getattr(config, 'trailing_stop_pct', 0.5),
             1 if config.telegram_enabled else 0,
             config.telegram_token, config.telegram_chat_id,
             1 if config.dry_run else 0,
@@ -183,6 +238,9 @@ class DatabaseManager:
         row = cursor.fetchone()
 
         if row:
+            # Check which columns exist (for backward compatibility)
+            columns = row.keys()
+
             return BotConfig(
                 bot_id=row['bot_id'],
                 name=row['name'],
@@ -193,6 +251,10 @@ class DatabaseManager:
                 risk_percent=row['risk_percent'],
                 max_positions=row['max_positions'],
                 timeframe=row['timeframe'],
+                total_position_size=row['total_position_size'] if 'total_position_size' in columns else None,
+                use_3_position_mode=bool(row['use_3_position_mode']) if 'use_3_position_mode' in columns else False,
+                min_order_size=row['min_order_size'] if 'min_order_size' in columns else None,
+                trailing_stop_pct=row['trailing_stop_pct'] if 'trailing_stop_pct' in columns else 0.5,
                 strategy=row['strategy'],
                 trend_tp1=row['trend_tp1'],
                 trend_tp2=row['trend_tp2'],
@@ -285,13 +347,14 @@ class DatabaseManager:
                     bot_id, symbol, order_id, open_time, close_time, duration_hours,
                     trade_type, amount, entry_price, close_price,
                     stop_loss, take_profit, profit, profit_percent,
-                    status, market_regime, comment
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, market_regime, comment, position_group_id, position_num
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade.bot_id, trade.symbol, trade.order_id, trade.open_time, trade.close_time, trade.duration_hours,
                 trade.trade_type, trade.amount, trade.entry_price, trade.close_price,
                 trade.stop_loss, trade.take_profit, trade.profit, trade.profit_percent,
-                trade.status, trade.market_regime, trade.comment
+                trade.status, trade.market_regime, trade.comment,
+                trade.position_group_id, trade.position_num
             ))
 
             self.conn.commit()
@@ -312,10 +375,11 @@ class DatabaseManager:
 
         trades = []
         for row in cursor.fetchall():
+            columns = row.keys()
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
-                symbol=row['symbol'] if 'symbol' in row.keys() else None,
+                symbol=row['symbol'] if 'symbol' in columns else None,
                 order_id=row['order_id'],
                 open_time=self._parse_datetime(row['open_time']),
                 close_time=self._parse_datetime(row['close_time']),
@@ -330,7 +394,9 @@ class DatabaseManager:
                 profit_percent=row['profit_percent'],
                 status=row['status'],
                 market_regime=row['market_regime'],
-                comment=row['comment']
+                comment=row['comment'],
+                position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
+                position_num=row['position_num'] if 'position_num' in columns else 0
             ))
 
         return trades
@@ -346,10 +412,11 @@ class DatabaseManager:
 
         trades = []
         for row in cursor.fetchall():
+            columns = row.keys()
             trades.append(TradeRecord(
                 trade_id=row['id'],
                 bot_id=row['bot_id'],
-                symbol=row['symbol'] if 'symbol' in row.keys() else None,
+                symbol=row['symbol'] if 'symbol' in columns else None,
                 order_id=row['order_id'],
                 open_time=self._parse_datetime(row['open_time']),
                 close_time=self._parse_datetime(row['close_time']),
@@ -364,7 +431,9 @@ class DatabaseManager:
                 profit_percent=row['profit_percent'],
                 status=row['status'],
                 market_regime=row['market_regime'],
-                comment=row['comment']
+                comment=row['comment'],
+                position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
+                position_num=row['position_num'] if 'position_num' in columns else 0
             ))
 
         return trades

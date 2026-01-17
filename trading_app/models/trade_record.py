@@ -46,3 +46,7 @@ class TradeRecord:
     # Market context
     market_regime: Optional[str] = None  # 'TREND' or 'RANGE'
     comment: Optional[str] = None
+
+    # Phase 2: 3-Position Mode
+    position_group_id: Optional[str] = None  # Groups 3 positions from same signal
+    position_num: int = 0  # Position number (1, 2, or 3)

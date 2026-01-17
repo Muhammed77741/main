@@ -15,6 +15,7 @@ from pathlib import Path
 import csv
 import os
 import asyncio
+import uuid
 
 # Add parent directory to path to access shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -39,7 +40,9 @@ class LiveBotMT5FullAuto:
     def __init__(self, telegram_token=None, telegram_chat_id=None,
                  symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1,
                  check_interval=3600, risk_percent=2.0, max_positions=9,
-                 dry_run=False, bot_id=None, use_database=True):
+                 dry_run=False, bot_id=None, use_database=True,
+                 use_3_position_mode=False, total_position_size=None, min_order_size=None,
+                 trailing_stop_pct=0.5):
         """
         Initialize bot
         
@@ -67,7 +70,13 @@ class LiveBotMT5FullAuto:
         # Bot identification for database
         self.bot_id = bot_id or f"xauusd_bot_{symbol}"
         self.use_database = use_database
-        
+
+        # Phase 2: 3-Position Mode settings
+        self.use_3_position_mode = use_3_position_mode
+        self.total_position_size = total_position_size
+        self.min_order_size = min_order_size
+        self.trailing_stop_pct = trailing_stop_pct  # Trailing stop percentage for 3-position mode
+
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
         
@@ -88,6 +97,10 @@ class LiveBotMT5FullAuto:
         self.trades_file = 'bot_trades_log.csv'
         self.tp_hits_file = 'bot_tp_hits_log.csv'
         self.positions_tracker = {}  # {ticket: position_data}
+
+        # Phase 2: 3-Position Mode tracking
+        self.position_groups = {}  # {group_id: {'tp1_hit': bool, 'max_price': float, 'min_price': float, 'positions': [...]}}
+
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
         
@@ -148,8 +161,8 @@ class LiveBotMT5FullAuto:
                 ])
             print(f"📝 Created TP hits log file: {self.tp_hits_file}")
     
-    def _log_position_opened(self, ticket, position_type, volume, entry_price, 
-                             sl, tp, regime, comment=''):
+    def _log_position_opened(self, ticket, position_type, volume, entry_price,
+                             sl, tp, regime, comment='', position_group_id=None, position_num=0):
         """Log when position is opened"""
         open_time = datetime.now()
         
@@ -190,7 +203,9 @@ class LiveBotMT5FullAuto:
                     take_profit=tp,
                     status='OPEN',
                     market_regime=regime,
-                    comment=comment
+                    comment=comment,
+                    position_group_id=position_group_id,
+                    position_num=position_num
                 )
                 self.db.add_trade(trade)
                 print(f"📊 Position saved to database: Ticket={ticket}")
@@ -386,7 +401,96 @@ class LiveBotMT5FullAuto:
                     print(f"✅ Database synced for position #{ticket}")
         except Exception as e:
             print(f"⚠️  Error syncing positions with exchange: {e}")
-    
+
+    def _update_3position_trailing(self, positions_to_check, current_price):
+        """
+        Update trailing stops for 3-position groups (Phase 2)
+
+        Logic:
+        - Track max_price/min_price for each group
+        - When any position reaches TP1, activate trailing for Pos 2 & 3
+        - Trailing formula: 50% retracement from max profit
+        """
+        if not self.use_3_position_mode:
+            return
+
+        # Group positions by position_group_id
+        groups = {}
+        for ticket, pos_data in positions_to_check.items():
+            group_id = pos_data.get('position_group_id')
+            if not group_id:
+                continue  # Not a 3-position group
+
+            if group_id not in groups:
+                groups[group_id] = []
+            groups[group_id].append((ticket, pos_data))
+
+        # Process each group
+        for group_id, group_positions in groups.items():
+            # Initialize group tracking if needed
+            if group_id not in self.position_groups:
+                # Find entry price from any position in group
+                entry_price = group_positions[0][1]['entry_price']
+                self.position_groups[group_id] = {
+                    'tp1_hit': False,
+                    'max_price': entry_price,
+                    'min_price': entry_price,
+                    'positions': [p[0] for p in group_positions]
+                }
+
+            group_info = self.position_groups[group_id]
+
+            # Update max/min price
+            if group_positions[0][1]['type'] == 'BUY':
+                if current_price > group_info['max_price']:
+                    group_info['max_price'] = current_price
+            else:  # SELL
+                if current_price < group_info['min_price']:
+                    group_info['min_price'] = current_price
+
+            # Check if any position reached TP1
+            for ticket, pos_data in group_positions:
+                if pos_data.get('position_num') == 1:
+                    tp1 = pos_data['tp']
+                    if pos_data['type'] == 'BUY':
+                        if current_price >= tp1:
+                            group_info['tp1_hit'] = True
+                            print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
+                    else:  # SELL
+                        if current_price <= tp1:
+                            group_info['tp1_hit'] = True
+                            print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
+
+            # Update trailing stops for Pos 2 & 3 if TP1 hit
+            if group_info['tp1_hit']:
+                for ticket, pos_data in group_positions:
+                    pos_num = pos_data.get('position_num', 0)
+                    if pos_num in [2, 3]:  # Only Pos 2 and 3 trail
+                        entry_price = pos_data['entry_price']
+
+                        if pos_data['type'] == 'BUY':
+                            # Trailing stop: configurable % retracement from max price
+                            new_sl = group_info['max_price'] - (group_info['max_price'] - entry_price) * self.trailing_stop_pct
+
+                            # Only update if new SL is better (higher) than current
+                            if new_sl > pos_data['sl']:
+                                print(f"   📊 Pos {pos_num} trailing SL updated: {pos_data['sl']:.2f} → {new_sl:.2f}")
+                                pos_data['sl'] = new_sl
+                                # Update in tracker
+                                if ticket in self.positions_tracker:
+                                    self.positions_tracker[ticket]['sl'] = new_sl
+                        else:  # SELL
+                            # Trailing stop: configurable % retracement from min price
+                            new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
+
+                            # Only update if new SL is better (lower) than current
+                            if new_sl < pos_data['sl']:
+                                print(f"   📊 Pos {pos_num} trailing SL updated: {pos_data['sl']:.2f} → {new_sl:.2f}")
+                                pos_data['sl'] = new_sl
+                                # Update in tracker
+                                if ticket in self.positions_tracker:
+                                    self.positions_tracker[ticket]['sl'] = new_sl
+
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
         
@@ -422,7 +526,9 @@ class LiveBotMT5FullAuto:
                         'status': trade.status,
                         'open_time': trade.open_time,
                         'regime': trade.market_regime,
-                        'comment': trade.comment or ''
+                        'comment': trade.comment or '',
+                        'position_group_id': trade.position_group_id,
+                        'position_num': trade.position_num
                     }
                     # Also sync to in-memory tracker if not already there
                     if ticket not in self.positions_tracker:
@@ -521,8 +627,12 @@ class LiveBotMT5FullAuto:
                 except Exception as e:
                     print(f"⚠️  Error getting current price for dry_run: {e}")
                     continue
-            
+
+            # Phase 2: Update trailing stops for 3-position groups
+            self._update_3position_trailing({ticket: tracked_pos}, current_price)
+
             # Read TP/SL from tracked position (database columns or in-memory)
+            # Note: SL may have been updated by trailing logic above
             tp_target = tracked_pos['tp']
             sl_target = tracked_pos['sl']
             
@@ -1070,12 +1180,98 @@ class LiveBotMT5FullAuto:
         return list(positions)
         
     def open_position(self, signal):
-        """Open 3 positions with different TP levels (TP1, TP2, TP3)"""
+        """Open position(s) with TP/SL - supports single and 3-position modes"""
+        if self.use_3_position_mode:
+            return self._open_3_positions(signal)
+        else:
+            return self._open_single_position(signal)
+
+    def _open_single_position(self, signal):
+        """Open single position with TP2 as target (original simple logic)"""
         direction_str = "BUY" if signal['direction'] == 1 else "SELL"
-        
+
         print(f"\n{'='*60}")
-        print(f"📈 OPENING 3 {direction_str} POSITIONS (Multi-TP)")
+        print(f"📈 OPENING {direction_str} POSITION")
         print(f"{'='*60}")
+
+        # Calculate position size
+        lot_size = self.calculate_position_size(signal['entry'], signal['sl'])
+
+        print(f"   Lot size: {lot_size}")
+
+        if self.dry_run:
+            print(f"\n🧪 DRY RUN: Would open {direction_str} position:")
+            print(f"   Symbol: {self.symbol}")
+            print(f"   Lot: {lot_size}")
+            print(f"   Entry: {signal['entry']:.2f}")
+            print(f"   SL: {signal['sl']:.2f}")
+            print(f"   TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}p)")
+            return True
+
+        # Get current price
+        tick = mt5.symbol_info_tick(self.symbol)
+        if tick is None:
+            print(f"❌ Failed to get current price")
+            return False
+
+        price = tick.ask if signal['direction'] == 1 else tick.bid
+        order_type = mt5.ORDER_TYPE_BUY if signal['direction'] == 1 else mt5.ORDER_TYPE_SELL
+        regime = signal.get('regime', 'UNKNOWN')
+        regime_code = "T" if regime == 'TREND' else "R"
+
+        # Create request
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": self.symbol,
+            "volume": lot_size,
+            "type": order_type,
+            "price": price,
+            "sl": signal['sl'],
+            "tp": signal['tp2'],  # Use TP2 as main target
+            "deviation": 20,
+            "magic": 234000,
+            "comment": f"V3_{regime_code}",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+
+        # Send order
+        result = mt5.order_send(request)
+
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"❌ Order failed: {result.comment if result else 'No result'}")
+            return False
+
+        print(f"   ✅ Order placed!")
+        print(f"      Order: #{result.order}")
+        print(f"      Lot: {lot_size}")
+        print(f"      Entry: {result.price:.2f}")
+        print(f"      TP: {signal['tp2']:.2f}")
+
+        # Log position
+        position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
+        self._log_position_opened(
+            ticket=result.order,
+            position_type=position_type,
+            volume=lot_size,
+            entry_price=result.price,
+            sl=signal['sl'],
+            tp=signal['tp2'],
+            regime=regime,
+            comment=f"V3_{regime_code}"
+        )
+
+        return True
+
+    def _open_3_positions(self, signal):
+        """Open 3 independent positions with different TP levels and trailing (Phase 2)"""
+        direction_str = "BUY" if signal['direction'] == 1 else "SELL"
+        group_id = str(uuid.uuid4())
+
+        print(f"\n{'='*60}")
+        print(f"📈 OPENING 3-POSITION {direction_str} GROUP")
+        print(f"{'='*60}")
+        print(f"   Group ID: {group_id}")
         
         # Check max positions (need room for 3 positions)
         open_positions = self.get_open_positions()
@@ -1125,12 +1321,12 @@ class LiveBotMT5FullAuto:
         # Open 3 positions
         positions_opened = []
         tp_levels = [
-            (signal['tp1'], lot1, 'TP1', signal['tp1_distance']),
-            (signal['tp2'], lot2, 'TP2', signal['tp2_distance']),
-            (signal['tp3'], lot3, 'TP3', signal['tp3_distance'])
+            (signal['tp1'], lot1, 'TP1', signal['tp1_distance'], 1),
+            (signal['tp2'], lot2, 'TP2', signal['tp2_distance'], 2),
+            (signal['tp3'], lot3, 'TP3', signal['tp3_distance'], 3)
         ]
-        
-        for tp_price, lot_size, tp_name, tp_distance in tp_levels:
+
+        for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
             # Ensure minimum lot size
             if lot_size < symbol_info.volume_min:
                 print(f"   ⚠️  {tp_name}: lot size {lot_size} < minimum {symbol_info.volume_min}, skipping")
@@ -1179,10 +1375,13 @@ class LiveBotMT5FullAuto:
                 sl=signal['sl'],
                 tp=tp_price,
                 regime=regime,
-                comment=f"V3_{regime_code}_{tp_name}"
+                comment=f"V3_{regime_code}_P{pos_num}/3",
+                position_group_id=group_id,
+                position_num=pos_num
             )
-            
+
             positions_opened.append((result.order, tp_name, tp_price))
+            time.sleep(0.2)  # Small delay between orders
         
         if len(positions_opened) == 0:
             print(f"\n❌ Failed to open any positions!")

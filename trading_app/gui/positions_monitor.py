@@ -246,9 +246,9 @@ class PositionsMonitor(QDialog):
 
         # Positions table
         self.table = QTableWidget()
-        self.table.setColumnCount(9)  # Added checkbox column
+        self.table.setColumnCount(10)  # Added P&L% column
         self.table.setHorizontalHeaderLabels([
-            'Select', 'Order ID', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'P&L'
+            'Select', 'Order ID', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'P&L $', 'P&L %'
         ])
         
         # Enable selection
@@ -257,7 +257,7 @@ class PositionsMonitor(QDialog):
 
         # Configure column widths for better readability
         header = self.table.horizontalHeader()
-        header.setStretchLastSection(True)  # Stretch P&L column
+        header.setStretchLastSection(True)  # Stretch P&L% column
 
         # Set specific column widths
         self.table.setColumnWidth(0, 60)   # Select checkbox
@@ -268,7 +268,8 @@ class PositionsMonitor(QDialog):
         self.table.setColumnWidth(5, 100)  # Current
         self.table.setColumnWidth(6, 100)  # SL
         self.table.setColumnWidth(7, 100)  # TP
-        # P&L (column 8) will stretch automatically
+        self.table.setColumnWidth(8, 100)  # P&L $
+        # P&L % (column 9) will stretch automatically
 
         # Allow user to resize columns
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -880,7 +881,7 @@ class PositionsMonitor(QDialog):
                 tp = pos.get('takeProfit', pos.get('tp', 0))
                 self.table.setItem(i, 7, QTableWidgetItem(f"${tp:.2f}" if tp else 'N/A'))
 
-                # P&L
+                # P&L $ (absolute)
                 pnl = pos.get('unrealizedPnl', pos.get('profit', 0))
                 pnl_item = QTableWidgetItem(f"${pnl:+.2f}")
 
@@ -892,9 +893,23 @@ class PositionsMonitor(QDialog):
 
                 self.table.setItem(i, 8, pnl_item)
 
+                # P&L % (percentage)
+                # Calculate P&L percentage based on entry value
+                entry_value = entry * amount
+                pnl_pct = (pnl / entry_value * 100) if entry_value > 0 else 0.0
+                pnl_pct_item = QTableWidgetItem(f"{pnl_pct:+.2f}%")
+
+                # Color code P&L %
+                if pnl_pct > 0:
+                    pnl_pct_item.setForeground(Qt.green)
+                elif pnl_pct < 0:
+                    pnl_pct_item.setForeground(Qt.red)
+
+                self.table.setItem(i, 9, pnl_pct_item)
+
                 total_pnl += pnl
-                
-                print(f"   ✅ Row {i+1}: {pos_type} {amount:.4f} @ ${entry:.2f} | P&L: ${pnl:+.2f}")
+
+                print(f"   ✅ Row {i+1}: {pos_type} {amount:.4f} @ ${entry:.2f} | P&L: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
 
             # Update summary
             summary_color = "green" if total_pnl >= 0 else "red"
