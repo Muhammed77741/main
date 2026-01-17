@@ -2508,6 +2508,10 @@ class SignalAnalysisDialog(QDialog):
 
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
+        
+        # Set maximum height to ensure buttons remain visible
+        # Leave enough space for buttons and summary section (~200px)
+        self.results_table.setMaximumHeight(700)
 
         layout.addWidget(self.results_table)
 
