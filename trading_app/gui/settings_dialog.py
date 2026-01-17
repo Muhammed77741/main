@@ -160,6 +160,34 @@ class SettingsDialog(QDialog):
         self.dry_run_check = QCheckBox("DRY RUN mode (no real trades)")
         layout.addRow("", self.dry_run_check)
 
+        # Phase 2: 3-Position Mode
+        layout.addRow(QLabel("<b>3-Position Mode:</b>"))
+
+        self.use_3pos_check = QCheckBox("Enable 3-position mode")
+        layout.addRow("", self.use_3pos_check)
+
+        self.total_pos_size_spin = QDoubleSpinBox()
+        self.total_pos_size_spin.setRange(0.01, 100000.0)
+        self.total_pos_size_spin.setSingleStep(10.0)
+        self.total_pos_size_spin.setDecimals(2)
+        unit = "USD" if self.original_config.exchange == 'Binance' else "lots"
+        self.total_pos_size_spin.setSuffix(f" {unit}")
+        layout.addRow("Total position size:", self.total_pos_size_spin)
+
+        self.min_order_size_spin = QDoubleSpinBox()
+        self.min_order_size_spin.setRange(0.001, 1000.0)
+        self.min_order_size_spin.setSingleStep(0.01)
+        self.min_order_size_spin.setDecimals(3)
+        self.min_order_size_spin.setSuffix(f" {unit}")
+        layout.addRow("Min order size:", self.min_order_size_spin)
+
+        self.trailing_stop_pct_spin = QSpinBox()
+        self.trailing_stop_pct_spin.setRange(10, 90)
+        self.trailing_stop_pct_spin.setValue(50)
+        self.trailing_stop_pct_spin.setSuffix("%")
+        self.trailing_stop_pct_spin.setToolTip("Trailing stop percentage (50% = price can retrace 50% from max profit)")
+        layout.addRow("Trailing stop %:", self.trailing_stop_pct_spin)
+
         return group
 
     def create_strategy_group(self):
@@ -269,6 +297,12 @@ class SettingsDialog(QDialog):
         self.range_tp2_spin.setValue(self.config.get('range_tp2', 1.75))
         self.range_tp3_spin.setValue(self.config.get('range_tp3', 2.5))
 
+        # Phase 2: 3-Position Mode
+        self.use_3pos_check.setChecked(self.config.get('use_3_position_mode', False))
+        self.total_pos_size_spin.setValue(self.config.get('total_position_size', 100.0 if self.original_config.exchange == 'Binance' else 0.1))
+        self.min_order_size_spin.setValue(self.config.get('min_order_size', 10.0 if self.original_config.exchange == 'Binance' else 0.01))
+        self.trailing_stop_pct_spin.setValue(int(self.config.get('trailing_stop_pct', 0.5) * 100))  # Convert 0.5 to 50
+
         # Telegram
         self.telegram_enable_check.setChecked(self.config.get('telegram_enabled', False))
         if self.config.get('telegram_token'):
@@ -295,6 +329,12 @@ class SettingsDialog(QDialog):
         self.config['range_tp1'] = self.range_tp1_spin.value()
         self.config['range_tp2'] = self.range_tp2_spin.value()
         self.config['range_tp3'] = self.range_tp3_spin.value()
+
+        # Phase 2: 3-Position Mode
+        self.config['use_3_position_mode'] = self.use_3pos_check.isChecked()
+        self.config['total_position_size'] = self.total_pos_size_spin.value()
+        self.config['min_order_size'] = self.min_order_size_spin.value()
+        self.config['trailing_stop_pct'] = self.trailing_stop_pct_spin.value() / 100.0  # Convert 50 to 0.5
 
         self.config['telegram_enabled'] = self.telegram_enable_check.isChecked()
         self.config['telegram_token'] = self.telegram_token_input.text()

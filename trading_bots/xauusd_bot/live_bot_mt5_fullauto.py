@@ -41,7 +41,8 @@ class LiveBotMT5FullAuto:
                  symbol='XAUUSD', timeframe=mt5.TIMEFRAME_H1,
                  check_interval=3600, risk_percent=2.0, max_positions=9,
                  dry_run=False, bot_id=None, use_database=True,
-                 use_3_position_mode=False, total_position_size=None, min_order_size=None):
+                 use_3_position_mode=False, total_position_size=None, min_order_size=None,
+                 trailing_stop_pct=0.5):
         """
         Initialize bot
         
@@ -74,6 +75,7 @@ class LiveBotMT5FullAuto:
         self.use_3_position_mode = use_3_position_mode
         self.total_position_size = total_position_size
         self.min_order_size = min_order_size
+        self.trailing_stop_pct = trailing_stop_pct  # Trailing stop percentage for 3-position mode
 
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
@@ -467,8 +469,8 @@ class LiveBotMT5FullAuto:
                         entry_price = pos_data['entry_price']
 
                         if pos_data['type'] == 'BUY':
-                            # Trailing stop: 50% retracement from max price
-                            new_sl = group_info['max_price'] - (group_info['max_price'] - entry_price) * 0.5
+                            # Trailing stop: configurable % retracement from max price
+                            new_sl = group_info['max_price'] - (group_info['max_price'] - entry_price) * self.trailing_stop_pct
 
                             # Only update if new SL is better (higher) than current
                             if new_sl > pos_data['sl']:
@@ -478,8 +480,8 @@ class LiveBotMT5FullAuto:
                                 if ticket in self.positions_tracker:
                                     self.positions_tracker[ticket]['sl'] = new_sl
                         else:  # SELL
-                            # Trailing stop: 50% retracement from min price
-                            new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * 0.5
+                            # Trailing stop: configurable % retracement from min price
+                            new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
 
                             # Only update if new SL is better (lower) than current
                             if new_sl < pos_data['sl']:

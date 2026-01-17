@@ -69,6 +69,7 @@ class DatabaseManager:
                 total_position_size REAL,
                 use_3_position_mode INTEGER DEFAULT 0,
                 min_order_size REAL,
+                trailing_stop_pct REAL DEFAULT 0.5,
                 telegram_enabled INTEGER DEFAULT 0,
                 telegram_token TEXT,
                 telegram_chat_id TEXT,
@@ -187,6 +188,11 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE bot_configs ADD COLUMN min_order_size REAL")
                 print("✅ min_order_size column added")
 
+            if 'trailing_stop_pct' not in columns:
+                print("📊 Migrating bot_configs: adding trailing_stop_pct column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN trailing_stop_pct REAL DEFAULT 0.5")
+                print("✅ trailing_stop_pct column added")
+
         except Exception as e:
             print(f"⚠️  Phase 2 config migration warning: {e}")
 
@@ -202,10 +208,10 @@ class DatabaseManager:
                 risk_percent, max_positions, timeframe, strategy,
                 trend_tp1, trend_tp2, trend_tp3,
                 range_tp1, range_tp2, range_tp3,
-                total_position_size, use_3_position_mode, min_order_size,
+                total_position_size, use_3_position_mode, min_order_size, trailing_stop_pct,
                 telegram_enabled, telegram_token, telegram_chat_id,
                 dry_run, testnet, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             config.bot_id, config.name, config.symbol, config.exchange,
             config.api_key, config.api_secret,
@@ -215,6 +221,7 @@ class DatabaseManager:
             getattr(config, 'total_position_size', None),
             1 if getattr(config, 'use_3_position_mode', False) else 0,
             getattr(config, 'min_order_size', None),
+            getattr(config, 'trailing_stop_pct', 0.5),
             1 if config.telegram_enabled else 0,
             config.telegram_token, config.telegram_chat_id,
             1 if config.dry_run else 0,
@@ -247,6 +254,7 @@ class DatabaseManager:
                 total_position_size=row['total_position_size'] if 'total_position_size' in columns else None,
                 use_3_position_mode=bool(row['use_3_position_mode']) if 'use_3_position_mode' in columns else False,
                 min_order_size=row['min_order_size'] if 'min_order_size' in columns else None,
+                trailing_stop_pct=row['trailing_stop_pct'] if 'trailing_stop_pct' in columns else 0.5,
                 strategy=row['strategy'],
                 trend_tp1=row['trend_tp1'],
                 trend_tp2=row['trend_tp2'],

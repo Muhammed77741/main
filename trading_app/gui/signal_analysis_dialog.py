@@ -1866,8 +1866,8 @@ class SignalAnalysisDialog(QDialog):
         self.worker = None
         
         self.setWindowTitle(f"Signal Analysis - {config.name}")
-        self.setMinimumSize(1400, 900)  # Increased from 1200x800 for wider table
-        self.resize(1600, 1000)  # Set initial size larger and make it resizable
+        self.setMinimumSize(1700, 1000)  # Wider window for better table visibility
+        self.resize(1900, 1050)  # Set initial size larger and make it resizable
         
         # Check dependencies
         if not DEPENDENCIES_AVAILABLE:
@@ -2240,7 +2240,22 @@ class SignalAnalysisDialog(QDialog):
         range_sl_row.addWidget(self.range_sl_spin)
         range_sl_row.addStretch()
         multi_tp_layout.addLayout(range_sl_row)
-        
+
+        # Add spacing
+        multi_tp_layout.addSpacing(10)
+
+        # Trailing stop percentage (for 3-position mode)
+        trailing_row = QHBoxLayout()
+        trailing_row.addWidget(QLabel("<b>Trailing Stop %:</b>"))
+        self.trailing_stop_spin = QSpinBox()
+        self.trailing_stop_spin.setRange(10, 90)
+        self.trailing_stop_spin.setValue(50)  # Default 50%
+        self.trailing_stop_spin.setSuffix("%")
+        self.trailing_stop_spin.setToolTip("Trailing stop percentage for 3-position mode.\n50% = price can retrace 50% from max profit before closing.\nOnly applies when 3-position mode is enabled.")
+        trailing_row.addWidget(self.trailing_stop_spin)
+        trailing_row.addStretch()
+        multi_tp_layout.addLayout(trailing_row)
+
         # Help text for TP/SL values
         help_label = QLabel(
             "<i><small>For Crypto (BTC/ETH): Values are in basis points (100 = 1.0%)<br>"
@@ -2387,6 +2402,7 @@ class SignalAnalysisDialog(QDialog):
                 'range_tp2': self.range_tp2_spin.value(),
                 'range_tp3': self.range_tp3_spin.value(),
                 'range_sl': self.range_sl_spin.value(),
+                'trailing_stop_pct': self.trailing_stop_spin.value(),
             }
             
             # Save to config file in user's home directory
@@ -2398,7 +2414,7 @@ class SignalAnalysisDialog(QDialog):
                 json.dump(settings, f, indent=2)
             
             # Show success message
-            from PyQt5.QtWidgets import QMessageBox
+            # QMessageBox already imported from PySide6 at top
             QMessageBox.information(
                 self,
                 "Settings Saved",
@@ -2409,7 +2425,7 @@ class SignalAnalysisDialog(QDialog):
             )
             
         except Exception as e:
-            from PyQt5.QtWidgets import QMessageBox
+            # QMessageBox already imported from PySide6 at top
             QMessageBox.warning(
                 self,
                 "Save Failed",
@@ -2445,7 +2461,8 @@ class SignalAnalysisDialog(QDialog):
                 self.range_tp2_spin.setValue(settings.get('range_tp2', self.range_tp2_spin.value()))
                 self.range_tp3_spin.setValue(settings.get('range_tp3', self.range_tp3_spin.value()))
                 self.range_sl_spin.setValue(settings.get('range_sl', self.range_sl_spin.value()))
-        
+                self.trailing_stop_spin.setValue(settings.get('trailing_stop_pct', 50))
+
         except Exception as e:
             # Silently fail - just use defaults
             pass
@@ -2482,9 +2499,9 @@ class SignalAnalysisDialog(QDialog):
         # Configure table
         header = self.results_table.horizontalHeader()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        # Resize all columns to contents for better visibility
+        for i in range(9):  # All columns except last
+            header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
         
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -2539,8 +2556,13 @@ class SignalAnalysisDialog(QDialog):
         tp_multiplier = self.tp_multiplier_spin.value()
         sl_multiplier = self.sl_multiplier_spin.value()
         use_trailing = self.use_trailing_check.isChecked()
-        trailing_pct = self.trailing_pct_spin.value()
         use_multi_tp = self.use_multi_tp_check.isChecked()
+
+        # Use different trailing percentage based on mode
+        if use_multi_tp:
+            trailing_pct = self.trailing_stop_spin.value()  # Use 3-position mode trailing stop
+        else:
+            trailing_pct = self.trailing_pct_spin.value()  # Use single position trailing stop
         
         # Get custom TP levels if multi-TP is enabled AND custom group is checked
         # Only use custom values if user explicitly checked the customization section
@@ -2786,9 +2808,9 @@ class SignalAnalysisDialog(QDialog):
         # Configure table header
         header = self.results_table.horizontalHeader()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        # Resize all columns to contents for better visibility
+        for i in range(9):  # All columns except last
+            header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
         
         self.results_table.setRowCount(len(signals_df))
         

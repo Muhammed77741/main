@@ -29,6 +29,7 @@ class BotConfig:
     total_position_size: Optional[float] = None  # Total position size in base currency
     use_3_position_mode: bool = False  # Enable 3-position trading mode
     min_order_size: Optional[float] = None  # Minimum order size for exchange
+    trailing_stop_pct: float = 0.5  # Trailing stop percentage (0.5 = 50% retracement from max profit)
 
     # Strategy parameters
     strategy: str = 'v3_adaptive'
