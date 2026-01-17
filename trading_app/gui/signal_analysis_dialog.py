@@ -1866,8 +1866,8 @@ class SignalAnalysisDialog(QDialog):
         self.worker = None
         
         self.setWindowTitle(f"Signal Analysis - {config.name}")
-        self.setMinimumSize(1700, 950)  # Fit standard desktop resolution (1080p)
-        self.resize(1900, 1000)  # Set initial size to fit desktop with buttons visible
+        self.setMinimumSize(1600, 950)  # Fit standard desktop resolution (1080p: 1920x1080)
+        self.resize(1800, 1000)  # Set initial size to fit desktop with buttons visible
         
         # Check dependencies
         if not DEPENDENCIES_AVAILABLE:
