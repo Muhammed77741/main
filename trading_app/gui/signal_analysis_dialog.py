@@ -1866,8 +1866,8 @@ class SignalAnalysisDialog(QDialog):
         self.worker = None
         
         self.setWindowTitle(f"Signal Analysis - {config.name}")
-        self.setMinimumSize(1700, 1000)  # Wider window for better table visibility
-        self.resize(1900, 1050)  # Set initial size larger and make it resizable
+        self.setMinimumSize(1700, 1100)  # Increased height for buttons visibility
+        self.resize(1900, 1150)  # Set initial size larger and make it resizable
         
         # Check dependencies
         if not DEPENDENCIES_AVAILABLE:
@@ -1908,13 +1908,13 @@ class SignalAnalysisDialog(QDialog):
         
         # Summary section
         self.summary_group = self.create_summary_section()
-        layout.addWidget(self.summary_group)
-        
-        # Results table - give it maximum space
+        layout.addWidget(self.summary_group, 0)  # No stretch
+
+        # Results table - give it space but not too much to hide buttons
         results_group = self.create_results_section()
-        layout.addWidget(results_group, 10)  # Much higher stretch factor for results table
-        
-        # Buttons
+        layout.addWidget(results_group, 1)  # Allow to grow but keep buttons visible
+
+        # Buttons - always visible at bottom
         button_layout = QHBoxLayout()
         
         self.analyze_btn = QPushButton("🔍 Analyze Signals")
@@ -1981,7 +1981,9 @@ class SignalAnalysisDialog(QDialog):
         """)
         close_btn.clicked.connect(self.accept)
         button_layout.addWidget(close_btn)
-        
+
+        # Add spacing before buttons to separate from table
+        layout.addSpacing(10)
         layout.addLayout(button_layout)
         
         # Load saved TP/SL defaults after UI is initialized
@@ -2130,7 +2132,7 @@ class SignalAnalysisDialog(QDialog):
         row5.setSpacing(5)
 
         self.use_multi_tp_check = QCheckBox("Use Multiple TP Levels (Live Bot Mode)")
-        self.use_multi_tp_check.setChecked(False)
+        self.use_multi_tp_check.setChecked(True)  # Enabled by default for 3-position mode
         self.use_multi_tp_check.setToolTip(
             "Enable regime-based TP levels matching live bot:\n\n"
             "Crypto (BTC/ETH):\n"
