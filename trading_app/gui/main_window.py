@@ -642,14 +642,22 @@ class MainWindow(QMainWindow):
                 # Determine color based on profit
                 pnl_color = '#4CAF50' if (trade.profit or 0) >= 0 else '#F44336'
                 type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
-                
+
                 # Get current price (if available from trade data)
                 current_price = trade.close_price if trade.close_price else trade.entry_price
-                
+
+                # Calculate P&L percentage
+                profit_pct = 0.0
+                if trade.profit_percent is not None:
+                    profit_pct = trade.profit_percent
+                elif trade.entry_price > 0 and trade.amount > 0:
+                    entry_value = trade.entry_price * trade.amount
+                    profit_pct = ((trade.profit or 0) / entry_value * 100) if entry_value > 0 else 0.0
+
                 positions_html += f"""
                 <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
                     <p style='margin: 2px 0;'>
-                        <b>{type_icon} {trade.symbol if trade.symbol else 'N/A'}</b> 
+                        <b>{type_icon} {trade.symbol if trade.symbol else 'N/A'}</b>
                         <span style='color: #666;'>{trade.trade_type}</span>
                     </p>
                     <p style='margin: 2px 0; font-size: 11px; color: #666;'>
@@ -657,7 +665,7 @@ class MainWindow(QMainWindow):
                     </p>
                     <p style='margin: 2px 0; font-size: 11px;'>
                         P&L: <span style='color: {pnl_color}; font-weight: bold;'>
-                        ${(trade.profit or 0):+,.2f}</span>
+                        ${(trade.profit or 0):+,.2f} ({profit_pct:+.2f}%)</span>
                     </p>
                 </div>
                 """
