@@ -299,9 +299,14 @@ class SettingsDialog(QDialog):
 
         # Phase 2: 3-Position Mode
         self.use_3pos_check.setChecked(self.config.get('use_3_position_mode', False))
-        self.total_pos_size_spin.setValue(self.config.get('total_position_size', 100.0 if self.original_config.exchange == 'Binance' else 0.1))
-        self.min_order_size_spin.setValue(self.config.get('min_order_size', 10.0 if self.original_config.exchange == 'Binance' else 0.01))
-        self.trailing_stop_pct_spin.setValue(int(self.config.get('trailing_stop_pct', 0.5) * 100))  # Convert 0.5 to 50
+
+        # Handle None values by using 'or' fallback
+        total_pos_default = 100.0 if self.original_config.exchange == 'Binance' else 0.1
+        min_order_default = 10.0 if self.original_config.exchange == 'Binance' else 0.01
+
+        self.total_pos_size_spin.setValue(self.config.get('total_position_size') or total_pos_default)
+        self.min_order_size_spin.setValue(self.config.get('min_order_size') or min_order_default)
+        self.trailing_stop_pct_spin.setValue(int((self.config.get('trailing_stop_pct') or 0.5) * 100))  # Convert 0.5 to 50
 
         # Telegram
         self.telegram_enable_check.setChecked(self.config.get('telegram_enabled', False))
