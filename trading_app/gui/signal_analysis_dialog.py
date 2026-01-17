@@ -1886,13 +1886,9 @@ class SignalAnalysisDialog(QDialog):
         """Initialize UI"""
         layout = QVBoxLayout(self)
         
-        # Info section
+        # Info section - more compact
         info_label = QLabel(
-            "📊 <b>Signal Analysis (Backtest)</b><br>"
-            "Analyze which trading signals would have been generated in a date range.<br>"
-            "This uses the same strategy and TP/SL levels as the live bot.<br>"
-            "<i>Multi-TP mode uses regime-based TP levels (TREND vs RANGE detection).<br>"
-            "CSV export includes tp1_used, tp2_used, tp3_used columns with actual TP levels.</i>"
+            "📊 <b>Signal Analysis</b> - Backtest trading signals | Multi-TP uses regime-based TP (TREND/RANGE)"
         )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -1914,9 +1910,9 @@ class SignalAnalysisDialog(QDialog):
         self.summary_group = self.create_summary_section()
         layout.addWidget(self.summary_group)
         
-        # Results table
+        # Results table - give it maximum space
         results_group = self.create_results_section()
-        layout.addWidget(results_group, 2)  # Increased stretch factor for more space
+        layout.addWidget(results_group, 10)  # Much higher stretch factor for results table
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -1992,26 +1988,29 @@ class SignalAnalysisDialog(QDialog):
         self.load_tp_defaults()
         
     def create_params_section(self):
-        """Create parameters section"""
+        """Create parameters section - compact layout"""
         group = QGroupBox("Analysis Parameters")
         layout = QVBoxLayout(group)
+        layout.setSpacing(2)  # Minimal spacing
+        layout.setContentsMargins(5, 5, 5, 5)  # Compact margins
         
-        # Row 1: Symbol
+        # Compact single row: Symbol, Timeframe, Days, Date range
         row1 = QHBoxLayout()
+        row1.setSpacing(5)
+
         row1.addWidget(QLabel("Symbol:"))
-        
         self.symbol_combo = QComboBox()
         # Determine symbol based on bot name and symbol
         bot_name_upper = self.config.name.upper()
         symbol_upper = self.config.symbol.upper() if self.config.symbol else ''
-        
+
         is_btc = (
-            'BTC' in bot_name_upper or 
+            'BTC' in bot_name_upper or
             'BITCOIN' in bot_name_upper or
             'BTC' in symbol_upper
         )
         is_eth = (
-            'ETH' in bot_name_upper or 
+            'ETH' in bot_name_upper or
             'ETHEREUM' in bot_name_upper or
             'ETH' in symbol_upper
         )
@@ -2022,7 +2021,7 @@ class SignalAnalysisDialog(QDialog):
             'XAUUSD' in symbol_upper or
             'XAU' in symbol_upper
         )
-        
+
         if is_xauusd:
             self.symbol_combo.addItems(['XAUUSD'])
         elif is_btc and not is_eth:
@@ -2032,57 +2031,57 @@ class SignalAnalysisDialog(QDialog):
         else:
             # Default: add both
             self.symbol_combo.addItems(['BTC/USDT', 'ETH/USDT'])
-        
+
         # Connect symbol change to update TP/SL labels dynamically and load saved defaults
         self.symbol_combo.currentTextChanged.connect(self.on_symbol_changed)
-        
+        self.symbol_combo.setMaximumWidth(120)
         row1.addWidget(self.symbol_combo)
-        
-        row1.addWidget(QLabel("  Timeframe:"))
+
+        row1.addWidget(QLabel("TF:"))
         self.timeframe_combo = QComboBox()
         self.timeframe_combo.addItems(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'])
-        self.timeframe_combo.setCurrentText('1h')  # Default to 1h
+        self.timeframe_combo.setCurrentText('1h')
+        self.timeframe_combo.setMaximumWidth(80)
         row1.addWidget(self.timeframe_combo)
-        
-        row1.addWidget(QLabel("  Days:"))
+
+        row1.addWidget(QLabel("Days:"))
         self.days_spin = QSpinBox()
         self.days_spin.setRange(1, 365)
         self.days_spin.setValue(7)
         self.days_spin.valueChanged.connect(self.on_days_changed)
+        self.days_spin.setMaximumWidth(60)
         row1.addWidget(self.days_spin)
-        
-        row1.addStretch()
-        layout.addLayout(row1)
-        
-        # Row 2: Date range
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Or use date range:"))
-        
-        row2.addWidget(QLabel("From:"))
+
+        row1.addWidget(QLabel("or From:"))
         self.start_date = QDateEdit()
         self.start_date.setCalendarPopup(True)
         self.start_date.setDate(QDate.currentDate().addDays(-7))
         self.start_date.dateChanged.connect(self.on_date_changed)
-        row2.addWidget(self.start_date)
-        
-        row2.addWidget(QLabel("To:"))
+        self.start_date.setMaximumWidth(100)
+        row1.addWidget(self.start_date)
+
+        row1.addWidget(QLabel("To:"))
         self.end_date = QDateEdit()
         self.end_date.setCalendarPopup(True)
         self.end_date.setDate(QDate.currentDate())
         self.end_date.dateChanged.connect(self.on_date_changed)
-        row2.addWidget(self.end_date)
-        
-        row2.addStretch()
-        layout.addLayout(row2)
+        self.end_date.setMaximumWidth(100)
+        row1.addWidget(self.end_date)
+
+        row1.addStretch()
+        layout.addLayout(row1)
 
         # Backtest Parameters (collapsible group)
-        self.backtest_params_group = QGroupBox("Backtest Parameters (optional - override strategy defaults)")
+        self.backtest_params_group = QGroupBox("⚙️ Backtest Parameters (optional)")
         self.backtest_params_group.setCheckable(True)
         self.backtest_params_group.setChecked(False)  # Collapsed by default
         backtest_layout = QVBoxLayout(self.backtest_params_group)
+        backtest_layout.setSpacing(2)  # Compact spacing
+        backtest_layout.setContentsMargins(5, 5, 5, 5)
 
         # TP/SL parameters
         row3 = QHBoxLayout()
+        row3.setSpacing(5)
         
         # TP Multiplier
         row3.addWidget(QLabel("TP Multiplier:"))
@@ -2107,7 +2106,8 @@ class SignalAnalysisDialog(QDialog):
 
         # Trailing stop
         row4 = QHBoxLayout()
-        
+        row4.setSpacing(5)
+
         self.use_trailing_check = QCheckBox("Use Trailing Stop")
         self.use_trailing_check.setChecked(False)
         self.use_trailing_check.stateChanged.connect(self.on_trailing_changed)
@@ -2127,7 +2127,8 @@ class SignalAnalysisDialog(QDialog):
 
         # Multi-TP mode
         row5 = QHBoxLayout()
-        
+        row5.setSpacing(5)
+
         self.use_multi_tp_check = QCheckBox("Use Multiple TP Levels (Live Bot Mode)")
         self.use_multi_tp_check.setChecked(False)
         self.use_multi_tp_check.setToolTip(
@@ -2148,16 +2149,19 @@ class SignalAnalysisDialog(QDialog):
         backtest_layout.addLayout(row5)
 
         # Multi-TP customization section (collapsible)
-        self.multi_tp_custom_group = QGroupBox("Custom TP Levels (Optional - Override Defaults)")
+        self.multi_tp_custom_group = QGroupBox("📊 Custom TP Levels (optional)")
         self.multi_tp_custom_group.setCheckable(True)
         self.multi_tp_custom_group.setChecked(False)  # Collapsed by default
         multi_tp_layout = QVBoxLayout(self.multi_tp_custom_group)
-        
+        multi_tp_layout.setSpacing(2)
+        multi_tp_layout.setContentsMargins(5, 5, 5, 5)
+
         # Connect checkbox to show/hide customization
         self.use_multi_tp_check.stateChanged.connect(self.on_multi_tp_changed)
-        
+
         # TREND mode TP levels
         trend_row = QHBoxLayout()
+        trend_row.setSpacing(3)
         trend_row.addWidget(QLabel("<b>TREND Mode:</b>"))
         trend_row.addWidget(QLabel("TP1:"))
         self.trend_tp1_spin = QSpinBox()
@@ -2188,6 +2192,7 @@ class SignalAnalysisDialog(QDialog):
         
         # RANGE mode TP levels
         range_row = QHBoxLayout()
+        range_row.setSpacing(3)
         range_row.addWidget(QLabel("<b>RANGE Mode:</b>"))
         range_row.addWidget(QLabel("TP1:"))
         self.range_tp1_spin = QSpinBox()
@@ -2216,11 +2221,9 @@ class SignalAnalysisDialog(QDialog):
         range_row.addStretch()
         multi_tp_layout.addLayout(range_row)
         
-        # Add spacing
-        multi_tp_layout.addSpacing(10)
-        
         # TREND mode SL levels
         trend_sl_row = QHBoxLayout()
+        trend_sl_row.setSpacing(3)
         trend_sl_row.addWidget(QLabel("<b>TREND Mode SL:</b>"))
         self.trend_sl_spin = QSpinBox()
         self.trend_sl_spin.setRange(1, 500)
@@ -2233,6 +2236,7 @@ class SignalAnalysisDialog(QDialog):
         
         # RANGE mode SL levels
         range_sl_row = QHBoxLayout()
+        range_sl_row.setSpacing(3)
         range_sl_row.addWidget(QLabel("<b>RANGE Mode SL:</b>"))
         self.range_sl_spin = QSpinBox()
         self.range_sl_spin.setRange(1, 500)
@@ -2243,11 +2247,9 @@ class SignalAnalysisDialog(QDialog):
         range_sl_row.addStretch()
         multi_tp_layout.addLayout(range_sl_row)
 
-        # Add spacing
-        multi_tp_layout.addSpacing(10)
-
         # Trailing stop percentage (for 3-position mode)
         trailing_row = QHBoxLayout()
+        trailing_row.setSpacing(3)
         trailing_row.addWidget(QLabel("<b>Trailing Stop %:</b>"))
         self.trailing_stop_spin = QSpinBox()
         self.trailing_stop_spin.setRange(10, 90)
