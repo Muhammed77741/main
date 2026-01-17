@@ -231,6 +231,9 @@ class DatabaseManager:
         row = cursor.fetchone()
 
         if row:
+            # Check which columns exist (for backward compatibility)
+            columns = row.keys()
+
             return BotConfig(
                 bot_id=row['bot_id'],
                 name=row['name'],
@@ -241,9 +244,9 @@ class DatabaseManager:
                 risk_percent=row['risk_percent'],
                 max_positions=row['max_positions'],
                 timeframe=row['timeframe'],
-                total_position_size=row.get('total_position_size'),
-                use_3_position_mode=bool(row.get('use_3_position_mode', 0)),
-                min_order_size=row.get('min_order_size'),
+                total_position_size=row['total_position_size'] if 'total_position_size' in columns else None,
+                use_3_position_mode=bool(row['use_3_position_mode']) if 'use_3_position_mode' in columns else False,
+                min_order_size=row['min_order_size'] if 'min_order_size' in columns else None,
                 strategy=row['strategy'],
                 trend_tp1=row['trend_tp1'],
                 trend_tp2=row['trend_tp2'],
