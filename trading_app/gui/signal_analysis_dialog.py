@@ -1866,8 +1866,8 @@ class SignalAnalysisDialog(QDialog):
         self.worker = None
         
         self.setWindowTitle(f"Signal Analysis - {config.name}")
-        self.setMinimumSize(1700, 1300)  # Increased height to ensure buttons always visible
-        self.resize(1900, 1350)  # Set initial size larger and make it resizable
+        self.setMinimumSize(1700, 950)  # Fit standard desktop resolution (1080p)
+        self.resize(1900, 1000)  # Set initial size to fit desktop with buttons visible
         
         # Check dependencies
         if not DEPENDENCIES_AVAILABLE:
@@ -2509,9 +2509,9 @@ class SignalAnalysisDialog(QDialog):
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
         
-        # Set maximum height to ensure buttons remain visible
-        # Leave enough space for buttons and summary section (~200px)
-        self.results_table.setMaximumHeight(700)
+        # Set maximum height to ensure buttons remain visible on standard desktop (1080p)
+        # Reduced to fit within ~950-1000px total window height
+        self.results_table.setMaximumHeight(450)
 
         layout.addWidget(self.results_table)
 
