@@ -61,7 +61,7 @@ class SignalAnalysisWorker(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True, starting_balance=10000):
+                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True, starting_balance=10000, use_breakeven=True):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -77,6 +77,7 @@ class SignalAnalysisWorker(QThread):
         self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
         self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops for 3-position mode
         self.starting_balance = starting_balance  # Starting balance for USD calculations
+        self.use_breakeven = use_breakeven  # Move SL to breakeven after TP1
         
     def run(self):
         """Run signal analysis in background"""
@@ -637,8 +638,9 @@ class SignalAnalysisWorker(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['high'] >= tp2:
                     # TP2 hit - close 30%
@@ -675,8 +677,9 @@ class SignalAnalysisWorker(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['low'] <= tp2:
                     # TP2 hit - close 30%
@@ -765,8 +768,9 @@ class SignalAnalysisWorker(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['high'] >= tp2_price:
                     # TP2 hit - close 30%
@@ -803,8 +807,9 @@ class SignalAnalysisWorker(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['low'] <= tp2_price:
                     # TP2 hit - close 30%
@@ -949,7 +954,7 @@ class SignalAnalysisWorkerMT5(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True, starting_balance=10000):
+                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True, starting_balance=10000, use_breakeven=True):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -965,6 +970,7 @@ class SignalAnalysisWorkerMT5(QThread):
         self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
         self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops for 3-position mode
         self.starting_balance = starting_balance  # Starting balance for USD calculations
+        self.use_breakeven = use_breakeven  # Move SL to breakeven after TP1
         
     def run(self):
         """Run signal analysis in background using MT5"""
@@ -1561,8 +1567,9 @@ class SignalAnalysisWorkerMT5(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['high'] >= tp2:
                     # TP2 hit - close 30%
@@ -1599,8 +1606,9 @@ class SignalAnalysisWorkerMT5(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['low'] <= tp2:
                     # TP2 hit - close 30%
@@ -1689,8 +1697,9 @@ class SignalAnalysisWorkerMT5(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['high'] >= tp2_price:
                     # TP2 hit - close 30%
@@ -1727,8 +1736,9 @@ class SignalAnalysisWorkerMT5(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['low'] <= tp2_price:
                     # TP2 hit - close 30%
@@ -2259,6 +2269,16 @@ class SignalAnalysisDialog(QDialog):
         trailing_enable_row.addWidget(self.use_trailing_check)
         trailing_enable_row.addStretch()
         multi_tp_layout.addLayout(trailing_enable_row)
+        
+        # Breakeven after TP1 checkbox
+        breakeven_row = QHBoxLayout()
+        breakeven_row.setSpacing(3)
+        self.use_breakeven_check = QCheckBox("Move SL to Breakeven after TP1")
+        self.use_breakeven_check.setChecked(True)  # Enabled by default to match current behavior
+        self.use_breakeven_check.setToolTip("When TP1 is hit, move stop loss to entry price (breakeven) to protect profits")
+        breakeven_row.addWidget(self.use_breakeven_check)
+        breakeven_row.addStretch()
+        multi_tp_layout.addLayout(breakeven_row)
 
         # Trailing stop percentage (for 3-position mode)
         trailing_row = QHBoxLayout()
@@ -2281,26 +2301,25 @@ class SignalAnalysisDialog(QDialog):
         help_label.setStyleSheet("color: gray;")
         multi_tp_layout.addWidget(help_label)
         
-        # Save as Default button - compact
+        # Save as Default button - very compact
         save_button_row = QHBoxLayout()
         save_button_row.addStretch()
-        self.save_tp_defaults_btn = QPushButton("💾 Save")
+        self.save_tp_defaults_btn = QPushButton("💾")
         self.save_tp_defaults_btn.setToolTip(
             "Save current TP/SL values as defaults.\n"
             "These values will be loaded automatically\n"
             "when you open the Signal Analysis dialog."
         )
         self.save_tp_defaults_btn.clicked.connect(self.on_save_tp_defaults)
-        self.save_tp_defaults_btn.setMaximumWidth(80)
+        self.save_tp_defaults_btn.setMaximumWidth(35)
         self.save_tp_defaults_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
                 color: white;
                 border: none;
                 border-radius: 3px;
-                padding: 4px 8px;
-                font-size: 11px;
-                font-weight: bold;
+                padding: 3px;
+                font-size: 14px;
             }
             QPushButton:hover {
                 background-color: #45a049;
@@ -2597,6 +2616,7 @@ class SignalAnalysisDialog(QDialog):
         use_trailing = False  # Fibonacci trailing stop removed
         use_multi_tp = self.use_multi_tp_check.isChecked()
         use_trailing_stops = self.use_trailing_check.isChecked()  # Get trailing stops checkbox state
+        use_breakeven = self.use_breakeven_check.isChecked()  # Get breakeven checkbox state
         starting_balance = self.starting_balance_spin.value()  # Get starting balance for USD calculations
 
         # Use different trailing percentage based on mode
@@ -2664,14 +2684,14 @@ class SignalAnalysisDialog(QDialog):
             self.worker = SignalAnalysisWorkerMT5(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels, custom_sl_levels, use_trailing_stops, starting_balance
+                custom_tp_levels, custom_sl_levels, use_trailing_stops, starting_balance, use_breakeven
             )
         else:
             # Use Binance worker for BTC/ETH
             self.worker = SignalAnalysisWorker(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels, custom_sl_levels, use_trailing_stops, starting_balance
+                custom_tp_levels, custom_sl_levels, use_trailing_stops, starting_balance, use_breakeven
             )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)
