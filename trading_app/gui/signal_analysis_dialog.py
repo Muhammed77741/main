@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QGroupBox, QHeaderView, QDateEdit, QComboBox,
-    QSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
+    QSpinBox, QDoubleSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QDate
 from models import BotConfig
@@ -2860,8 +2860,9 @@ class SignalAnalysisDialog(QDialog):
         # Configure table header
         header = self.results_table.horizontalHeader()
         header.setStretchLastSection(True)
-        # Resize all columns to contents for better visibility
-        for i in range(9):  # All columns except last
+        # Resize all columns to contents for better visibility (except last which stretches)
+        column_count = self.results_table.columnCount()
+        for i in range(column_count - 1):  # All columns except last
             header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
         
         self.results_table.setRowCount(len(signals_df))
