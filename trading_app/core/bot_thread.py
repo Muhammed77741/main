@@ -90,7 +90,11 @@ class BotThread(QThread):
             timeframe=self._get_mt5_timeframe(self.config.timeframe),
             risk_percent=self.config.risk_percent,
             max_positions=self.config.max_positions,
-            dry_run=self.config.dry_run
+            dry_run=self.config.dry_run,
+            use_3_position_mode=self.config.use_3_position_mode,
+            total_position_size=self.config.total_position_size,
+            min_order_size=self.config.min_order_size,
+            trailing_stop_pct=self.config.trailing_stop_pct
         )
 
         # Set TP levels
@@ -115,7 +119,11 @@ class BotThread(QThread):
             dry_run=self.config.dry_run,
             testnet=self.config.testnet,
             api_key=self.config.api_key,
-            api_secret=self.config.api_secret
+            api_secret=self.config.api_secret,
+            use_3_position_mode=self.config.use_3_position_mode,
+            total_position_size=self.config.total_position_size,
+            min_order_size=self.config.min_order_size,
+            trailing_stop_pct=self.config.trailing_stop_pct
         )
 
         # Set TP levels (in percent)
