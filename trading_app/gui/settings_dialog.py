@@ -181,6 +181,10 @@ class SettingsDialog(QDialog):
         self.min_order_size_spin.setSuffix(f" {unit}")
         layout.addRow("Min order size:", self.min_order_size_spin)
 
+        self.use_trailing_check = QCheckBox("Enable trailing stops (Pos 2 & 3)")
+        self.use_trailing_check.setToolTip("Enable trailing stops for positions 2 and 3 after TP1 is hit")
+        layout.addRow("", self.use_trailing_check)
+
         self.trailing_stop_pct_spin = QSpinBox()
         self.trailing_stop_pct_spin.setRange(10, 90)
         self.trailing_stop_pct_spin.setValue(50)
@@ -306,6 +310,7 @@ class SettingsDialog(QDialog):
 
         self.total_pos_size_spin.setValue(self.config.get('total_position_size') or total_pos_default)
         self.min_order_size_spin.setValue(self.config.get('min_order_size') or min_order_default)
+        self.use_trailing_check.setChecked(self.config.get('use_trailing_stops', True))
         self.trailing_stop_pct_spin.setValue(int((self.config.get('trailing_stop_pct') or 0.5) * 100))  # Convert 0.5 to 50
 
         # Telegram
@@ -339,6 +344,7 @@ class SettingsDialog(QDialog):
         self.config['use_3_position_mode'] = self.use_3pos_check.isChecked()
         self.config['total_position_size'] = self.total_pos_size_spin.value()
         self.config['min_order_size'] = self.min_order_size_spin.value()
+        self.config['use_trailing_stops'] = self.use_trailing_check.isChecked()
         self.config['trailing_stop_pct'] = self.trailing_stop_pct_spin.value() / 100.0  # Convert 50 to 0.5
 
         self.config['telegram_enabled'] = self.telegram_enable_check.isChecked()

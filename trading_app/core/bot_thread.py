@@ -94,6 +94,7 @@ class BotThread(QThread):
             use_3_position_mode=self.config.use_3_position_mode,
             total_position_size=self.config.total_position_size,
             min_order_size=self.config.min_order_size,
+            use_trailing_stops=self.config.use_trailing_stops,
             trailing_stop_pct=self.config.trailing_stop_pct
         )
 
@@ -123,6 +124,7 @@ class BotThread(QThread):
             use_3_position_mode=self.config.use_3_position_mode,
             total_position_size=self.config.total_position_size,
             min_order_size=self.config.min_order_size,
+            use_trailing_stops=self.config.use_trailing_stops,
             trailing_stop_pct=self.config.trailing_stop_pct
         )
 

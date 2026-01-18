@@ -61,7 +61,7 @@ class SignalAnalysisWorker(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None, custom_sl_levels=None):
+                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -75,6 +75,7 @@ class SignalAnalysisWorker(QThread):
         self.use_multi_tp = use_multi_tp
         self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
         self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops for 3-position mode
         
     def run(self):
         """Run signal analysis in background"""
@@ -425,19 +426,19 @@ class SignalAnalysisWorker(QThread):
         Calculate outcomes for 3 separate positions with different TP targets and trailing stops.
         
         Position 1: Targets TP1 only, no trailing
-        Position 2: Targets TP2, trailing activates after TP1 hits
-        Position 3: Targets TP3, trailing activates after TP1 hits
+        Position 2: Targets TP2, trailing activates after TP1 hits (if enabled)
+        Position 3: Targets TP3, trailing activates after TP1 hits (if enabled)
         
         Returns list of 3 position dictionaries with outcomes
         """
         # Track TP1 hit for trailing activation
         tp1_hit = False
         
-        # Initialize positions
+        # Initialize positions - use_trailing_stops controls whether pos 2 & 3 use trailing
         positions = [
             {'position_num': 1, 'target_tp': tp1, 'use_trailing': False, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
-            {'position_num': 2, 'target_tp': tp2, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
-            {'position_num': 3, 'target_tp': tp3, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
+            {'position_num': 2, 'target_tp': tp2, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
+            {'position_num': 3, 'target_tp': tp3, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
         ]
         
         # Tracking for trailing stops (positions 2 and 3)
@@ -946,7 +947,7 @@ class SignalAnalysisWorkerMT5(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None, custom_sl_levels=None):
+                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -960,6 +961,7 @@ class SignalAnalysisWorkerMT5(QThread):
         self.use_multi_tp = use_multi_tp
         self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
         self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops for 3-position mode
         
     def run(self):
         """Run signal analysis in background using MT5"""
@@ -1346,19 +1348,19 @@ class SignalAnalysisWorkerMT5(QThread):
         Calculate outcomes for 3 separate positions with different TP targets and trailing stops.
         
         Position 1: Targets TP1 only, no trailing
-        Position 2: Targets TP2, trailing activates after TP1 hits
-        Position 3: Targets TP3, trailing activates after TP1 hits
+        Position 2: Targets TP2, trailing activates after TP1 hits (if enabled)
+        Position 3: Targets TP3, trailing activates after TP1 hits (if enabled)
         
         Returns list of 3 position dictionaries with outcomes
         """
         # Track TP1 hit for trailing activation
         tp1_hit = False
         
-        # Initialize positions
+        # Initialize positions - use_trailing_stops controls whether pos 2 & 3 use trailing
         positions = [
             {'position_num': 1, 'target_tp': tp1, 'use_trailing': False, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
-            {'position_num': 2, 'target_tp': tp2, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
-            {'position_num': 3, 'target_tp': tp3, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
+            {'position_num': 2, 'target_tp': tp2, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
+            {'position_num': 3, 'target_tp': tp3, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
         ]
         
         # Tracking for trailing stops (positions 2 and 3)
@@ -2228,6 +2230,16 @@ class SignalAnalysisDialog(QDialog):
         range_sl_row.addStretch()
         multi_tp_layout.addLayout(range_sl_row)
 
+        # Trailing stop enable/disable checkbox
+        trailing_enable_row = QHBoxLayout()
+        trailing_enable_row.setSpacing(3)
+        self.use_trailing_check = QCheckBox("Enable Trailing Stops (Pos 2 & 3)")
+        self.use_trailing_check.setChecked(True)  # Enabled by default
+        self.use_trailing_check.setToolTip("Enable trailing stops for positions 2 and 3 after TP1 is hit")
+        trailing_enable_row.addWidget(self.use_trailing_check)
+        trailing_enable_row.addStretch()
+        multi_tp_layout.addLayout(trailing_enable_row)
+
         # Trailing stop percentage (for 3-position mode)
         trailing_row = QHBoxLayout()
         trailing_row.setSpacing(3)
@@ -2564,6 +2576,7 @@ class SignalAnalysisDialog(QDialog):
         sl_multiplier = self.sl_multiplier_spin.value()
         use_trailing = False  # Fibonacci trailing stop removed
         use_multi_tp = self.use_multi_tp_check.isChecked()
+        use_trailing_stops = self.use_trailing_check.isChecked()  # Get trailing stops checkbox state
 
         # Use different trailing percentage based on mode
         if use_multi_tp:
@@ -2630,14 +2643,14 @@ class SignalAnalysisDialog(QDialog):
             self.worker = SignalAnalysisWorkerMT5(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels, custom_sl_levels
+                custom_tp_levels, custom_sl_levels, use_trailing_stops
             )
         else:
             # Use Binance worker for BTC/ETH
             self.worker = SignalAnalysisWorker(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels, custom_sl_levels
+                custom_tp_levels, custom_sl_levels, use_trailing_stops
             )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)

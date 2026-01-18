@@ -42,7 +42,7 @@ class LiveBotMT5FullAuto:
                  check_interval=3600, risk_percent=2.0, max_positions=9,
                  dry_run=False, bot_id=None, use_database=True,
                  use_3_position_mode=False, total_position_size=None, min_order_size=None,
-                 trailing_stop_pct=0.5):
+                 use_trailing_stops=True, trailing_stop_pct=0.5):
         """
         Initialize bot
         
@@ -75,6 +75,7 @@ class LiveBotMT5FullAuto:
         self.use_3_position_mode = use_3_position_mode
         self.total_position_size = total_position_size
         self.min_order_size = min_order_size
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops
         self.trailing_stop_pct = trailing_stop_pct  # Trailing stop percentage for 3-position mode
 
         # Initialize strategy
@@ -411,7 +412,7 @@ class LiveBotMT5FullAuto:
         - When any position reaches TP1, activate trailing for Pos 2 & 3
         - Trailing formula: 50% retracement from max profit
         """
-        if not self.use_3_position_mode:
+        if not self.use_3_position_mode or not self.use_trailing_stops:
             return
 
         # Group positions by position_group_id
