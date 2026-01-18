@@ -461,6 +461,9 @@ class SignalAnalysisWorker(QThread):
                 if not tp1_hit and future_candle['high'] >= tp1:
                     tp1_hit = True
                     max_price_since_tp1 = future_candle['high']
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 # Update max price since TP1 for trailing calculation
                 if tp1_hit:
@@ -523,6 +526,9 @@ class SignalAnalysisWorker(QThread):
                 if not tp1_hit and future_candle['low'] <= tp1:
                     tp1_hit = True
                     min_price_since_tp1 = future_candle['low']
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 # Update min price since TP1 for trailing calculation
                 if tp1_hit:
@@ -1390,6 +1396,9 @@ class SignalAnalysisWorkerMT5(QThread):
                 if not tp1_hit and future_candle['high'] >= tp1:
                     tp1_hit = True
                     max_price_since_tp1 = future_candle['high']
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 # Update max price since TP1 for trailing calculation
                 if tp1_hit:
@@ -1452,6 +1461,9 @@ class SignalAnalysisWorkerMT5(QThread):
                 if not tp1_hit and future_candle['low'] <= tp1:
                     tp1_hit = True
                     min_price_since_tp1 = future_candle['low']
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 # Update min price since TP1 for trailing calculation
                 if tp1_hit:
