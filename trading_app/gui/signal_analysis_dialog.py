@@ -61,7 +61,7 @@ class SignalAnalysisWorker(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True):
+                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True, starting_balance=10000):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -76,6 +76,7 @@ class SignalAnalysisWorker(QThread):
         self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
         self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
         self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops for 3-position mode
+        self.starting_balance = starting_balance  # Starting balance for USD calculations
         
     def run(self):
         """Run signal analysis in background"""
@@ -223,6 +224,7 @@ class SignalAnalysisWorker(QThread):
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
         signals_df['profit_pct'] = 0.0
+        signals_df['profit_usd'] = 0.0  # USD profit/loss
         signals_df['bars_held'] = 0
         
         # Add multi-TP column if enabled
@@ -947,7 +949,7 @@ class SignalAnalysisWorkerMT5(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True):
+                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True, starting_balance=10000):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -962,6 +964,7 @@ class SignalAnalysisWorkerMT5(QThread):
         self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
         self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
         self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops for 3-position mode
+        self.starting_balance = starting_balance  # Starting balance for USD calculations
         
     def run(self):
         """Run signal analysis in background using MT5"""
@@ -1083,6 +1086,7 @@ class SignalAnalysisWorkerMT5(QThread):
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
         signals_df['profit_pct'] = 0.0
+        signals_df['profit_usd'] = 0.0  # USD profit/loss
         signals_df['bars_held'] = 0
         
         # Add multi-TP column if enabled
@@ -2074,6 +2078,22 @@ class SignalAnalysisDialog(QDialog):
 
         row1.addStretch()
         layout.addLayout(row1)
+        
+        # Starting balance row
+        row_balance = QHBoxLayout()
+        row_balance.setSpacing(5)
+        row_balance.addWidget(QLabel("Starting Balance:"))
+        self.starting_balance_spin = QDoubleSpinBox()
+        self.starting_balance_spin.setRange(100, 10000000)
+        self.starting_balance_spin.setValue(10000)  # Default $10,000
+        self.starting_balance_spin.setPrefix("$")
+        self.starting_balance_spin.setDecimals(2)
+        self.starting_balance_spin.setSingleStep(1000)
+        self.starting_balance_spin.setToolTip("Starting balance for USD profit/loss calculations")
+        self.starting_balance_spin.setMaximumWidth(150)
+        row_balance.addWidget(self.starting_balance_spin)
+        row_balance.addStretch()
+        layout.addLayout(row_balance)
 
         # Backtest Parameters (collapsible group)
         self.backtest_params_group = QGroupBox("⚙️ Backtest Parameters (optional)")
@@ -2577,6 +2597,7 @@ class SignalAnalysisDialog(QDialog):
         use_trailing = False  # Fibonacci trailing stop removed
         use_multi_tp = self.use_multi_tp_check.isChecked()
         use_trailing_stops = self.use_trailing_check.isChecked()  # Get trailing stops checkbox state
+        starting_balance = self.starting_balance_spin.value()  # Get starting balance for USD calculations
 
         # Use different trailing percentage based on mode
         if use_multi_tp:
@@ -2643,14 +2664,14 @@ class SignalAnalysisDialog(QDialog):
             self.worker = SignalAnalysisWorkerMT5(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels, custom_sl_levels, use_trailing_stops
+                custom_tp_levels, custom_sl_levels, use_trailing_stops, starting_balance
             )
         else:
             # Use Binance worker for BTC/ETH
             self.worker = SignalAnalysisWorker(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels, custom_sl_levels, use_trailing_stops
+                custom_tp_levels, custom_sl_levels, use_trailing_stops, starting_balance
             )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)
@@ -2681,6 +2702,10 @@ class SignalAnalysisDialog(QDialog):
             )
             return
             
+        # Calculate profit_usd based on profit_pct and starting balance
+        starting_balance = self.starting_balance_spin.value()
+        signals_df['profit_usd'] = (signals_df['profit_pct'] / 100.0) * starting_balance
+        
         # Store results
         self.current_results = signals_df
         
@@ -2706,6 +2731,7 @@ class SignalAnalysisDialog(QDialog):
             
             # Calculate P&L metrics
             total_profit_pct = signals_df['profit_pct'].sum()
+            total_profit_usd = signals_df['profit_usd'].sum()
             completed_trades = wins + losses
             avg_pnl = signals_df[signals_df['outcome'].str.contains('Win|Loss', na=False)]['profit_pct'].mean()
             
@@ -2722,8 +2748,10 @@ class SignalAnalysisDialog(QDialog):
                 f"<b>Signals:</b> {total_signals} (📈{buy_signals} / 📉{sell_signals})  |  "
                 f"<b style='color: green;'>Wins:</b> {wins} ({win_rate:.1f}%)  |  "
                 f"<b style='color: red;'>Losses:</b> {losses}  |  "
-                f"<b>PF:</b> <span style='color: {'green' if profit_factor > 1 else 'red'};'>{profit_factor:.2f}</span>  |  "
-                f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold;'>{total_profit_pct:+.2f}%</span><br>"
+                f"<b>PF:</b> <span style='color: {'green' if profit_factor > 1 else 'red'};'>{profit_factor:.2f}</span><br>"
+                f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold;'>{total_profit_pct:+.2f}%</span> "
+                f"(<span style='color: {pnl_color}; font-weight: bold;'>${total_profit_usd:+.2f}</span>)  |  "
+                f"<b>Balance:</b> ${starting_balance:.2f} → ${starting_balance + total_profit_usd:.2f}<br>"
             )
             
             # Second line with additional metrics
@@ -2814,19 +2842,19 @@ class SignalAnalysisDialog(QDialog):
         # Update table columns dynamically
         if has_position_groups:
             # Show position column in 3-position mode
-            self.results_table.setColumnCount(12)
+            self.results_table.setColumnCount(13)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         elif has_tp_levels:
-            self.results_table.setColumnCount(11)
+            self.results_table.setColumnCount(12)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         else:
-            self.results_table.setColumnCount(10)
+            self.results_table.setColumnCount(11)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'Bars', 'Entry Reason', 'Regime'
             ])
         
         # Configure table header
@@ -2941,6 +2969,20 @@ class SignalAnalysisDialog(QDialog):
             if has_position_groups and group_color_toggle:
                 profit_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, profit_item)
+            col_idx += 1
+            
+            # Profit USD (calculate from profit_pct)
+            profit_usd = row.get('profit_usd', 0)
+            if pd.isna(profit_usd):
+                profit_usd = 0
+            profit_usd_item = QTableWidgetItem(f"${profit_usd:+.2f}" if profit_usd != 0 else "$0.00")
+            if profit_usd > 0:
+                profit_usd_item.setForeground(Qt.darkGreen)
+            elif profit_usd < 0:
+                profit_usd_item.setForeground(Qt.darkRed)
+            if has_position_groups and group_color_toggle:
+                profit_usd_item.setBackground(Qt.lightGray)
+            self.results_table.setItem(row_idx, col_idx, profit_usd_item)
             col_idx += 1
             
             # TP Levels Hit (only in multi-TP mode)
