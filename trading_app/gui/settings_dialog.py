@@ -249,9 +249,32 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(range_layout)
 
+        # Regime-based SL section
+        sl_layout = QFormLayout()
+        sl_label = QLabel("<b>Regime-based Stop Loss:</b>")
+        sl_layout.addRow(sl_label)
+
+        self.use_regime_sl_check = QCheckBox("Use fixed regime-based SL (instead of strategy SL)")
+        self.use_regime_sl_check.setToolTip("When enabled, uses fixed SL based on market regime (TREND/RANGE)\nWhen disabled, uses dynamic SL from strategy signals")
+        sl_layout.addRow("", self.use_regime_sl_check)
+
+        self.trend_sl_spin = QDoubleSpinBox()
+        self.trend_sl_spin.setRange(0.1, 1000.0)
+        self.trend_sl_spin.setSingleStep(0.1)
+        self.trend_sl_spin.setDecimals(2)
+        sl_layout.addRow("TREND SL:", self.trend_sl_spin)
+
+        self.range_sl_spin = QDoubleSpinBox()
+        self.range_sl_spin.setRange(0.1, 1000.0)
+        self.range_sl_spin.setSingleStep(0.1)
+        self.range_sl_spin.setDecimals(2)
+        sl_layout.addRow("RANGE SL:", self.range_sl_spin)
+
+        layout.addLayout(sl_layout)
+
         # Unit label
         unit = "%" if self.original_config.exchange == 'Binance' else "points"
-        unit_label = QLabel(f"<i>Unit: {unit}</i>")
+        unit_label = QLabel(f"<i>Unit: {unit} (TP and SL)</i>")
         layout.addWidget(unit_label)
 
         return group
@@ -301,6 +324,17 @@ class SettingsDialog(QDialog):
         self.range_tp2_spin.setValue(self.config.get('range_tp2', 1.75))
         self.range_tp3_spin.setValue(self.config.get('range_tp3', 2.5))
 
+        # Regime-based SL
+        self.use_regime_sl_check.setChecked(self.config.get('use_regime_based_sl', False))
+        if self.original_config.exchange == 'Binance':
+            # Crypto: percentage
+            self.trend_sl_spin.setValue(self.config.get('trend_sl', 0.8))
+            self.range_sl_spin.setValue(self.config.get('range_sl', 0.6))
+        else:
+            # XAUUSD: points
+            self.trend_sl_spin.setValue(self.config.get('trend_sl', 16))
+            self.range_sl_spin.setValue(self.config.get('range_sl', 12))
+
         # Phase 2: 3-Position Mode
         self.use_3pos_check.setChecked(self.config.get('use_3_position_mode', False))
 
@@ -339,6 +373,11 @@ class SettingsDialog(QDialog):
         self.config['range_tp1'] = self.range_tp1_spin.value()
         self.config['range_tp2'] = self.range_tp2_spin.value()
         self.config['range_tp3'] = self.range_tp3_spin.value()
+
+        # Regime-based SL
+        self.config['use_regime_based_sl'] = self.use_regime_sl_check.isChecked()
+        self.config['trend_sl'] = self.trend_sl_spin.value()
+        self.config['range_sl'] = self.range_sl_spin.value()
 
         # Phase 2: 3-Position Mode
         self.config['use_3_position_mode'] = self.use_3pos_check.isChecked()
