@@ -750,15 +750,17 @@ class MainWindow(QMainWindow):
             total_entry_value = 0.0
             
             for trade in open_trades:
-                if current_price and trade.entry_price > 0:
+                if current_price and trade.entry_price and trade.entry_price > 0 and trade.amount:
                     if trade.trade_type.upper() == 'BUY':
                         trade.profit = (current_price - trade.entry_price) * trade.amount
                     elif trade.trade_type.upper() == 'SELL':
                         trade.profit = (trade.entry_price - current_price) * trade.amount
                 total_pnl += (trade.profit or 0.0)
-                total_entry_value += trade.entry_price * trade.amount
+                # Add to entry value only if both values are valid
+                if trade.entry_price and trade.amount:
+                    total_entry_value += trade.entry_price * trade.amount
 
-            # Calculate total P&L percentage
+            # Calculate total P&L percentage with proper validation
             total_pnl_pct = (total_pnl / total_entry_value * 100) if total_entry_value > 0 else 0.0
             pnl_color = '#4CAF50' if total_pnl >= 0 else '#F44336'
 
