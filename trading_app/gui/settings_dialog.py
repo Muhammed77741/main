@@ -346,7 +346,7 @@ class SettingsDialog(QDialog):
             self.range_sl_spin.setValue(self.config.get('range_sl', 12))
 
         # Phase 2: 3-Position Mode
-        self.use_3pos_check.setChecked(self.config.get('use_3_position_mode', False))
+        self.use_3pos_check.setChecked(self.config.get('use_3_position_mode', True))
 
         # Handle None values by using 'or' fallback
         total_pos_default = 100.0 if self.original_config.exchange == 'Binance' else 0.1
