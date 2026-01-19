@@ -264,7 +264,7 @@ class SettingsDialog(QDialog):
 
         # SL values in compact row
         sl_values_layout = QHBoxLayout()
-        
+
         sl_values_layout.addWidget(QLabel("TREND SL:"))
         self.trend_sl_spin = QDoubleSpinBox()
         self.trend_sl_spin.setRange(0.1, 1000.0)
