@@ -1303,10 +1303,26 @@ class LiveBotMT5FullAuto:
         # Calculate total lot size
         total_lot_size = self.calculate_position_size(signal['entry'], signal['sl'])
         
+        # Prepare common parameters
+        symbol_info = mt5.symbol_info(self.symbol)
+        if symbol_info is None:
+            print(f"❌ Symbol info not found")
+            return False
+        
         # Split into 3 parts: 33%, 33%, 34%
         lot1 = round(total_lot_size * 0.33, 2)
         lot2 = round(total_lot_size * 0.33, 2)
         lot3 = round(total_lot_size * 0.34, 2)
+        
+        # Check if ANY lot size is below minimum - if so, fallback to single position
+        min_lot = symbol_info.volume_min
+        if lot1 < min_lot or lot2 < min_lot or lot3 < min_lot:
+            print(f"   ⚠️  WARNING: Lot sizes too small for 3-position mode")
+            print(f"   Position 1: {lot1} lot (min: {min_lot})")
+            print(f"   Position 2: {lot2} lot (min: {min_lot})")
+            print(f"   Position 3: {lot3} lot (min: {min_lot})")
+            print(f"   🔄 FALLBACK: Opening single position with TP2 instead")
+            return self._open_single_position(signal)
         
         print(f"   Total lot size: {total_lot_size}")
         print(f"   Position 1 (TP1): {lot1} lot")
@@ -1322,12 +1338,6 @@ class LiveBotMT5FullAuto:
             print(f"   Position 3: {lot3} lot, TP3: {signal['tp3']:.2f} ({signal['tp3_distance']}p)")
             print(f"   Total risk: {self.risk_percent}%")
             return True
-            
-        # Prepare common parameters
-        symbol_info = mt5.symbol_info(self.symbol)
-        if symbol_info is None:
-            print(f"❌ Symbol info not found")
-            return False
             
         # Get current price
         tick = mt5.symbol_info_tick(self.symbol)
@@ -1348,12 +1358,7 @@ class LiveBotMT5FullAuto:
         ]
 
         for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
-            # Ensure minimum lot size
-            if lot_size < symbol_info.volume_min:
-                print(f"   ⚠️  {tp_name}: lot size {lot_size} < minimum {symbol_info.volume_min}, skipping")
-                continue
-                
-            # Create request
+            # Create request (lot sizes already validated above)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "symbol": self.symbol,

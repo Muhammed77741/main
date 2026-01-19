@@ -1467,17 +1467,14 @@ class LiveBotBinanceFullAuto:
             total_size * 0.34   # Pos 3 (slightly larger for rounding)
         ]
 
-        # Auto-adjust if below minimum
-        adjusted = False
-        for i in range(len(pos_sizes)):
-            if pos_sizes[i] < min_size:
-                print(f"   ⚠️  Position {i+1} size {pos_sizes[i]:.6f} < minimum {min_size}, adjusting...")
-                pos_sizes[i] = min_size
-                adjusted = True
-
-        if adjusted:
-            total_size = sum(pos_sizes)
-            print(f"   Adjusted total size: {total_size:.6f}")
+        # Check if ANY lot size is below minimum - if so, fallback to single position
+        if any(size < min_size for size in pos_sizes):
+            print(f"   ⚠️  WARNING: Position sizes too small for 3-position mode")
+            print(f"   Position 1: {pos_sizes[0]:.6f} (min: {min_size})")
+            print(f"   Position 2: {pos_sizes[1]:.6f} (min: {min_size})")
+            print(f"   Position 3: {pos_sizes[2]:.6f} (min: {min_size})")
+            print(f"   🔄 FALLBACK: Opening single position with TP2 instead")
+            return self._open_single_position(signal)
 
         # Position configuration
         positions_data = [
