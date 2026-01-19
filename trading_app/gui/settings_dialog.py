@@ -199,9 +199,12 @@ class SettingsDialog(QDialog):
         group = QGroupBox("Strategy - V3 Adaptive")
         layout = QVBoxLayout(group)
 
-        # TREND mode TP
+        # Two-column layout for TP levels
+        tp_columns_layout = QHBoxLayout()
+
+        # TREND mode TP (left column)
         trend_layout = QFormLayout()
-        trend_label = QLabel("<b>TREND Mode TP Levels:</b>")
+        trend_label = QLabel("<b>TREND Mode TP:</b>")
         trend_layout.addRow(trend_label)
 
         self.trend_tp1_spin = QDoubleSpinBox()
@@ -222,11 +225,9 @@ class SettingsDialog(QDialog):
         self.trend_tp3_spin.setDecimals(2)
         trend_layout.addRow("TP3:", self.trend_tp3_spin)
 
-        layout.addLayout(trend_layout)
-
-        # RANGE mode TP
+        # RANGE mode TP (right column)
         range_layout = QFormLayout()
-        range_label = QLabel("<b>RANGE Mode TP Levels:</b>")
+        range_label = QLabel("<b>RANGE Mode TP:</b>")
         range_layout.addRow(range_label)
 
         self.range_tp1_spin = QDoubleSpinBox()
@@ -247,29 +248,38 @@ class SettingsDialog(QDialog):
         self.range_tp3_spin.setDecimals(2)
         range_layout.addRow("TP3:", self.range_tp3_spin)
 
-        layout.addLayout(range_layout)
+        # Add both columns to horizontal layout
+        tp_columns_layout.addLayout(trend_layout)
+        tp_columns_layout.addLayout(range_layout)
+        layout.addLayout(tp_columns_layout)
 
-        # Regime-based SL section
+        # Regime-based SL section (compact layout with checkbox on same row)
         sl_layout = QFormLayout()
-        sl_label = QLabel("<b>Regime-based Stop Loss:</b>")
+        sl_label = QLabel("<b>Regime-based SL:</b>")
         sl_layout.addRow(sl_label)
 
-        self.use_regime_sl_check = QCheckBox("Use fixed regime-based SL (instead of strategy SL)")
+        self.use_regime_sl_check = QCheckBox("Use fixed regime-based SL")
         self.use_regime_sl_check.setToolTip("When enabled, uses fixed SL based on market regime (TREND/RANGE)\nWhen disabled, uses dynamic SL from strategy signals")
         sl_layout.addRow("", self.use_regime_sl_check)
 
+        # SL values in compact row
+        sl_values_layout = QHBoxLayout()
+        
+        sl_values_layout.addWidget(QLabel("TREND SL:"))
         self.trend_sl_spin = QDoubleSpinBox()
         self.trend_sl_spin.setRange(0.1, 1000.0)
         self.trend_sl_spin.setSingleStep(0.5)
         self.trend_sl_spin.setDecimals(2)
-        sl_layout.addRow("TREND SL:", self.trend_sl_spin)
+        sl_values_layout.addWidget(self.trend_sl_spin)
 
+        sl_values_layout.addWidget(QLabel("RANGE SL:"))
         self.range_sl_spin = QDoubleSpinBox()
         self.range_sl_spin.setRange(0.1, 1000.0)
         self.range_sl_spin.setSingleStep(0.5)
         self.range_sl_spin.setDecimals(2)
-        sl_layout.addRow("RANGE SL:", self.range_sl_spin)
+        sl_values_layout.addWidget(self.range_sl_spin)
 
+        sl_layout.addRow("", sl_values_layout)
         layout.addLayout(sl_layout)
 
         # Unit label
