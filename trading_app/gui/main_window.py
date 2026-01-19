@@ -653,8 +653,10 @@ class MainWindow(QMainWindow):
             try:
                 open_trades = self.db.get_open_trades(self.current_bot_id)
                 actual_open_positions = len(open_trades) if open_trades else 0
-            except:
-                actual_open_positions = status.open_positions  # Fallback to status if DB read fails
+            except Exception as e:
+                # Fallback to status if DB read fails, log the error for debugging
+                print(f"⚠️  Failed to get open positions from DB: {e}")
+                actual_open_positions = status.open_positions
             
             status_html += f"""
             <p><b>Balance:</b> ${status.balance:,.2f}</p>
