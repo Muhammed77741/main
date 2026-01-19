@@ -260,13 +260,13 @@ class SettingsDialog(QDialog):
 
         self.trend_sl_spin = QDoubleSpinBox()
         self.trend_sl_spin.setRange(0.1, 1000.0)
-        self.trend_sl_spin.setSingleStep(0.1)
+        self.trend_sl_spin.setSingleStep(0.5)
         self.trend_sl_spin.setDecimals(2)
         sl_layout.addRow("TREND SL:", self.trend_sl_spin)
 
         self.range_sl_spin = QDoubleSpinBox()
         self.range_sl_spin.setRange(0.1, 1000.0)
-        self.range_sl_spin.setSingleStep(0.1)
+        self.range_sl_spin.setSingleStep(0.5)
         self.range_sl_spin.setDecimals(2)
         sl_layout.addRow("RANGE SL:", self.range_sl_spin)
 
