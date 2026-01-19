@@ -590,6 +590,8 @@ class MainWindow(QMainWindow):
         self.update_info_display()
         self.update_status_display()
         self.update_controls()
+        # Trigger immediate price fetch for the newly selected bot if it has positions
+        self.start_price_fetching()
 
     def on_bot_selection_changed(self, current, previous):
         """Handle bot selection change"""
@@ -745,37 +747,51 @@ class MainWindow(QMainWindow):
             # Use cached price from background fetcher (non-blocking)
             current_price = self.current_prices.get(self.current_bot_id)
 
-            # Calculate total P&L and total entry value for percentage
-            total_pnl = 0.0
-            total_entry_value = 0.0
-            
-            for trade in open_trades:
-                if current_price and trade.entry_price and trade.entry_price > 0 and trade.amount:
-                    if trade.trade_type.upper() == 'BUY':
-                        trade.profit = (current_price - trade.entry_price) * trade.amount
-                    elif trade.trade_type.upper() == 'SELL':
-                        trade.profit = (trade.entry_price - current_price) * trade.amount
-                total_pnl += (trade.profit or 0.0)
-                # Add to entry value only if both values are valid
-                if trade.entry_price and trade.amount:
-                    total_entry_value += trade.entry_price * trade.amount
-
-            # Calculate total P&L percentage with proper validation
-            total_pnl_pct = (total_pnl / total_entry_value * 100) if total_entry_value > 0 else 0.0
-            pnl_color = '#4CAF50' if total_pnl >= 0 else '#F44336'
-
-            # Build simplified HTML display - only count and P&L%
+            # Build display with position count (always show this)
             positions_html = f"""
             <div style='font-size: 14px; padding: 8px;'>
                 <p style='margin: 4px 0;'>
                     <b>Open Positions:</b> <span style='font-size: 16px; color: #2196F3; font-weight: bold;'>{len(open_trades)}</span>
                 </p>
+            """
+
+            # Calculate and show P&L only if price is available
+            if current_price and current_price > 0:
+                # Calculate total P&L and total entry value for percentage
+                total_pnl = 0.0
+                total_entry_value = 0.0
+                
+                for trade in open_trades:
+                    if trade.entry_price and trade.entry_price > 0 and trade.amount:
+                        if trade.trade_type.upper() == 'BUY':
+                            trade.profit = (current_price - trade.entry_price) * trade.amount
+                        elif trade.trade_type.upper() == 'SELL':
+                            trade.profit = (trade.entry_price - current_price) * trade.amount
+                    total_pnl += (trade.profit or 0.0)
+                    # Add to entry value only if both values are valid
+                    if trade.entry_price and trade.amount:
+                        total_entry_value += trade.entry_price * trade.amount
+
+                # Calculate total P&L percentage with proper validation
+                if total_entry_value > 0:
+                    total_pnl_pct = (total_pnl / total_entry_value * 100)
+                    pnl_color = '#4CAF50' if total_pnl >= 0 else '#F44336'
+                    positions_html += f"""
                 <p style='margin: 4px 0;'>
                     <b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold; font-size: 16px;'>
                     {total_pnl_pct:+.2f}%</span>
                 </p>
-            </div>
-            """
+                """
+                else:
+                    # Show calculating if we have price but can't calculate
+                    positions_html += "<p style='margin: 4px 0; color: #FF9800;'><b>Total P&L:</b> Calculating...</p>"
+            else:
+                # Price not available yet - trigger immediate fetch
+                if not self.price_fetcher or not self.price_fetcher.isRunning():
+                    self.start_price_fetching()
+                positions_html += "<p style='margin: 4px 0; color: #FF9800;'><b>Total P&L:</b> Fetching price...</p>"
+
+            positions_html += "</div>"
             
             self.live_positions_label.setText(positions_html)
             
