@@ -259,47 +259,81 @@ class BotThread(QThread):
         return tf_map.get(tf_str.lower(), mt5.TIMEFRAME_H1)
 
     def _save_dry_run_trade(self, signal):
-        """Save DRY RUN trade to database"""
+        """Save DRY RUN trade to database - supports 3-position mode"""
         try:
             from datetime import datetime
+            import uuid
             
             # Get current timestamp for consistency
             now = datetime.now()
             
-            # Calculate position size
+            # Calculate total position size
             if hasattr(self.bot, 'calculate_position_size'):
-                position_size = self.bot.calculate_position_size(signal['entry'], signal['sl'])
+                total_position_size = self.bot.calculate_position_size(signal['entry'], signal['sl'])
+            elif hasattr(self.bot, 'total_position_size') and self.bot.total_position_size:
+                total_position_size = self.bot.total_position_size
             else:
                 # Fallback estimate
-                position_size = 0.01
+                total_position_size = 0.01
             
             # Determine trade type
             trade_type = 'BUY' if signal['direction'] == 1 else 'SELL'
             
-            # Determine take profit (prefer TP2, fallback to TP, then 0)
-            take_profit = signal.get('tp2') or signal.get('tp') or 0
+            # Check if 3-position mode is enabled
+            use_3_pos = getattr(self.config, 'use_3_position_mode', False)
             
-            # Create trade record
-            trade = TradeRecord(
-                trade_id=0,  # Will be assigned by database
-                bot_id=self.config.bot_id,
-                symbol=self.config.symbol,  # Add symbol field
-                order_id=f"DRY-{now.strftime('%Y%m%d%H%M%S')}",
-                open_time=now,
-                trade_type=trade_type,
-                amount=position_size,
-                entry_price=signal['entry'],
-                stop_loss=signal['sl'],
-                take_profit=take_profit,
-                status='OPEN',
-                market_regime=signal.get('regime', 'UNKNOWN'),
-                comment='DRY RUN'
-            )
-            
-            # Save to database
-            self.db.add_trade(trade)
-            self.log_signal.emit(f"[{self.config.bot_id}] DRY RUN trade saved to database")
-            print(f"💾 Saved DRY RUN trade to database: {trade_type} {position_size} @ ${signal['entry']:.2f}")
+            if use_3_pos:
+                # Save 3 separate position records
+                group_id = str(uuid.uuid4())[:8]  # Short group ID
+                positions_data = [
+                    {'num': 1, 'size': total_position_size * 0.33, 'tp': signal.get('tp1', 0)},
+                    {'num': 2, 'size': total_position_size * 0.33, 'tp': signal.get('tp2', 0)},
+                    {'num': 3, 'size': total_position_size * 0.34, 'tp': signal.get('tp3', 0)}
+                ]
+                
+                for pos_data in positions_data:
+                    trade = TradeRecord(
+                        trade_id=0,  # Will be assigned by database
+                        bot_id=self.config.bot_id,
+                        symbol=self.config.symbol,
+                        order_id=f"DRY-{now.strftime('%Y%m%d%H%M%S')}-P{pos_data['num']}-{group_id}",
+                        open_time=now,
+                        trade_type=trade_type,
+                        amount=pos_data['size'],
+                        entry_price=signal['entry'],
+                        stop_loss=signal['sl'],
+                        take_profit=pos_data['tp'],
+                        status='OPEN',
+                        market_regime=signal.get('regime', 'UNKNOWN'),
+                        comment=f"DRY RUN - Pos {pos_data['num']}/3 (Group: {group_id})"
+                    )
+                    self.db.add_trade(trade)
+                
+                self.log_signal.emit(f"[{self.config.bot_id}] DRY RUN: Saved 3 positions to database")
+                print(f"💾 Saved DRY RUN trade to database: {trade_type} 3 positions (total: {total_position_size:.6f}) @ ${signal['entry']:.2f}")
+            else:
+                # Save single position record (original behavior)
+                take_profit = signal.get('tp2') or signal.get('tp') or 0
+                
+                trade = TradeRecord(
+                    trade_id=0,  # Will be assigned by database
+                    bot_id=self.config.bot_id,
+                    symbol=self.config.symbol,
+                    order_id=f"DRY-{now.strftime('%Y%m%d%H%M%S')}",
+                    open_time=now,
+                    trade_type=trade_type,
+                    amount=total_position_size,
+                    entry_price=signal['entry'],
+                    stop_loss=signal['sl'],
+                    take_profit=take_profit,
+                    status='OPEN',
+                    market_regime=signal.get('regime', 'UNKNOWN'),
+                    comment='DRY RUN'
+                )
+                
+                self.db.add_trade(trade)
+                self.log_signal.emit(f"[{self.config.bot_id}] DRY RUN trade saved to database")
+                print(f"💾 Saved DRY RUN trade to database: {trade_type} {total_position_size} @ ${signal['entry']:.2f}")
             
         except Exception as e:
             self.log_signal.emit(f"[{self.config.bot_id}] Warning: Could not save DRY RUN trade: {str(e)}")
