@@ -218,8 +218,8 @@ class PositionsMonitor(QDialog):
         self.current_price = None  # Store current price
 
         self.setWindowTitle(f"Open Positions - {config.name}")
-        self.setMinimumSize(1000, 600)  # Increased width for better column visibility
-        self.resize(1100, 650)  # Default size
+        self.setMinimumSize(500, 400)  # Compact size for simplified view
+        self.resize(600, 500)  # Default size - smaller than before
 
         self.init_ui()
 
@@ -244,32 +244,26 @@ class PositionsMonitor(QDialog):
         self.price_label.setStyleSheet("font-size: 14pt; font-weight: bold; padding: 5px;")
         layout.addWidget(self.price_label)
 
-        # Positions table
+        # Positions table - simplified to show only essential info
         self.table = QTableWidget()
-        self.table.setColumnCount(10)  # Added P&L% column
+        self.table.setColumnCount(4)  # Compact view: Select, Type, Amount, P&L %
         self.table.setHorizontalHeaderLabels([
-            'Select', 'Order ID', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'P&L $', 'P&L %'
+            'Select', 'Type', 'Amount', 'P&L %'
         ])
         
         # Enable selection
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.MultiSelection)
 
-        # Configure column widths for better readability
+        # Configure column widths for compact display
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)  # Stretch P&L% column
 
-        # Set specific column widths
+        # Set specific column widths for compact view
         self.table.setColumnWidth(0, 60)   # Select checkbox
-        self.table.setColumnWidth(1, 100)  # Order ID
-        self.table.setColumnWidth(2, 70)   # Type
-        self.table.setColumnWidth(3, 100)  # Amount
-        self.table.setColumnWidth(4, 100)  # Entry
-        self.table.setColumnWidth(5, 100)  # Current
-        self.table.setColumnWidth(6, 100)  # SL
-        self.table.setColumnWidth(7, 100)  # TP
-        self.table.setColumnWidth(8, 100)  # P&L $
-        # P&L % (column 9) will stretch automatically
+        self.table.setColumnWidth(1, 80)   # Type (BUY/SELL)
+        self.table.setColumnWidth(2, 120)  # Amount
+        # P&L % (column 3) will stretch automatically
 
         # Allow user to resize columns
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -360,9 +354,17 @@ class PositionsMonitor(QDialog):
         for row in range(self.table.rowCount()):
             checkbox = self.table.cellWidget(row, 0)
             if checkbox and checkbox.isChecked():
-                order_id = self.table.item(row, 1).text()
-                pos_type = self.table.item(row, 2).text()
-                amount = self.table.item(row, 3).text()
+                # Get order_id from UserRole data stored in Type column
+                type_item = self.table.item(row, 1)
+                if not type_item:
+                    continue  # Skip if type item is missing
+                order_id = type_item.data(Qt.UserRole)
+                if not order_id:
+                    print(f"⚠️  Row {row}: Missing order_id in UserRole data")
+                    continue  # Skip if order_id is missing
+                pos_type = type_item.text()
+                amount_item = self.table.item(row, 2)
+                amount = amount_item.text() if amount_item else '0'
                 selected_positions.append({
                     'row': row,
                     'order_id': order_id,
@@ -854,47 +856,19 @@ class PositionsMonitor(QDialog):
                 checkbox.setStyleSheet("margin-left: 15px;")
                 self.table.setCellWidget(i, 0, checkbox)
 
-                # Order ID
-                self.table.setItem(i, 1, QTableWidgetItem(str(pos.get('id', 'N/A'))))
-
-                # Type
+                # Type - store order_id in UserRole for later retrieval
                 pos_type = pos.get('side', 'N/A').upper()
-                self.table.setItem(i, 2, QTableWidgetItem(pos_type))
+                type_item = QTableWidgetItem(pos_type)
+                type_item.setData(Qt.UserRole, str(pos.get('id', 'N/A')))  # Store order_id here
+                self.table.setItem(i, 1, type_item)
 
                 # Amount
                 amount = pos.get('contracts', pos.get('amount', 0))
-                self.table.setItem(i, 3, QTableWidgetItem(f"{amount:.4f}"))
+                self.table.setItem(i, 2, QTableWidgetItem(f"{amount:.4f}"))
 
-                # Entry price
+                # Calculate P&L % (percentage) - only column showing P&L info
                 entry = pos.get('entryPrice', pos.get('price_open', 0))
-                self.table.setItem(i, 4, QTableWidgetItem(f"${entry:.2f}"))
-
-                # Current price
-                current = pos.get('markPrice', pos.get('price_current', entry))
-                self.table.setItem(i, 5, QTableWidgetItem(f"${current:.2f}"))
-
-                # SL
-                sl = pos.get('stopLoss', pos.get('sl', 0))
-                self.table.setItem(i, 6, QTableWidgetItem(f"${sl:.2f}" if sl else 'N/A'))
-
-                # TP
-                tp = pos.get('takeProfit', pos.get('tp', 0))
-                self.table.setItem(i, 7, QTableWidgetItem(f"${tp:.2f}" if tp else 'N/A'))
-
-                # P&L $ (absolute)
                 pnl = pos.get('unrealizedPnl', pos.get('profit', 0))
-                pnl_item = QTableWidgetItem(f"${pnl:+.2f}")
-
-                # Color code P&L
-                if pnl > 0:
-                    pnl_item.setForeground(Qt.green)
-                elif pnl < 0:
-                    pnl_item.setForeground(Qt.red)
-
-                self.table.setItem(i, 8, pnl_item)
-
-                # P&L % (percentage)
-                # Calculate P&L percentage based on entry value
                 entry_value = entry * amount
                 pnl_pct = (pnl / entry_value * 100) if entry_value > 0 else 0.0
                 pnl_pct_item = QTableWidgetItem(f"{pnl_pct:+.2f}%")
@@ -905,11 +879,9 @@ class PositionsMonitor(QDialog):
                 elif pnl_pct < 0:
                     pnl_pct_item.setForeground(Qt.red)
 
-                self.table.setItem(i, 9, pnl_pct_item)
+                self.table.setItem(i, 3, pnl_pct_item)
 
                 total_pnl += pnl
-
-                print(f"   ✅ Row {i+1}: {pos_type} {amount:.4f} @ ${entry:.2f} | P&L: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
 
             # Update summary
             summary_color = "green" if total_pnl >= 0 else "red"
