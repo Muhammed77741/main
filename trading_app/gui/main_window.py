@@ -648,23 +648,25 @@ class MainWindow(QMainWindow):
         <p><b>Status:</b> {'🟢 RUNNING' if status.status == 'running' else '⚫ STOPPED' if status.status == 'stopped' else '🔴 ERROR'}</p>
         """
 
-        if status.status == 'running':
-            # Get actual open positions count from database (more reliable than status object)
-            try:
-                open_trades = self.db.get_open_trades(self.current_bot_id)
-                actual_open_positions = len(open_trades) if open_trades else 0
-            except Exception as e:
-                # Fallback to status if DB read fails, log the error for debugging
-                print(f"⚠️  Failed to get open positions from DB: {e}")
-                actual_open_positions = status.open_positions
-            
-            status_html += f"""
-            <p><b>Balance:</b> ${status.balance:,.2f}</p>
-            <p><b>Equity:</b> ${status.equity:,.2f}</p>
-            <p><b>P&L Today:</b> ${status.pnl_today:+,.2f} ({status.pnl_percent:+.2f}%)</p>
-            <p><b>Open Positions:</b> {actual_open_positions}/{status.max_positions}</p>
-            """
+        # Get actual open positions count from database (more reliable than status object)
+        try:
+            open_trades = self.db.get_open_trades(self.current_bot_id)
+            actual_open_positions = len(open_trades) if open_trades else 0
+        except Exception as e:
+            # Fallback to status if DB read fails, log the error for debugging
+            print(f"⚠️  Failed to get open positions from DB: {e}")
+            actual_open_positions = status.open_positions
+        
+        # Always show balance/equity info (not dependent on running status)
+        # This ensures balance is visible even when bot status temporarily changes
+        status_html += f"""
+        <p><b>Balance:</b> ${status.balance:,.2f}</p>
+        <p><b>Equity:</b> ${status.equity:,.2f}</p>
+        <p><b>P&L Today:</b> ${status.pnl_today:+,.2f} ({status.pnl_percent:+.2f}%)</p>
+        <p><b>Open Positions:</b> {actual_open_positions}/{status.max_positions}</p>
+        """
 
+        if status.status == 'running':
             if status.current_regime:
                 status_html += f"<p><b>Market Regime:</b> {status.current_regime}</p>"
 
