@@ -45,7 +45,8 @@ class LiveBotBinanceFullAuto:
                  dry_run=False, testnet=True, api_key=None, api_secret=None,
                  trailing_stop_enabled=True, trailing_stop_percent=1.5,
                  bot_id=None, use_database=True, use_3_position_mode=False,
-                 total_position_size=None, min_order_size=None, use_trailing_stops=True, trailing_stop_pct=0.5):
+                 total_position_size=None, min_order_size=None, use_trailing_stops=True, trailing_stop_pct=0.5,
+                 use_regime_based_sl=False, trend_sl=0.8, range_sl=0.6):
         """
         Initialize bot
 
@@ -65,6 +66,9 @@ class LiveBotBinanceFullAuto:
             trailing_stop_percent: Trailing stop activation threshold (%)
             bot_id: Unique bot identifier for database tracking
             use_database: If True, use database for position tracking
+            use_regime_based_sl: Use fixed regime-based SL instead of strategy SL
+            trend_sl: TREND mode SL in percent (default 0.8% for crypto)
+            range_sl: RANGE mode SL in percent (default 0.6% for crypto)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -88,6 +92,11 @@ class LiveBotBinanceFullAuto:
         self.min_order_size = min_order_size
         self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops
         self.trailing_stop_pct = trailing_stop_pct  # Trailing stop percentage for 3-position mode
+
+        # Regime-based SL settings
+        self.use_regime_based_sl = use_regime_based_sl
+        self.trend_sl_pct = trend_sl  # SL for TREND mode in percent
+        self.range_sl_pct = range_sl  # SL for RANGE mode in percent
 
         # Trailing stop settings
         self.trailing_stop_enabled = trailing_stop_enabled
@@ -1192,7 +1201,18 @@ class LiveBotBinanceFullAuto:
 
             # Calculate TP levels in price
             entry = last_signal['entry_price']
-            sl = last_signal['stop_loss']
+            
+            # Calculate SL based on settings
+            if self.use_regime_based_sl:
+                # Use regime-based fixed SL (percentage)
+                sl_pct = self.trend_sl_pct if self.current_regime == 'TREND' else self.range_sl_pct
+                if last_signal['signal'] == 1:  # LONG
+                    sl = entry * (1 - sl_pct / 100)
+                else:  # SHORT
+                    sl = entry * (1 + sl_pct / 100)
+            else:
+                # Use strategy-calculated SL
+                sl = last_signal['stop_loss']
 
             if last_signal['signal'] == 1:  # LONG
                 tp1 = entry * (1 + tp1_pct / 100)

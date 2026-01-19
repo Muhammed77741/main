@@ -95,7 +95,10 @@ class BotThread(QThread):
             total_position_size=self.config.total_position_size,
             min_order_size=self.config.min_order_size,
             use_trailing_stops=self.config.use_trailing_stops,
-            trailing_stop_pct=self.config.trailing_stop_pct
+            trailing_stop_pct=self.config.trailing_stop_pct,
+            use_regime_based_sl=self.config.use_regime_based_sl,
+            trend_sl=self.config.trend_sl,
+            range_sl=self.config.range_sl
         )
 
         # Set TP levels
@@ -125,7 +128,10 @@ class BotThread(QThread):
             total_position_size=self.config.total_position_size,
             min_order_size=self.config.min_order_size,
             use_trailing_stops=self.config.use_trailing_stops,
-            trailing_stop_pct=self.config.trailing_stop_pct
+            trailing_stop_pct=self.config.trailing_stop_pct,
+            use_regime_based_sl=self.config.use_regime_based_sl,
+            trend_sl=self.config.trend_sl,
+            range_sl=self.config.range_sl
         )
 
         # Set TP levels (in percent)

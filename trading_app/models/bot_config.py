@@ -45,6 +45,11 @@ class BotConfig:
     range_tp2: float = 1.75
     range_tp3: float = 2.5
 
+    # Regime-based SL settings
+    use_regime_based_sl: bool = False  # Use fixed regime-based SL instead of strategy SL
+    trend_sl: float = 0.8  # TREND mode SL: 0.8% for crypto, 16 points for XAUUSD
+    range_sl: float = 0.6  # RANGE mode SL: 0.6% for crypto, 12 points for XAUUSD
+
     # Telegram settings
     telegram_enabled: bool = False
     telegram_token: Optional[str] = None
@@ -86,6 +91,8 @@ class BotConfig:
             range_tp1=20,
             range_tp2=35,
             range_tp3=50,
+            trend_sl=16,  # points
+            range_sl=12,  # points
         )
 
     @classmethod
