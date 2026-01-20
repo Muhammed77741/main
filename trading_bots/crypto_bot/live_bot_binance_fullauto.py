@@ -983,7 +983,7 @@ class LiveBotBinanceFullAuto:
                 
                 # If TP or SL is hit
                 if tp_hit or sl_hit:
-                    hit_type = 'TP' if tp_hit else 'SL'
+                    hit_type = tp_level if tp_hit else 'SL'
                     target_price = tp_target if tp_hit else sl_target
                     
                     # Update status in both tracker and database immediately
