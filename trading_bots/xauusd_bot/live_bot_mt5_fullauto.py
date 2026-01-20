@@ -489,6 +489,20 @@ class LiveBotMT5FullAuto:
                                 # Update in tracker
                                 if ticket in self.positions_tracker:
                                     self.positions_tracker[ticket]['sl'] = new_sl
+                                
+                                # Send Telegram notification for trailing stop update
+                                if self.telegram_bot:
+                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                    message += f"Ticket: #{ticket}\n"
+                                    message += f"Position: {pos_num}/3\n"
+                                    message += f"Type: {pos_data['type']}\n"
+                                    message += f"Entry: ${entry_price:.2f}\n"
+                                    message += f"New SL: ${new_sl:.2f}\n"
+                                    message += f"Max Price: ${group_info['max_price']:.2f}"
+                                    try:
+                                        asyncio.run(self.send_telegram(message))
+                                    except Exception as e:
+                                        print(f"⚠️  Failed to send Telegram notification: {e}")
                         else:  # SELL
                             # Trailing stop: configurable % retracement from min price
                             new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
@@ -500,6 +514,20 @@ class LiveBotMT5FullAuto:
                                 # Update in tracker
                                 if ticket in self.positions_tracker:
                                     self.positions_tracker[ticket]['sl'] = new_sl
+                                
+                                # Send Telegram notification for trailing stop update
+                                if self.telegram_bot:
+                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                    message += f"Ticket: #{ticket}\n"
+                                    message += f"Position: {pos_num}/3\n"
+                                    message += f"Type: {pos_data['type']}\n"
+                                    message += f"Entry: ${entry_price:.2f}\n"
+                                    message += f"New SL: ${new_sl:.2f}\n"
+                                    message += f"Min Price: ${group_info['min_price']:.2f}"
+                                    try:
+                                        asyncio.run(self.send_telegram(message))
+                                    except Exception as e:
+                                        print(f"⚠️  Failed to send Telegram notification: {e}")
 
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
@@ -1334,6 +1362,22 @@ class LiveBotMT5FullAuto:
             regime=regime,
             comment=f"V3_{regime_code}"
         )
+
+        # Send Telegram notification
+        if self.telegram_bot:
+            message = f"🤖 <b>Position Opened</b>\n\n"
+            message += f"Direction: {direction_str}\n"
+            message += f"Market Regime: {regime}\n"
+            message += f"Symbol: {self.symbol}\n"
+            message += f"Lot: {lot_size}\n"
+            message += f"Entry: ${result.price:.2f}\n"
+            message += f"SL: ${signal['sl']:.2f}\n"
+            message += f"TP: ${signal['tp2']:.2f}\n"
+            message += f"Risk: {self.risk_percent}%"
+            try:
+                asyncio.run(self.send_telegram(message))
+            except Exception as e:
+                print(f"⚠️  Failed to send Telegram notification: {e}")
 
         return True
 

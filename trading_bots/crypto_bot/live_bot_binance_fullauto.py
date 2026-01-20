@@ -770,6 +770,20 @@ class LiveBotBinanceFullAuto:
                                 # Update in tracker
                                 if order_id in self.positions_tracker:
                                     self.positions_tracker[order_id]['sl'] = new_sl
+                                
+                                # Send Telegram notification for trailing stop update
+                                if self.telegram_bot:
+                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                    message += f"Order: {order_id}\n"
+                                    message += f"Position: {pos_num}/3\n"
+                                    message += f"Type: {pos_data['type']}\n"
+                                    message += f"Entry: ${entry_price:.2f}\n"
+                                    message += f"New SL: ${new_sl:.2f}\n"
+                                    message += f"Max Price: ${group_info['max_price']:.2f}"
+                                    try:
+                                        asyncio.run(self.send_telegram(message))
+                                    except Exception as e:
+                                        print(f"⚠️  Failed to send Telegram notification: {e}")
                         else:  # SELL
                             # Trailing stop: configurable % retracement from min price
                             new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
@@ -781,6 +795,20 @@ class LiveBotBinanceFullAuto:
                                 # Update in tracker
                                 if order_id in self.positions_tracker:
                                     self.positions_tracker[order_id]['sl'] = new_sl
+                                
+                                # Send Telegram notification for trailing stop update
+                                if self.telegram_bot:
+                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                    message += f"Order: {order_id}\n"
+                                    message += f"Position: {pos_num}/3\n"
+                                    message += f"Type: {pos_data['type']}\n"
+                                    message += f"Entry: ${entry_price:.2f}\n"
+                                    message += f"New SL: ${new_sl:.2f}\n"
+                                    message += f"Min Price: ${group_info['min_price']:.2f}"
+                                    try:
+                                        asyncio.run(self.send_telegram(message))
+                                    except Exception as e:
+                                        print(f"⚠️  Failed to send Telegram notification: {e}")
 
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
