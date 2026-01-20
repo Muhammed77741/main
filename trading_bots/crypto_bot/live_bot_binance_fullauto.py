@@ -805,9 +805,18 @@ class LiveBotBinanceFullAuto:
                     if self.dry_run:
                         # Always log for dry-run mode so user knows monitoring is running
                         if db_trades:
-                            print(f"🧪 DRY RUN: Monitoring {len(db_trades)} open position(s) from database")
+                            print(f"🧪 DRY RUN: Monitoring {len(db_trades)} open position(s) from database (bot_id: {self.bot_id})")
                         else:
-                            print(f"🧪 DRY RUN: No open positions to monitor")
+                            # Debug: Check if there are ANY open trades in database
+                            cursor = self.db.conn.cursor()
+                            cursor.execute("SELECT COUNT(*) as count FROM trades WHERE status = 'OPEN'")
+                            total_open = cursor.fetchone()['count']
+                            cursor.execute("SELECT DISTINCT bot_id FROM trades WHERE status = 'OPEN'")
+                            bot_ids = [row['bot_id'] for row in cursor.fetchall()]
+                            print(f"🧪 DRY RUN: No open positions for bot_id '{self.bot_id}'")
+                            print(f"   📊 Total OPEN positions in DB: {total_open}")
+                            if bot_ids:
+                                print(f"   🤖 Bot IDs with open positions: {', '.join(bot_ids)}")
                     elif db_trades:
                         # Log for live mode too
                         print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
