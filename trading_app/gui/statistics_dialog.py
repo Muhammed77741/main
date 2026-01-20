@@ -365,7 +365,7 @@ class StatisticsDialog(QDialog):
 
         # Calculate statistics
         total_trades = len(trades)
-        closed_trades = [t for t in trades if t.status in ['TP', 'SL', 'CLOSED'] and t.profit is not None]
+        closed_trades = [t for t in trades if t.status == 'CLOSED' and t.profit is not None]
 
         if not closed_trades:
             # Update with partial data
@@ -499,11 +499,6 @@ class StatisticsDialog(QDialog):
         """Get emoji for status"""
         status_map = {
             'OPEN': '🟢',
-            'TP': '🎯',
-            'TP1': '🎯',
-            'TP2': '🎯',
-            'TP3': '🎯',
-            'SL': '🛑',
             'CLOSED': '⚪'
         }
         return status_map.get(status, '⚫')

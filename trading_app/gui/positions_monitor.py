@@ -1,6 +1,7 @@
 """
 Positions Monitor - monitor open positions
 """
+from datetime import datetime
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QHeaderView, QCheckBox
@@ -40,11 +41,7 @@ class PositionFetcherThread(QThread):
         try:
             # Check if in dry_run mode - fetch from database instead
             if self.config.dry_run and self.db_manager:
-                print(f"🧪 DRY RUN: Fetching positions from database for {self.config.symbol}...")
-                
                 open_trades = self.db_manager.get_open_trades(self.config.bot_id)
-                
-                print(f"📊 Found {len(open_trades)} open trades in database")
                 
                 # Try to get current price for P&L calculation
                 current_price = None
@@ -58,10 +55,6 @@ class PositionFetcherThread(QThread):
                         })
                         ticker = exchange.fetch_ticker(self.config.symbol)
                         current_price = ticker.get('last')
-                        if current_price and current_price > 0:
-                            print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
-                        else:
-                            print(f"⚠️  Invalid price received: {current_price}")
                     elif self.config.exchange == 'MT5':
                         import MetaTrader5 as mt5
                         if mt5.initialize():
@@ -69,24 +62,15 @@ class PositionFetcherThread(QThread):
                                 tick = mt5.symbol_info_tick(self.config.symbol)
                                 if tick and tick.last > 0:
                                     current_price = tick.last
-                                    print(f"💰 Current {self.config.symbol} price: ${current_price:.2f}")
                                 elif tick:
                                     # Try bid/ask if last is not available
                                     current_price = (tick.bid + tick.ask) / 2 if tick.bid > 0 and tick.ask > 0 else None
-                                    if current_price:
-                                        print(f"💰 Current {self.config.symbol} price: ${current_price:.2f} (from bid/ask)")
-                                    else:
-                                        print(f"⚠️  MT5 tick data invalid: last={tick.last}, bid={tick.bid}, ask={tick.ask}")
-                                else:
-                                    print(f"⚠️  MT5 symbol_info_tick returned None for {self.config.symbol}")
                             finally:
                                 mt5.shutdown()
                         else:
                             print(f"⚠️  MT5 initialization failed: {mt5.last_error()}")
                 except Exception as e:
                     print(f"⚠️  Could not fetch current price for P&L: {e}")
-                    import traceback
-                    traceback.print_exc()
                 
                 # Store current price for signal emission
                 self.current_price = current_price
@@ -111,9 +95,9 @@ class PositionFetcherThread(QThread):
                         'markPrice': mark_price,
                         'stopLoss': trade.stop_loss,
                         'takeProfit': trade.take_profit,
-                        'unrealizedPnl': unrealized_pnl
+                        'unrealizedPnl': unrealized_pnl,
+                        'createdTime': trade.open_time
                     })
-                    print(f"   ✅ Loaded: {trade.trade_type} {trade.amount} @ ${trade.entry_price:.2f} | P&L: ${unrealized_pnl:+.2f}")
                 
                 return positions
             
@@ -131,6 +115,9 @@ class PositionFetcherThread(QThread):
 
                     if mt5_positions:
                         for pos in mt5_positions:
+                            # Convert timestamp to datetime
+                            created_time = datetime.fromtimestamp(pos.time) if pos.time else None
+                            
                             positions.append({
                                 'id': pos.ticket,
                                 'side': 'buy' if pos.type == 0 else 'sell',
@@ -139,7 +126,8 @@ class PositionFetcherThread(QThread):
                                 'markPrice': pos.price_current,
                                 'stopLoss': pos.sl,
                                 'takeProfit': pos.tp,
-                                'unrealizedPnl': pos.profit
+                                'unrealizedPnl': pos.profit,
+                                'createdTime': created_time
                             })
                 finally:
                     # Always shutdown MT5 to avoid resource leaks
@@ -179,27 +167,15 @@ class PositionFetcherThread(QThread):
                     })
 
                 # Fetch positions
-                print(f"🔍 Fetching positions for {self.config.symbol}...")
                 binance_positions = exchange.fetch_positions([self.config.symbol])
-
-                print(f"📊 Raw positions data: {len(binance_positions)} positions returned")
 
                 for i, pos in enumerate(binance_positions):
                     contracts = float(pos.get('contracts', 0))
-                    side = pos.get('side', 'unknown')
-
-                    print(f"   Position {i+1}: side={side}, contracts={contracts}")
-
                     if contracts > 0:
                         positions.append(pos)
-                        print(f"   ✅ Added to display")
-                    else:
-                        print(f"   ⚠️  Skipped (no contracts)")
 
         except Exception as e:
             print(f"❌ Error fetching positions: {e}")
-            import traceback
-            traceback.print_exc()
             raise
 
         return positions
@@ -246,9 +222,9 @@ class PositionsMonitor(QDialog):
 
         # Positions table
         self.table = QTableWidget()
-        self.table.setColumnCount(10)  # Added P&L% column
+        self.table.setColumnCount(11)  # Added Created Time column
         self.table.setHorizontalHeaderLabels([
-            'Select', 'Order ID', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'P&L $', 'P&L %'
+            'Select', 'Order ID', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'Created', 'P&L $', 'P&L %'
         ])
         
         # Enable selection
@@ -268,8 +244,9 @@ class PositionsMonitor(QDialog):
         self.table.setColumnWidth(5, 100)  # Current
         self.table.setColumnWidth(6, 100)  # SL
         self.table.setColumnWidth(7, 100)  # TP
-        self.table.setColumnWidth(8, 100)  # P&L $
-        # P&L % (column 9) will stretch automatically
+        self.table.setColumnWidth(8, 150)  # Created Time
+        self.table.setColumnWidth(9, 100)  # P&L $
+        # P&L % (column 10) will stretch automatically
 
         # Allow user to resize columns
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -345,11 +322,9 @@ class PositionsMonitor(QDialog):
         if state == Qt.Checked:
             # Enable auto-refresh every 10 seconds
             self.refresh_timer.start(10000)  # 10 seconds
-            print("✅ Auto-refresh enabled (every 10 seconds)")
         else:
             # Disable auto-refresh
             self.refresh_timer.stop()
-            print("⏸️  Auto-refresh disabled")
     
     def close_selected_positions(self):
         """Close selected positions"""
@@ -457,7 +432,6 @@ class PositionsMonitor(QDialog):
             
             # Close dry_run positions in database only
             if dry_run_positions and self.config.dry_run and self.db_manager:
-                print(f"🧪 DRY RUN: Closing {len(dry_run_positions)} positions in database...")
                 for pos in dry_run_positions:
                     try:
                         # Find position in database by order_id
@@ -518,7 +492,6 @@ class PositionsMonitor(QDialog):
                         
                         self.db_manager.update_trade(matching_trade)
                         
-                        print(f"✅ DRY RUN: Closed position {pos['order_id']} in database (P&L: ${profit:+.2f})")
                         success_count += 1
                     
                     except Exception as e:
@@ -613,7 +586,6 @@ class PositionsMonitor(QDialog):
                             result = mt5.order_send(request)
                             
                             if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-                                print(f"✅ Closed position {ticket}")
                                 success_count += 1
                             else:
                                 error_msg = result.comment if result else "No result"
@@ -695,7 +667,6 @@ class PositionsMonitor(QDialog):
                             params={'reduceOnly': True}
                         )
                         
-                        print(f"✅ Closed Binance position {pos['order_id']}")
                         success_count += 1
                     
                     except Exception as e:
@@ -832,8 +803,6 @@ class PositionsMonitor(QDialog):
         # Skip if dialog is closing
         if self.is_closing:
             return
-        
-        print(f"📥 Positions fetched callback: {len(positions)} positions")
             
         try:
             # Clear table
@@ -842,10 +811,7 @@ class PositionsMonitor(QDialog):
             if not positions:
                 self.summary_label.setText("No open positions")
                 self.close_selected_btn.setEnabled(False)
-                print("ℹ️  No positions to display")
                 return
-
-            print(f"📋 Displaying {len(positions)} positions in GUI...")
             
             # Enable close button since we have positions
             self.close_selected_btn.setEnabled(True)
@@ -888,6 +854,17 @@ class PositionsMonitor(QDialog):
                 tp = pos.get('takeProfit', pos.get('tp', 0))
                 self.table.setItem(i, 7, QTableWidgetItem(f"${tp:.2f}" if tp else 'N/A'))
 
+                # Created Time
+                created_time = pos.get('createdTime')
+                if created_time:
+                    if isinstance(created_time, datetime):
+                        time_str = created_time.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        time_str = str(created_time)
+                    self.table.setItem(i, 8, QTableWidgetItem(time_str))
+                else:
+                    self.table.setItem(i, 8, QTableWidgetItem('N/A'))
+
                 # P&L $ (absolute)
                 pnl = pos.get('unrealizedPnl', pos.get('profit', 0))
                 pnl_item = QTableWidgetItem(f"${pnl:+.2f}")
@@ -898,7 +875,7 @@ class PositionsMonitor(QDialog):
                 elif pnl < 0:
                     pnl_item.setForeground(Qt.red)
 
-                self.table.setItem(i, 8, pnl_item)
+                self.table.setItem(i, 9, pnl_item)
 
                 # P&L % (percentage)
                 # Calculate P&L percentage based on entry value
@@ -912,7 +889,7 @@ class PositionsMonitor(QDialog):
                 elif pnl_pct < 0:
                     pnl_pct_item.setForeground(Qt.red)
 
-                self.table.setItem(i, 9, pnl_pct_item)
+                self.table.setItem(i, 10, pnl_pct_item)
 
                 total_pnl += pnl
 
@@ -923,14 +900,10 @@ class PositionsMonitor(QDialog):
                 f"<b>{len(positions)} position(s){price_display} | "
                 f"<span style='color: {summary_color};'>Total P&L: ${total_pnl:+.2f}</span></b>"
             )
-            
-            print(f"✅ GUI updated successfully with {len(positions)} positions")
 
         except Exception as e:
             error_msg = f"Error displaying positions: {str(e)}"
             print(f"❌ {error_msg}")
-            import traceback
-            traceback.print_exc()
             if not self.is_closing:
                 self.summary_label.setText(error_msg)
 

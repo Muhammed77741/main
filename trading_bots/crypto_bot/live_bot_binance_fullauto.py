@@ -770,6 +770,20 @@ class LiveBotBinanceFullAuto:
                                 # Update in tracker
                                 if order_id in self.positions_tracker:
                                     self.positions_tracker[order_id]['sl'] = new_sl
+                                
+                                # Send Telegram notification for trailing stop update
+                                if self.telegram_bot:
+                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                    message += f"Order: {order_id}\n"
+                                    message += f"Position: {pos_num}/3\n"
+                                    message += f"Type: {pos_data['type']}\n"
+                                    message += f"Entry: ${entry_price:.2f}\n"
+                                    message += f"New SL: ${new_sl:.2f}\n"
+                                    message += f"Max Price: ${group_info['max_price']:.2f}"
+                                    try:
+                                        asyncio.run(self.send_telegram(message))
+                                    except Exception as e:
+                                        print(f"⚠️  Failed to send Telegram notification: {e}")
                         else:  # SELL
                             # Trailing stop: configurable % retracement from min price
                             new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
@@ -781,6 +795,20 @@ class LiveBotBinanceFullAuto:
                                 # Update in tracker
                                 if order_id in self.positions_tracker:
                                     self.positions_tracker[order_id]['sl'] = new_sl
+                                
+                                # Send Telegram notification for trailing stop update
+                                if self.telegram_bot:
+                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                    message += f"Order: {order_id}\n"
+                                    message += f"Position: {pos_num}/3\n"
+                                    message += f"Type: {pos_data['type']}\n"
+                                    message += f"Entry: ${entry_price:.2f}\n"
+                                    message += f"New SL: ${new_sl:.2f}\n"
+                                    message += f"Min Price: ${group_info['min_price']:.2f}"
+                                    try:
+                                        asyncio.run(self.send_telegram(message))
+                                    except Exception as e:
+                                        print(f"⚠️  Failed to send Telegram notification: {e}")
 
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
@@ -803,35 +831,8 @@ class LiveBotBinanceFullAuto:
                 try:
                     db_trades = self.db.get_open_trades(self.bot_id)
                     if self.dry_run:
-                        # Always log for dry-run mode so user knows monitoring is running
-                        if db_trades:
-                            print(f"🧪 DRY RUN: Monitoring {len(db_trades)} open position(s) from database (bot_id: {self.bot_id})")
-                        else:
-                            # Debug: Check if there are ANY open trades in database
-                            cursor = self.db.conn.cursor()
-                            cursor.execute("""
-                                SELECT bot_id, symbol, COUNT(*) as count 
-                                FROM trades 
-                                WHERE status = 'OPEN'
-                                GROUP BY bot_id, symbol
-                            """)
-                            results = cursor.fetchall()
-                            total_open = sum(row['count'] for row in results)
-                            
-                            print(f"🧪 DRY RUN: No open positions for bot_id '{self.bot_id}'")
-                            print(f"   📊 Total OPEN positions in DB: {total_open}")
-                            if results:
-                                print(f"   🤖 Bot IDs with open positions:")
-                                for row in results:
-                                    symbol = row['symbol'] if row['symbol'] else 'Unknown'
-                                    print(f"      - '{row['bot_id']}' ({symbol}): {row['count']} positions")
-                                
-                                # Suggest possible matches
-                                possible_matches = [r for r in results if self.symbol in (r['symbol'] or '')]
-                                if possible_matches:
-                                    print(f"   💡 POSSIBLE FIX: Update bot_id to match database:")
-                                    for match in possible_matches:
-                                        print(f"      bot_id = '{match['bot_id']}'  # For {match['symbol']}")
+                        # Silently monitor positions in background for dry-run mode
+                        pass
                     elif db_trades:
                         # Log for live mode too
                         print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
@@ -980,17 +981,6 @@ class LiveBotBinanceFullAuto:
                 elif 'TP3' in tracked_pos.get('comment', ''):
                     tp_level = 'TP3'
 
-                # DEBUG: Log position monitoring details
-                print(f"🔍 DEBUG Position {order_id} ({position_type} {tp_level}):")
-                print(f"   Entry: ${entry_price:.4f}")
-                print(f"   Current: ${current_price:.4f}")
-                print(f"   TP Target: ${tp_target:.4f}")
-                print(f"   SL Target: ${sl_target:.4f}")
-                if bar_high and bar_low:
-                    print(f"   Bar H/L: ${bar_high:.4f} / ${bar_low:.4f}")
-                if tracked_pos.get('position_group_id'):
-                    print(f"   Group: {tracked_pos.get('position_group_id')} (Pos {tracked_pos.get('position_num', 0)})")
-                
                 # Check if TP or SL is hit based on bar high/low OR current price
                 tp_hit = False
                 sl_hit = False
@@ -1000,24 +990,17 @@ class LiveBotBinanceFullAuto:
                     # Check if bar high reached TP OR current price is already at/past TP
                     if (bar_high and bar_high >= tp_target) or (current_price >= tp_target):
                         tp_hit = True
-                        print(f"   ✅ TP HIT: price ${current_price:.4f} >= target ${tp_target:.4f}")
                     # Check if bar low reached SL OR current price is already at/past SL
                     if (bar_low and bar_low <= sl_target) or (current_price <= sl_target):
                         sl_hit = True
-                        print(f"   ❌ SL HIT: price ${current_price:.4f} <= target ${sl_target:.4f}")
                 else:  # SELL
                     # For SELL: TP is below entry, SL is above entry
                     # Check if bar low reached TP OR current price is already at/past TP
                     if (bar_low and bar_low <= tp_target) or (current_price <= tp_target):
                         tp_hit = True
-                        print(f"   ✅ TP HIT: price ${current_price:.4f} <= target ${tp_target:.4f}")
                     # Check if bar high reached SL OR current price is already at/past SL
                     if (bar_high and bar_high >= sl_target) or (current_price >= sl_target):
                         sl_hit = True
-                        print(f"   ❌ SL HIT: price ${current_price:.4f} >= target ${sl_target:.4f}")
-                
-                if not tp_hit and not sl_hit:
-                    print(f"   ⏳ Waiting: TP/SL not reached yet")
                 
                 # If TP or SL is hit
                 if tp_hit or sl_hit:
@@ -1107,7 +1090,7 @@ class LiveBotBinanceFullAuto:
                             order_id=order_id,
                             close_price=current_price,
                             profit=profit_usdt,
-                            status=hit_type  # Status will be 'TP' or 'SL'
+                            status='CLOSED'  # Status is always CLOSED after TP/SL hit
                         )
                     
                     # Send Telegram notification

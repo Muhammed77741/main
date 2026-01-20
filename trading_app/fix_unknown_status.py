@@ -8,7 +8,7 @@ import sqlite3
 import os
 
 # Get the database path
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'trading_app', 'data', 'trading.db')
+DB_PATH = os.path.join(os.path.dirname(__file__), 'trading_app.db')
 
 def fix_unknown_status():
     """Update all UNKNOWN statuses to CLOSED in the database"""
