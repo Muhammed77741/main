@@ -50,3 +50,4 @@ class TradeRecord:
     # Phase 2: 3-Position Mode
     position_group_id: Optional[str] = None  # Groups 3 positions from same signal
     position_num: int = 0  # Position number (1, 2, or 3)
+    trailing_stop_active: bool = False  # Whether trailing stop is currently active for this position

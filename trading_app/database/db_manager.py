@@ -169,6 +169,11 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trades ADD COLUMN position_num INTEGER DEFAULT 0")
                 print("✅ position_num column added")
 
+            if 'trailing_stop_active' not in columns:
+                print("📊 Migrating trades table: adding trailing_stop_active column...")
+                cursor.execute("ALTER TABLE trades ADD COLUMN trailing_stop_active INTEGER DEFAULT 0")
+                print("✅ trailing_stop_active column added")
+
         except Exception as e:
             print(f"⚠️  3-position migration warning: {e}")
 
@@ -390,14 +395,14 @@ class DatabaseManager:
                     bot_id, symbol, order_id, open_time, close_time, duration_hours,
                     trade_type, amount, entry_price, close_price,
                     stop_loss, take_profit, profit, profit_percent,
-                    status, market_regime, comment, position_group_id, position_num
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, market_regime, comment, position_group_id, position_num, trailing_stop_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade.bot_id, trade.symbol, trade.order_id, trade.open_time, trade.close_time, trade.duration_hours,
                 trade.trade_type, trade.amount, trade.entry_price, trade.close_price,
                 trade.stop_loss, trade.take_profit, trade.profit, trade.profit_percent,
                 trade.status, trade.market_regime, trade.comment,
-                trade.position_group_id, trade.position_num
+                trade.position_group_id, trade.position_num, 1 if trade.trailing_stop_active else 0
             ))
 
             self.conn.commit()
@@ -439,7 +444,8 @@ class DatabaseManager:
                 market_regime=row['market_regime'],
                 comment=row['comment'],
                 position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
-                position_num=row['position_num'] if 'position_num' in columns else 0
+                position_num=row['position_num'] if 'position_num' in columns else 0,
+                trailing_stop_active=bool(row['trailing_stop_active']) if 'trailing_stop_active' in columns else False
             ))
 
         return trades
@@ -476,7 +482,8 @@ class DatabaseManager:
                 market_regime=row['market_regime'],
                 comment=row['comment'],
                 position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
-                position_num=row['position_num'] if 'position_num' in columns else 0
+                position_num=row['position_num'] if 'position_num' in columns else 0,
+                trailing_stop_active=bool(row['trailing_stop_active']) if 'trailing_stop_active' in columns else False
             ))
 
         return trades
@@ -499,11 +506,15 @@ class DatabaseManager:
                     profit = ?,
                     profit_percent = ?,
                     status = ?,
-                    comment = ?
+                    comment = ?,
+                    stop_loss = ?,
+                    take_profit = ?,
+                    trailing_stop_active = ?
                 WHERE bot_id = ? AND order_id = ?
             """, (
                 trade.close_time, trade.duration_hours, trade.close_price,
                 trade.profit, trade.profit_percent, trade.status, trade.comment,
+                trade.stop_loss, trade.take_profit, 1 if trade.trailing_stop_active else 0,
                 trade.bot_id, trade.order_id
             ))
 

@@ -7,7 +7,9 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QHeaderView, QCheckBox
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
+from PySide6.QtGui import QColor
 from models import BotConfig
+
 
 
 class PositionFetcherThread(QThread):
@@ -96,7 +98,10 @@ class PositionFetcherThread(QThread):
                         'stopLoss': trade.stop_loss,
                         'takeProfit': trade.take_profit,
                         'unrealizedPnl': unrealized_pnl,
-                        'createdTime': trade.open_time
+                        'createdTime': trade.open_time,
+                        'position_num': trade.position_num,
+                        'position_group_id': trade.position_group_id,
+                        'trailing_stop_active': trade.trailing_stop_active
                     })
                 
                 return positions
@@ -222,9 +227,9 @@ class PositionsMonitor(QDialog):
 
         # Positions table
         self.table = QTableWidget()
-        self.table.setColumnCount(11)  # Added Created Time column
+        self.table.setColumnCount(14)  # Added Pos #, Group, and Trailing columns
         self.table.setHorizontalHeaderLabels([
-            'Select', 'Order ID', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'Created', 'P&L $', 'P&L %'
+            'Select', 'Order ID', 'Pos #', 'Group', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'Trailing', 'Created', 'P&L $', 'P&L %'
         ])
         
         # Enable selection
@@ -238,15 +243,18 @@ class PositionsMonitor(QDialog):
         # Set specific column widths
         self.table.setColumnWidth(0, 60)   # Select checkbox
         self.table.setColumnWidth(1, 100)  # Order ID
-        self.table.setColumnWidth(2, 70)   # Type
-        self.table.setColumnWidth(3, 100)  # Amount
-        self.table.setColumnWidth(4, 100)  # Entry
-        self.table.setColumnWidth(5, 100)  # Current
-        self.table.setColumnWidth(6, 100)  # SL
-        self.table.setColumnWidth(7, 100)  # TP
-        self.table.setColumnWidth(8, 150)  # Created Time
-        self.table.setColumnWidth(9, 100)  # P&L $
-        # P&L % (column 10) will stretch automatically
+        self.table.setColumnWidth(2, 50)   # Pos #
+        self.table.setColumnWidth(3, 80)   # Group
+        self.table.setColumnWidth(4, 70)   # Type
+        self.table.setColumnWidth(5, 100)  # Amount
+        self.table.setColumnWidth(6, 100)  # Entry
+        self.table.setColumnWidth(7, 100)  # Current
+        self.table.setColumnWidth(8, 100)  # SL
+        self.table.setColumnWidth(9, 100)  # TP
+        self.table.setColumnWidth(10, 70)  # Trailing
+        self.table.setColumnWidth(11, 150)  # Created Time
+        self.table.setColumnWidth(12, 100)  # P&L $
+        # P&L % (column 13) will stretch automatically
 
         # Allow user to resize columns
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -830,42 +838,74 @@ class PositionsMonitor(QDialog):
                 # Order ID
                 self.table.setItem(i, 1, QTableWidgetItem(str(pos.get('id', 'N/A'))))
 
-                # Type
+                # Position # (column 2)
+                pos_num = pos.get('position_num', 0)
+                if pos_num > 0:
+                    pos_num_text = f"{pos_num}/3"
+                else:
+                    pos_num_text = "-"
+                self.table.setItem(i, 2, QTableWidgetItem(pos_num_text))
+
+                # Group ID (column 3) - show first 8 chars
+                group_id = pos.get('position_group_id')
+                if group_id:
+                    group_text = group_id[:8]
+                else:
+                    group_text = "-"
+                self.table.setItem(i, 3, QTableWidgetItem(group_text))
+
+                # Type (column 4)
                 pos_type = pos.get('side', 'N/A').upper()
-                self.table.setItem(i, 2, QTableWidgetItem(pos_type))
+                self.table.setItem(i, 4, QTableWidgetItem(pos_type))
 
-                # Amount
+                # Amount (column 5)
                 amount = pos.get('contracts', pos.get('amount', 0))
-                self.table.setItem(i, 3, QTableWidgetItem(f"{amount:.4f}"))
+                self.table.setItem(i, 5, QTableWidgetItem(f"{amount:.4f}"))
 
-                # Entry price
+                # Entry price (column 6)
                 entry = pos.get('entryPrice', pos.get('price_open', 0))
-                self.table.setItem(i, 4, QTableWidgetItem(f"${entry:.2f}"))
+                self.table.setItem(i, 6, QTableWidgetItem(f"${entry:.2f}"))
 
-                # Current price
+                # Current price (column 7)
                 current = pos.get('markPrice', pos.get('price_current', entry))
-                self.table.setItem(i, 5, QTableWidgetItem(f"${current:.2f}"))
+                self.table.setItem(i, 7, QTableWidgetItem(f"${current:.2f}"))
 
-                # SL
+                # SL (column 8)
                 sl = pos.get('stopLoss', pos.get('sl', 0))
-                self.table.setItem(i, 6, QTableWidgetItem(f"${sl:.2f}" if sl else 'N/A'))
+                self.table.setItem(i, 8, QTableWidgetItem(f"${sl:.2f}" if sl else 'N/A'))
 
-                # TP
+                # TP (column 9)
                 tp = pos.get('takeProfit', pos.get('tp', 0))
-                self.table.setItem(i, 7, QTableWidgetItem(f"${tp:.2f}" if tp else 'N/A'))
+                self.table.setItem(i, 9, QTableWidgetItem(f"${tp:.2f}" if tp else 'N/A'))
 
-                # Created Time
+                # Trailing Stop Active (column 10)
+                trailing_active = pos.get('trailing_stop_active', False)
+                if trailing_active:
+                    trailing_item = QTableWidgetItem("✓")
+                    trailing_item.setForeground(Qt.blue)
+                else:
+                    trailing_item = QTableWidgetItem("-")
+                self.table.setItem(i, 10, trailing_item)
+                
+                # Apply background color for positions with active trailing stop
+                if trailing_active:
+                    for col in range(self.table.columnCount()):
+                        item = self.table.item(i, col)
+                        if item:
+                            item.setBackground(QColor(200, 230, 255))  # Light blue background
+
+                # Created Time (column 11)
                 created_time = pos.get('createdTime')
                 if created_time:
                     if isinstance(created_time, datetime):
                         time_str = created_time.strftime('%Y-%m-%d %H:%M:%S')
                     else:
                         time_str = str(created_time)
-                    self.table.setItem(i, 8, QTableWidgetItem(time_str))
+                    self.table.setItem(i, 11, QTableWidgetItem(time_str))
                 else:
-                    self.table.setItem(i, 8, QTableWidgetItem('N/A'))
+                    self.table.setItem(i, 11, QTableWidgetItem('N/A'))
 
-                # P&L $ (absolute)
+                # P&L $ (absolute) (column 12)
                 pnl = pos.get('unrealizedPnl', pos.get('profit', 0))
                 pnl_item = QTableWidgetItem(f"${pnl:+.2f}")
 
@@ -874,10 +914,13 @@ class PositionsMonitor(QDialog):
                     pnl_item.setForeground(Qt.green)
                 elif pnl < 0:
                     pnl_item.setForeground(Qt.red)
+                
+                if trailing_active:
+                    pnl_item.setBackground(QColor(200, 230, 255))
 
-                self.table.setItem(i, 9, pnl_item)
+                self.table.setItem(i, 12, pnl_item)
 
-                # P&L % (percentage)
+                # P&L % (percentage) (column 13)
                 # Calculate P&L percentage based on entry value
                 entry_value = entry * amount
                 pnl_pct = (pnl / entry_value * 100) if entry_value > 0 else 0.0
@@ -888,8 +931,11 @@ class PositionsMonitor(QDialog):
                     pnl_pct_item.setForeground(Qt.green)
                 elif pnl_pct < 0:
                     pnl_pct_item.setForeground(Qt.red)
+                
+                if trailing_active:
+                    pnl_pct_item.setBackground(QColor(200, 230, 255))
 
-                self.table.setItem(i, 10, pnl_pct_item)
+                self.table.setItem(i, 13, pnl_pct_item)
 
                 total_pnl += pnl
 
