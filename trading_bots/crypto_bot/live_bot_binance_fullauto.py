@@ -918,6 +918,7 @@ class LiveBotBinanceFullAuto:
                 tp_target = tracked_pos['tp']
                 sl_target = tracked_pos['sl']
                 position_type = tracked_pos['type']
+                entry_price = tracked_pos['entry_price']
                 
                 # Skip if TP or SL is None/missing
                 if tp_target is None or sl_target is None:
@@ -931,6 +932,15 @@ class LiveBotBinanceFullAuto:
                 except (ValueError, TypeError) as e:
                     print(f"⚠️  Position {order_id} has invalid TP/SL values - skipping check: {e}")
                     continue
+                
+                # Determine which TP level this is from the comment
+                tp_level = 'UNKNOWN'
+                if 'TP1' in tracked_pos['comment']:
+                    tp_level = 'TP1'
+                elif 'TP2' in tracked_pos['comment']:
+                    tp_level = 'TP2'
+                elif 'TP3' in tracked_pos['comment']:
+                    tp_level = 'TP3'
 
                 # DEBUG: Log position monitoring details
                 print(f"🔍 DEBUG Position {order_id} ({position_type} {tp_level}):")
