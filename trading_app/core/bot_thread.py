@@ -182,6 +182,20 @@ class BotThread(QThread):
                     status = self._get_bot_status()
                     self.status_signal.emit(status)
 
+                    # ✅ Check TP/SL levels in real-time (every 10 seconds)
+                    if hasattr(self.bot, '_check_tp_sl_realtime'):
+                        try:
+                            self.bot._check_tp_sl_realtime()
+                        except Exception as e:
+                            self.log_signal.emit(f"[{self.config.bot_id}] Error checking TP/SL: {str(e)}")
+
+                    # ✅ Check for manually closed positions (sync with exchange)
+                    if hasattr(self.bot, '_sync_positions_with_exchange'):
+                        try:
+                            self.bot._sync_positions_with_exchange()
+                        except Exception as e:
+                            self.log_signal.emit(f"[{self.config.bot_id}] Error syncing positions: {str(e)}")
+
                     # Update trailing stops for crypto bots
                     if hasattr(self.bot, 'update_trailing_stops') and elapsed % 60 == 0:
                         self.bot.update_trailing_stops()
