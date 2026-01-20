@@ -92,7 +92,7 @@ class BotThread(QThread):
             max_positions=self.config.max_positions,
             dry_run=self.config.dry_run,
             bot_id=self.config.bot_id,  # Pass bot_id from config
-            use_database=True if self.db else False,  # Enable database if available
+            use_database=bool(self.db),  # Enable database if available
             use_3_position_mode=self.config.use_3_position_mode,
             total_position_size=self.config.total_position_size,
             min_order_size=self.config.min_order_size,
@@ -131,7 +131,7 @@ class BotThread(QThread):
             api_key=self.config.api_key,
             api_secret=self.config.api_secret,
             bot_id=self.config.bot_id,  # Pass bot_id from config
-            use_database=True if self.db else False,  # Enable database if available
+            use_database=bool(self.db),  # Enable database if available
             use_3_position_mode=self.config.use_3_position_mode,
             total_position_size=self.config.total_position_size,
             min_order_size=self.config.min_order_size,
