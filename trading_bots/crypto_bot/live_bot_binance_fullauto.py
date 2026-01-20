@@ -834,32 +834,6 @@ class LiveBotBinanceFullAuto:
                         # Always log for dry-run mode so user knows monitoring is running
                         if db_trades:
                             print(f"🧪 DRY RUN: Monitoring {len(db_trades)} open position(s) from database (bot_id: {self.bot_id})")
-                        else:
-                            # Debug: Check if there are ANY open trades in database
-                            cursor = self.db.conn.cursor()
-                            cursor.execute("""
-                                SELECT bot_id, symbol, COUNT(*) as count 
-                                FROM trades 
-                                WHERE status = 'OPEN'
-                                GROUP BY bot_id, symbol
-                            """)
-                            results = cursor.fetchall()
-                            total_open = sum(row['count'] for row in results)
-                            
-                            print(f"🧪 DRY RUN: No open positions for bot_id '{self.bot_id}'")
-                            print(f"   📊 Total OPEN positions in DB: {total_open}")
-                            if results:
-                                print(f"   🤖 Bot IDs with open positions:")
-                                for row in results:
-                                    symbol = row['symbol'] if row['symbol'] else 'Unknown'
-                                    print(f"      - '{row['bot_id']}' ({symbol}): {row['count']} positions")
-                                
-                                # Suggest possible matches
-                                possible_matches = [r for r in results if self.symbol in (r['symbol'] or '')]
-                                if possible_matches:
-                                    print(f"   💡 POSSIBLE FIX: Update bot_id to match database:")
-                                    for match in possible_matches:
-                                        print(f"      bot_id = '{match['bot_id']}'  # For {match['symbol']}")
                     elif db_trades:
                         # Log for live mode too
                         print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
