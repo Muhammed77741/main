@@ -41,7 +41,7 @@ class TradeRecord:
     # Results
     profit: Optional[float] = None
     profit_percent: Optional[float] = None
-    status: str = 'OPEN'  # 'OPEN', 'TP', 'SL', 'CLOSED'
+    status: str = 'OPEN'  # 'OPEN', 'CLOSED'
 
     # Market context
     market_regime: Optional[str] = None  # 'TREND' or 'RANGE'
