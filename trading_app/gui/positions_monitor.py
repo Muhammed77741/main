@@ -889,7 +889,7 @@ class PositionsMonitor(QDialog):
                 
                 # Apply background color for positions with active trailing stop
                 if trailing_active:
-                    for col in range(14):
+                    for col in range(self.table.columnCount()):
                         item = self.table.item(i, col)
                         if item:
                             item.setBackground(QColor(200, 230, 255))  # Light blue background

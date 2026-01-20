@@ -769,6 +769,7 @@ class LiveBotBinanceFullAuto:
                                         trade.trailing_stop_active = True
                                         self.db.update_trade(trade)
                                         print(f"✓ Pos {pos_num} ({order_id}) marked as trailing stop active in database")
+                                        break  # Exit loop after updating the target trade
                             except Exception as e:
                                 print(f"⚠️  Error updating trailing_stop_active in DB: {e}")
 
