@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Utility script to update all UNKNOWN statuses to CLOSED in the database.
-This is a one-time fix for positions that were closed with UNKNOWN status.
+This fixes positions that were closed with UNKNOWN status.
 """
 
 import sqlite3
@@ -31,52 +31,18 @@ def fix_unknown_status():
         for row in cursor.fetchall():
             print(f"  Order: {row[0]}, Status: {row[1]}, Entry: {row[2]}, Close: {row[3]}")
         
-        # Update all UNKNOWN_PROCESSING to corresponding TP/SL status
-        cursor.execute("""
-            UPDATE trades 
-            SET status = 'TP1' 
-            WHERE status = 'TP1_PROCESSING' OR status = 'UNKNOWN_PROCESSING'
-        """)
-        tp1_updated = cursor.rowcount
-        
-        cursor.execute("""
-            UPDATE trades 
-            SET status = 'TP2' 
-            WHERE status = 'TP2_PROCESSING'
-        """)
-        tp2_updated = cursor.rowcount
-        
-        cursor.execute("""
-            UPDATE trades 
-            SET status = 'TP3' 
-            WHERE status = 'TP3_PROCESSING'
-        """)
-        tp3_updated = cursor.rowcount
-        
-        cursor.execute("""
-            UPDATE trades 
-            SET status = 'SL' 
-            WHERE status = 'SL_PROCESSING'
-        """)
-        sl_updated = cursor.rowcount
-        
-        # Update any remaining UNKNOWN to CLOSED
+        # Update all UNKNOWN statuses to CLOSED
         cursor.execute("""
             UPDATE trades 
             SET status = 'CLOSED' 
-            WHERE status = 'UNKNOWN' OR status LIKE '%UNKNOWN%'
+            WHERE status LIKE '%UNKNOWN%'
         """)
-        closed_updated = cursor.rowcount
+        updated = cursor.rowcount
         
         conn.commit()
         
         print(f"\n✅ Database updated successfully!")
-        print(f"   TP1: {tp1_updated} records")
-        print(f"   TP2: {tp2_updated} records")
-        print(f"   TP3: {tp3_updated} records")
-        print(f"   SL: {sl_updated} records")
-        print(f"   CLOSED: {closed_updated} records")
-        print(f"   Total: {tp1_updated + tp2_updated + tp3_updated + sl_updated + closed_updated} records updated")
+        print(f"   CLOSED: {updated} records updated")
         
     except Exception as e:
         print(f"❌ Error: {e}")

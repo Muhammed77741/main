@@ -958,14 +958,14 @@ class LiveBotMT5FullAuto:
                         )
                         break
             else:
-                # If we can't find deal history, mark as closed with unknown status
+                # If we can't find deal history, mark as closed
                 pos_data = self.positions_tracker.get(ticket)
                 if pos_data:
                     self._log_position_closed(
                         ticket=ticket,
                         close_price=pos_data['entry_price'],
                         profit=0,
-                        status='UNKNOWN'
+                        status='CLOSED'
                     )
             
     async def send_telegram(self, message):
