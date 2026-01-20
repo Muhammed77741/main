@@ -973,26 +973,34 @@ class LiveBotMT5FullAuto:
         """Send Telegram notification (synchronous wrapper for async bot)"""
         if self.telegram_bot and self.telegram_chat_id:
             try:
-                # Use asyncio.run() in a way that handles closed event loops
+                # Use asyncio to send message, handling various event loop states
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_closed():
+                        # Create new event loop if current one is closed
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
+                    
                     if loop.is_running():
-                        # If loop is already running (e.g., in a thread), schedule the coroutine
-                        asyncio.create_task(self._send_telegram_async(message))
+                        # If loop is already running (e.g., in a thread), we can't use run_until_complete
+                        # In this case, we just skip sending (trading bots run in separate thread)
+                        # This is acceptable as Telegram notifications are non-critical
+                        print(f"ℹ️  Telegram notification skipped (event loop already running)")
+                        return
                     else:
                         # Run the coroutine in the event loop
                         loop.run_until_complete(self._send_telegram_async(message))
-                except RuntimeError:
+                except RuntimeError as e:
                     # Fallback: create a new event loop
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     try:
                         loop.run_until_complete(self._send_telegram_async(message))
                     finally:
-                        loop.close()
+                        try:
+                            loop.close()
+                        except Exception:
+                            pass  # Ignore cleanup errors
             except Exception as e:
                 print(f"⚠️  Telegram send failed: {e}")
 
