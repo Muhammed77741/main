@@ -315,8 +315,8 @@ class BotThread(QThread):
             # Wait in small increments to allow stopping
             elapsed = 0
             while elapsed < seconds_until_close and not self._stop_requested:
-                time.sleep(5)
-                elapsed += 5
+                time.sleep(10)
+                elapsed += 10
                 
                 # Update status periodically during wait
                 if elapsed % 30 == 0:
@@ -328,20 +328,20 @@ class BotThread(QThread):
             )
 
     def _wait_for_next_candle_with_monitoring(self):
-        """Wait until next candle close while monitoring positions every 5 seconds"""
+        """Wait until next candle close while monitoring positions every 10 seconds"""
         seconds_until_close, _ = self._calculate_seconds_until_next_candle_close()
         
-        # Wait with position monitoring every 5 seconds
+        # Wait with position monitoring every 10 seconds (keeping original interval for stability)
         elapsed = 0
         while elapsed < seconds_until_close and not self._stop_requested:
-            time.sleep(5)  # Check every 5 seconds for position monitoring
-            elapsed += 5
+            time.sleep(10)  # Check every 10 seconds for position monitoring
+            elapsed += 10
 
-            # Update status every 5 seconds for real-time monitoring
+            # Update status every 10 seconds for real-time monitoring
             status = self._get_bot_status()
             self.status_signal.emit(status)
 
-            # ✅ Check TP/SL levels in real-time (every 5 seconds)
+            # ✅ Check TP/SL levels in real-time (every 10 seconds)
             if hasattr(self.bot, '_check_tp_sl_realtime'):
                 try:
                     self.bot._check_tp_sl_realtime()
