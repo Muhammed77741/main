@@ -1,6 +1,7 @@
 """
 Positions Monitor - monitor open positions
 """
+from datetime import datetime
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QHeaderView, QCheckBox
@@ -94,7 +95,8 @@ class PositionFetcherThread(QThread):
                         'markPrice': mark_price,
                         'stopLoss': trade.stop_loss,
                         'takeProfit': trade.take_profit,
-                        'unrealizedPnl': unrealized_pnl
+                        'unrealizedPnl': unrealized_pnl,
+                        'createdTime': trade.open_time
                     })
                 
                 return positions
@@ -113,6 +115,9 @@ class PositionFetcherThread(QThread):
 
                     if mt5_positions:
                         for pos in mt5_positions:
+                            # Convert timestamp to datetime
+                            created_time = datetime.fromtimestamp(pos.time) if pos.time else None
+                            
                             positions.append({
                                 'id': pos.ticket,
                                 'side': 'buy' if pos.type == 0 else 'sell',
@@ -121,7 +126,8 @@ class PositionFetcherThread(QThread):
                                 'markPrice': pos.price_current,
                                 'stopLoss': pos.sl,
                                 'takeProfit': pos.tp,
-                                'unrealizedPnl': pos.profit
+                                'unrealizedPnl': pos.profit,
+                                'createdTime': created_time
                             })
                 finally:
                     # Always shutdown MT5 to avoid resource leaks
@@ -216,9 +222,9 @@ class PositionsMonitor(QDialog):
 
         # Positions table
         self.table = QTableWidget()
-        self.table.setColumnCount(10)  # Added P&L% column
+        self.table.setColumnCount(11)  # Added Created Time column
         self.table.setHorizontalHeaderLabels([
-            'Select', 'Order ID', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'P&L $', 'P&L %'
+            'Select', 'Order ID', 'Type', 'Amount', 'Entry', 'Current', 'SL', 'TP', 'Created', 'P&L $', 'P&L %'
         ])
         
         # Enable selection
@@ -238,8 +244,9 @@ class PositionsMonitor(QDialog):
         self.table.setColumnWidth(5, 100)  # Current
         self.table.setColumnWidth(6, 100)  # SL
         self.table.setColumnWidth(7, 100)  # TP
-        self.table.setColumnWidth(8, 100)  # P&L $
-        # P&L % (column 9) will stretch automatically
+        self.table.setColumnWidth(8, 150)  # Created Time
+        self.table.setColumnWidth(9, 100)  # P&L $
+        # P&L % (column 10) will stretch automatically
 
         # Allow user to resize columns
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -847,6 +854,17 @@ class PositionsMonitor(QDialog):
                 tp = pos.get('takeProfit', pos.get('tp', 0))
                 self.table.setItem(i, 7, QTableWidgetItem(f"${tp:.2f}" if tp else 'N/A'))
 
+                # Created Time
+                created_time = pos.get('createdTime')
+                if created_time:
+                    if isinstance(created_time, datetime):
+                        time_str = created_time.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        time_str = str(created_time)
+                    self.table.setItem(i, 8, QTableWidgetItem(time_str))
+                else:
+                    self.table.setItem(i, 8, QTableWidgetItem('N/A'))
+
                 # P&L $ (absolute)
                 pnl = pos.get('unrealizedPnl', pos.get('profit', 0))
                 pnl_item = QTableWidgetItem(f"${pnl:+.2f}")
@@ -857,7 +875,7 @@ class PositionsMonitor(QDialog):
                 elif pnl < 0:
                     pnl_item.setForeground(Qt.red)
 
-                self.table.setItem(i, 8, pnl_item)
+                self.table.setItem(i, 9, pnl_item)
 
                 # P&L % (percentage)
                 # Calculate P&L percentage based on entry value
@@ -871,7 +889,7 @@ class PositionsMonitor(QDialog):
                 elif pnl_pct < 0:
                     pnl_pct_item.setForeground(Qt.red)
 
-                self.table.setItem(i, 9, pnl_pct_item)
+                self.table.setItem(i, 10, pnl_pct_item)
 
                 total_pnl += pnl
 
