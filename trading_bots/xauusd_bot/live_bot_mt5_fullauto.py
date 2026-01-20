@@ -42,7 +42,8 @@ class LiveBotMT5FullAuto:
                  check_interval=3600, risk_percent=2.0, max_positions=9,
                  dry_run=False, bot_id=None, use_database=True,
                  use_3_position_mode=False, total_position_size=None, min_order_size=None,
-                 trailing_stop_pct=0.5):
+                 use_trailing_stops=True, trailing_stop_pct=0.5,
+                 use_regime_based_sl=False, trend_sl=16, range_sl=12):
         """
         Initialize bot
         
@@ -57,6 +58,9 @@ class LiveBotMT5FullAuto:
             dry_run: If True, no real trades
             bot_id: Unique bot identifier for database tracking
             use_database: If True, use database for position tracking
+            use_regime_based_sl: Use fixed regime-based SL instead of strategy SL
+            trend_sl: TREND mode SL in points (default 16 for XAUUSD)
+            range_sl: RANGE mode SL in points (default 12 for XAUUSD)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -75,7 +79,13 @@ class LiveBotMT5FullAuto:
         self.use_3_position_mode = use_3_position_mode
         self.total_position_size = total_position_size
         self.min_order_size = min_order_size
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops
         self.trailing_stop_pct = trailing_stop_pct  # Trailing stop percentage for 3-position mode
+
+        # Regime-based SL settings
+        self.use_regime_based_sl = use_regime_based_sl
+        self.trend_sl_points = trend_sl  # SL for TREND mode in points
+        self.range_sl_points = range_sl  # SL for RANGE mode in points
 
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
@@ -411,7 +421,7 @@ class LiveBotMT5FullAuto:
         - When any position reaches TP1, activate trailing for Pos 2 & 3
         - Trailing formula: 50% retracement from max profit
         """
-        if not self.use_3_position_mode:
+        if not self.use_3_position_mode or not self.use_trailing_stops:
             return
 
         # Group positions by position_group_id
@@ -479,6 +489,20 @@ class LiveBotMT5FullAuto:
                                 # Update in tracker
                                 if ticket in self.positions_tracker:
                                     self.positions_tracker[ticket]['sl'] = new_sl
+                                
+                                # Send Telegram notification for trailing stop update
+                                if self.telegram_bot:
+                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                    message += f"Ticket: #{ticket}\n"
+                                    message += f"Position: {pos_num}/3\n"
+                                    message += f"Type: {pos_data['type']}\n"
+                                    message += f"Entry: ${entry_price:.2f}\n"
+                                    message += f"New SL: ${new_sl:.2f}\n"
+                                    message += f"Max Price: ${group_info['max_price']:.2f}"
+                                    try:
+                                        asyncio.run(self.send_telegram(message))
+                                    except Exception as e:
+                                        print(f"⚠️  Failed to send Telegram notification: {e}")
                         else:  # SELL
                             # Trailing stop: configurable % retracement from min price
                             new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
@@ -490,6 +514,20 @@ class LiveBotMT5FullAuto:
                                 # Update in tracker
                                 if ticket in self.positions_tracker:
                                     self.positions_tracker[ticket]['sl'] = new_sl
+                                
+                                # Send Telegram notification for trailing stop update
+                                if self.telegram_bot:
+                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                    message += f"Ticket: #{ticket}\n"
+                                    message += f"Position: {pos_num}/3\n"
+                                    message += f"Type: {pos_data['type']}\n"
+                                    message += f"Entry: ${entry_price:.2f}\n"
+                                    message += f"New SL: ${new_sl:.2f}\n"
+                                    message += f"Min Price: ${group_info['min_price']:.2f}"
+                                    try:
+                                        asyncio.run(self.send_telegram(message))
+                                    except Exception as e:
+                                        print(f"⚠️  Failed to send Telegram notification: {e}")
 
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
@@ -510,6 +548,12 @@ class LiveBotMT5FullAuto:
         if self.use_database and self.db:
             try:
                 db_trades = self.db.get_open_trades(self.bot_id)
+                if self.dry_run:
+                    # Silently monitor positions in background for dry-run mode
+                    pass
+                elif db_trades:
+                    # Log for live mode too
+                    print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
                 for trade in db_trades:
                     # Convert order_id (stored as string) back to int for MT5 ticket
                     try:
@@ -636,13 +680,33 @@ class LiveBotMT5FullAuto:
             tp_target = tracked_pos['tp']
             sl_target = tracked_pos['sl']
             
-            # Determine which TP level this is from the comment
-            tp_level = 'UNKNOWN'
-            if 'TP1' in tracked_pos['comment']:
+            # Skip if TP or SL is None/missing
+            if tp_target is None or sl_target is None:
+                print(f"⚠️  Position #{ticket} has missing TP ({tp_target}) or SL ({sl_target}) - skipping check")
+                continue
+            
+            # Convert to float to ensure proper comparison
+            try:
+                tp_target = float(tp_target)
+                sl_target = float(sl_target)
+            except (ValueError, TypeError) as e:
+                print(f"⚠️  Position #{ticket} has invalid TP/SL values - skipping check: {e}")
+                continue
+            
+            # Determine which TP level this is from position_num or comment
+            tp_level = 'TP1'  # Default for single-position mode
+            position_num = tracked_pos.get('position_num', 0)
+            if position_num == 1:
                 tp_level = 'TP1'
-            elif 'TP2' in tracked_pos['comment']:
+            elif position_num == 2:
                 tp_level = 'TP2'
-            elif 'TP3' in tracked_pos['comment']:
+            elif position_num == 3:
+                tp_level = 'TP3'
+            elif 'TP1' in tracked_pos.get('comment', ''):
+                tp_level = 'TP1'
+            elif 'TP2' in tracked_pos.get('comment', ''):
+                tp_level = 'TP2'
+            elif 'TP3' in tracked_pos.get('comment', ''):
                 tp_level = 'TP3'
             
             # Check if TP or SL is hit based on bar high/low OR current price
@@ -782,7 +846,7 @@ class LiveBotMT5FullAuto:
                         ticket=ticket,
                         close_price=current_price,
                         profit=profit,
-                        status=hit_type  # Status will be 'TP1', 'TP2', 'TP3', or 'SL'
+                        status='CLOSED'  # Status is always CLOSED after TP/SL hit
                     )
                 
                 # Send Telegram notification
@@ -895,14 +959,14 @@ class LiveBotMT5FullAuto:
                         )
                         break
             else:
-                # If we can't find deal history, mark as closed with unknown status
+                # If we can't find deal history, mark as closed
                 pos_data = self.positions_tracker.get(ticket)
                 if pos_data:
                     self._log_position_closed(
                         ticket=ticket,
                         close_price=pos_data['entry_price'],
                         profit=0,
-                        status='UNKNOWN'
+                        status='CLOSED'
                     )
             
     async def send_telegram(self, message):
@@ -1078,7 +1142,18 @@ class LiveBotMT5FullAuto:
                 
             # Calculate all 3 TP levels
             entry = last_signal['entry_price']
-            sl = last_signal['stop_loss']
+            
+            # Calculate SL based on settings
+            if self.use_regime_based_sl:
+                # Use regime-based fixed SL
+                sl_distance = self.trend_sl_points if self.current_regime == 'TREND' else self.range_sl_points
+                if last_signal['signal'] == 1:  # LONG
+                    sl = entry - sl_distance
+                else:  # SHORT
+                    sl = entry + sl_distance
+            else:
+                # Use strategy-calculated SL
+                sl = last_signal['stop_loss']
             
             if last_signal['signal'] == 1:  # LONG
                 tp1 = entry + tp1_distance
@@ -1261,6 +1336,22 @@ class LiveBotMT5FullAuto:
             comment=f"V3_{regime_code}"
         )
 
+        # Send Telegram notification
+        if self.telegram_bot:
+            message = f"🤖 <b>Position Opened</b>\n\n"
+            message += f"Direction: {direction_str}\n"
+            message += f"Market Regime: {regime}\n"
+            message += f"Symbol: {self.symbol}\n"
+            message += f"Lot: {lot_size}\n"
+            message += f"Entry: ${result.price:.2f}\n"
+            message += f"SL: ${signal['sl']:.2f}\n"
+            message += f"TP: ${signal['tp2']:.2f}\n"
+            message += f"Risk: {self.risk_percent}%"
+            try:
+                asyncio.run(self.send_telegram(message))
+            except Exception as e:
+                print(f"⚠️  Failed to send Telegram notification: {e}")
+
         return True
 
     def _open_3_positions(self, signal):
@@ -1282,10 +1373,26 @@ class LiveBotMT5FullAuto:
         # Calculate total lot size
         total_lot_size = self.calculate_position_size(signal['entry'], signal['sl'])
         
+        # Prepare common parameters
+        symbol_info = mt5.symbol_info(self.symbol)
+        if symbol_info is None:
+            print(f"❌ Symbol info not found")
+            return False
+        
         # Split into 3 parts: 33%, 33%, 34%
         lot1 = round(total_lot_size * 0.33, 2)
         lot2 = round(total_lot_size * 0.33, 2)
         lot3 = round(total_lot_size * 0.34, 2)
+        
+        # Check if ANY lot size is below minimum - if so, fallback to single position
+        min_lot = symbol_info.volume_min
+        if lot1 < min_lot or lot2 < min_lot or lot3 < min_lot:
+            print(f"   ⚠️  WARNING: Lot sizes too small for 3-position mode")
+            print(f"   Position 1: {lot1} lot (min: {min_lot})")
+            print(f"   Position 2: {lot2} lot (min: {min_lot})")
+            print(f"   Position 3: {lot3} lot (min: {min_lot})")
+            print(f"   🔄 FALLBACK: Opening single position with TP2 instead")
+            return self._open_single_position(signal)
         
         print(f"   Total lot size: {total_lot_size}")
         print(f"   Position 1 (TP1): {lot1} lot")
@@ -1301,12 +1408,6 @@ class LiveBotMT5FullAuto:
             print(f"   Position 3: {lot3} lot, TP3: {signal['tp3']:.2f} ({signal['tp3_distance']}p)")
             print(f"   Total risk: {self.risk_percent}%")
             return True
-            
-        # Prepare common parameters
-        symbol_info = mt5.symbol_info(self.symbol)
-        if symbol_info is None:
-            print(f"❌ Symbol info not found")
-            return False
             
         # Get current price
         tick = mt5.symbol_info_tick(self.symbol)
@@ -1327,12 +1428,7 @@ class LiveBotMT5FullAuto:
         ]
 
         for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
-            # Ensure minimum lot size
-            if lot_size < symbol_info.volume_min:
-                print(f"   ⚠️  {tp_name}: lot size {lot_size} < minimum {symbol_info.volume_min}, skipping")
-                continue
-                
-            # Create request
+            # Create request (lot sizes already validated above)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "symbol": self.symbol,
