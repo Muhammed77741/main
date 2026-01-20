@@ -132,6 +132,35 @@ class DatabaseManager:
             )
         """)
 
+        # Position Groups table (CRITICAL FIX #4: Persist state across restarts)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS position_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id TEXT UNIQUE NOT NULL,
+                bot_id TEXT NOT NULL,
+                tp1_hit INTEGER DEFAULT 0,
+                entry_price REAL NOT NULL,
+                max_price REAL NOT NULL,
+                min_price REAL NOT NULL,
+                trade_type TEXT NOT NULL,
+                tp1_close_price REAL,
+                status TEXT DEFAULT 'ACTIVE',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (bot_id) REFERENCES bot_configs(bot_id)
+            )
+        """)
+        
+        # Create index for faster lookups
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_position_groups_group_id 
+            ON position_groups(group_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_position_groups_bot_status 
+            ON position_groups(bot_id, status)
+        """)
+
         # App logs table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS app_logs (
@@ -541,6 +570,113 @@ class DatabaseManager:
             pass  # Silently skip if database is closed
         except Exception:
             pass  # Silently skip other errors during logging
+
+    # Position Groups methods (CRITICAL FIX #4)
+    def save_position_group(self, group):
+        """Save or update a position group"""
+        from models.position_group import PositionGroup
+        
+        if not self.conn:
+            return
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO position_groups (
+                group_id, bot_id, tp1_hit, entry_price, max_price, min_price,
+                trade_type, tp1_close_price, status, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            group.group_id,
+            group.bot_id,
+            1 if group.tp1_hit else 0,
+            group.entry_price,
+            group.max_price,
+            group.min_price,
+            group.trade_type,
+            group.tp1_close_price,
+            group.status,
+            datetime.now()
+        ))
+        self.conn.commit()
+
+    def get_position_group(self, group_id: str):
+        """Get a position group by ID"""
+        from models.position_group import PositionGroup
+        
+        if not self.conn:
+            return None
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM position_groups WHERE group_id = ?
+        """, (group_id,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        return PositionGroup(
+            group_id=row['group_id'],
+            bot_id=row['bot_id'],
+            tp1_hit=bool(row['tp1_hit']),
+            entry_price=row['entry_price'],
+            max_price=row['max_price'],
+            min_price=row['min_price'],
+            trade_type=row['trade_type'],
+            tp1_close_price=row['tp1_close_price'],
+            status=row['status'],
+            created_at=self._parse_datetime(row['created_at']),
+            updated_at=self._parse_datetime(row['updated_at'])
+        )
+
+    def get_active_position_groups(self, bot_id: str):
+        """Get all active position groups for a bot"""
+        from models.position_group import PositionGroup
+        
+        if not self.conn:
+            return []
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM position_groups 
+            WHERE bot_id = ? AND status = 'ACTIVE'
+            ORDER BY created_at DESC
+        """, (bot_id,))
+        
+        groups = []
+        for row in cursor.fetchall():
+            groups.append(PositionGroup(
+                group_id=row['group_id'],
+                bot_id=row['bot_id'],
+                tp1_hit=bool(row['tp1_hit']),
+                entry_price=row['entry_price'],
+                max_price=row['max_price'],
+                min_price=row['min_price'],
+                trade_type=row['trade_type'],
+                tp1_close_price=row['tp1_close_price'],
+                status=row['status'],
+                created_at=self._parse_datetime(row['created_at']),
+                updated_at=self._parse_datetime(row['updated_at'])
+            ))
+        
+        return groups
+
+    def update_position_group(self, group):
+        """Update an existing position group"""
+        self.save_position_group(group)  # INSERT OR REPLACE handles update
+
+    def close_position_group(self, group_id: str):
+        """Mark a position group as closed"""
+        if not self.conn:
+            return
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE position_groups 
+            SET status = 'CLOSED', updated_at = ?
+            WHERE group_id = ?
+        """, (datetime.now(), group_id))
+        self.conn.commit()
 
     def close(self):
         """Close database connection"""

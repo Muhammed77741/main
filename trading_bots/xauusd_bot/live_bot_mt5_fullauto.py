@@ -437,39 +437,131 @@ class LiveBotMT5FullAuto:
 
         # Process each group
         for group_id, group_positions in groups.items():
-            # Initialize group tracking if needed
+            # Initialize group tracking if needed (CRITICAL FIX #4: Restore from DB)
             if group_id not in self.position_groups:
-                # Find entry price from any position in group
-                entry_price = group_positions[0][1]['entry_price']
-                self.position_groups[group_id] = {
-                    'tp1_hit': False,
-                    'max_price': entry_price,
-                    'min_price': entry_price,
-                    'positions': [p[0] for p in group_positions]
-                }
+                # Try to restore from database first
+                restored_group = None
+                if self.use_database and self.db:
+                    try:
+                        restored_group = self.db.get_position_group(group_id)
+                        if restored_group:
+                            print(f"✅ Restored position group {group_id[:8]} from database")
+                            print(f"   TP1 hit: {restored_group.tp1_hit}, Max: {restored_group.max_price}, Min: {restored_group.min_price}")
+                    except Exception as e:
+                        print(f"⚠️  Could not restore position group from DB: {e}")
+                
+                if restored_group:
+                    # Use restored data
+                    self.position_groups[group_id] = {
+                        'tp1_hit': restored_group.tp1_hit,
+                        'max_price': restored_group.max_price,
+                        'min_price': restored_group.min_price,
+                        'positions': [p[0] for p in group_positions],
+                        'entry_price': restored_group.entry_price,
+                        'trade_type': restored_group.trade_type
+                    }
+                else:
+                    # Create new group
+                    entry_price = group_positions[0][1]['entry_price']
+                    trade_type = group_positions[0][1]['type']
+                    self.position_groups[group_id] = {
+                        'tp1_hit': False,
+                        'max_price': entry_price,
+                        'min_price': entry_price,
+                        'positions': [p[0] for p in group_positions],
+                        'entry_price': entry_price,
+                        'trade_type': trade_type
+                    }
+                    
+                    # Save to database
+                    if self.use_database and self.db:
+                        try:
+                            from models.position_group import PositionGroup
+                            new_group = PositionGroup(
+                                group_id=group_id,
+                                bot_id=self.bot_id,
+                                tp1_hit=False,
+                                entry_price=entry_price,
+                                max_price=entry_price,
+                                min_price=entry_price,
+                                trade_type=trade_type,
+                                created_at=datetime.now(),
+                                updated_at=datetime.now()
+                            )
+                            self.db.save_position_group(new_group)
+                            print(f"✅ Saved new position group {group_id[:8]} to database")
+                        except Exception as e:
+                            print(f"⚠️  Could not save position group to DB: {e}")
 
             group_info = self.position_groups[group_id]
 
-            # Update max/min price
+            # Update max/min price (CRITICAL FIX #4: Save to DB)
+            price_updated = False
             if group_positions[0][1]['type'] == 'BUY':
                 if current_price > group_info['max_price']:
                     group_info['max_price'] = current_price
+                    price_updated = True
             else:  # SELL
                 if current_price < group_info['min_price']:
                     group_info['min_price'] = current_price
+                    price_updated = True
+            
+            # Save to database if price was updated
+            if price_updated and self.use_database and self.db:
+                try:
+                    from models.position_group import PositionGroup
+                    updated_group = PositionGroup(
+                        group_id=group_id,
+                        bot_id=self.bot_id,
+                        tp1_hit=group_info['tp1_hit'],
+                        entry_price=group_info['entry_price'],
+                        max_price=group_info['max_price'],
+                        min_price=group_info['min_price'],
+                        trade_type=group_info['trade_type'],
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    self.db.update_position_group(updated_group)
+                except Exception as e:
+                    print(f"⚠️  Could not update position group in DB: {e}")
 
-            # Check if any position reached TP1
+            # Check if any position reached TP1 (CRITICAL FIX #4: Save to DB)
+            tp1_just_hit = False
             for ticket, pos_data in group_positions:
                 if pos_data.get('position_num') == 1:
                     tp1 = pos_data['tp']
-                    if pos_data['type'] == 'BUY':
-                        if current_price >= tp1:
-                            group_info['tp1_hit'] = True
-                            print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
-                    else:  # SELL
-                        if current_price <= tp1:
-                            group_info['tp1_hit'] = True
-                            print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
+                    if not group_info['tp1_hit']:  # Only check if not already hit
+                        if pos_data['type'] == 'BUY':
+                            if current_price >= tp1:
+                                group_info['tp1_hit'] = True
+                                tp1_just_hit = True
+                                print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
+                        else:  # SELL
+                            if current_price <= tp1:
+                                group_info['tp1_hit'] = True
+                                tp1_just_hit = True
+                                print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
+            
+            # Save tp1_hit to database
+            if tp1_just_hit and self.use_database and self.db:
+                try:
+                    from models.position_group import PositionGroup
+                    updated_group = PositionGroup(
+                        group_id=group_id,
+                        bot_id=self.bot_id,
+                        tp1_hit=True,
+                        entry_price=group_info['entry_price'],
+                        max_price=group_info['max_price'],
+                        min_price=group_info['min_price'],
+                        trade_type=group_info['trade_type'],
+                        tp1_close_price=current_price,
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    self.db.update_position_group(updated_group)
+                    print(f"✅ Saved TP1 hit to database for group {group_id[:8]}")
+                except Exception as e:
+                    print(f"⚠️  Could not save TP1 hit to DB: {e}")
 
             # Update trailing stops for Pos 2 & 3 if TP1 hit
             if group_info['tp1_hit']:
