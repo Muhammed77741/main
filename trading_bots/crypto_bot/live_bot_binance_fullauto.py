@@ -916,6 +916,19 @@ class LiveBotBinanceFullAuto:
                 tp_target = tracked_pos['tp']
                 sl_target = tracked_pos['sl']
                 position_type = tracked_pos['type']
+                
+                # Skip if TP or SL is None/missing
+                if tp_target is None or sl_target is None:
+                    print(f"⚠️  Position {order_id} has missing TP ({tp_target}) or SL ({sl_target}) - skipping check")
+                    continue
+                
+                # Convert to float to ensure proper comparison
+                try:
+                    tp_target = float(tp_target)
+                    sl_target = float(sl_target)
+                except (ValueError, TypeError) as e:
+                    print(f"⚠️  Position {order_id} has invalid TP/SL values - skipping check: {e}")
+                    continue
 
                 # Check if TP or SL is hit based on bar high/low OR current price
                 tp_hit = False

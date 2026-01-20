@@ -646,6 +646,19 @@ class LiveBotMT5FullAuto:
             tp_target = tracked_pos['tp']
             sl_target = tracked_pos['sl']
             
+            # Skip if TP or SL is None/missing
+            if tp_target is None or sl_target is None:
+                print(f"⚠️  Position #{ticket} has missing TP ({tp_target}) or SL ({sl_target}) - skipping check")
+                continue
+            
+            # Convert to float to ensure proper comparison
+            try:
+                tp_target = float(tp_target)
+                sl_target = float(sl_target)
+            except (ValueError, TypeError) as e:
+                print(f"⚠️  Position #{ticket} has invalid TP/SL values - skipping check: {e}")
+                continue
+            
             # Determine which TP level this is from the comment
             tp_level = 'UNKNOWN'
             if 'TP1' in tracked_pos['comment']:
