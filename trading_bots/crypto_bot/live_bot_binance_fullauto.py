@@ -802,8 +802,15 @@ class LiveBotBinanceFullAuto:
             if self.use_database and self.db:
                 try:
                     db_trades = self.db.get_open_trades(self.bot_id)
-                    if self.dry_run and db_trades:
-                        print(f"🧪 DRY RUN: Monitoring {len(db_trades)} open position(s) from database")
+                    if self.dry_run:
+                        # Always log for dry-run mode so user knows monitoring is running
+                        if db_trades:
+                            print(f"🧪 DRY RUN: Monitoring {len(db_trades)} open position(s) from database")
+                        else:
+                            print(f"🧪 DRY RUN: No open positions to monitor")
+                    elif db_trades:
+                        # Log for live mode too
+                        print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
                     for trade in db_trades:
                         positions_to_check[trade.order_id] = {
                             'tp': trade.take_profit,
