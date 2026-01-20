@@ -759,6 +759,19 @@ class LiveBotBinanceFullAuto:
                     if pos_num in [2, 3]:  # Only Pos 2 and 3 trail
                         entry_price = pos_data['entry_price']
 
+                        # Mark trailing stop as active in database
+                        if self.use_database and self.db:
+                            try:
+                                # Find the trade in database and update trailing_stop_active flag
+                                open_trades = self.db.get_open_trades(self.bot_id)
+                                for trade in open_trades:
+                                    if trade.order_id == str(order_id) and not trade.trailing_stop_active:
+                                        trade.trailing_stop_active = True
+                                        self.db.update_trade(trade)
+                                        print(f"✓ Pos {pos_num} ({order_id}) marked as trailing stop active in database")
+                            except Exception as e:
+                                print(f"⚠️  Error updating trailing_stop_active in DB: {e}")
+
                         if pos_data['type'] == 'BUY':
                             # Trailing stop: configurable % retracement from max price
                             new_sl = group_info['max_price'] - (group_info['max_price'] - entry_price) * self.trailing_stop_pct
