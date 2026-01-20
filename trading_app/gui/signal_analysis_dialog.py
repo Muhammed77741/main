@@ -2967,7 +2967,11 @@ class SignalAnalysisDialog(QDialog):
                 tp1 = row['tp1_used']
                 tp2 = row['tp2_used']
                 tp3 = row['tp3_used']
-                tp_item = QTableWidgetItem(f"${tp1:.2f}/${tp2:.2f}/${tp3:.2f}")
+                # Check if TP values are actually set (> 0) to avoid showing $0.00/$0.00/$0.00
+                if tp1 > 0 and tp2 > 0 and tp3 > 0:
+                    tp_item = QTableWidgetItem(f"${tp1:.2f}/${tp2:.2f}/${tp3:.2f}")
+                else:
+                    tp_item = QTableWidgetItem("Pending")
             else:
                 tp_value = row.get('take_profit', 0)
                 if pd.isna(tp_value):
