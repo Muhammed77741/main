@@ -549,9 +549,8 @@ class LiveBotMT5FullAuto:
             try:
                 db_trades = self.db.get_open_trades(self.bot_id)
                 if self.dry_run:
-                    # Always log for dry-run mode so user knows monitoring is running
-                    if db_trades:
-                        print(f"🧪 DRY RUN: Monitoring {len(db_trades)} open position(s) from database (bot_id: {self.bot_id})")
+                    # Silently monitor positions in background for dry-run mode
+                    pass
                 elif db_trades:
                     # Log for live mode too
                     print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
