@@ -157,9 +157,13 @@ class BotThread(QThread):
     def _run_bot_loop(self):
         """Run bot loop with periodic status updates"""
         import time
+        from datetime import datetime
 
         # Custom run loop to allow stopping
         iteration = 0
+
+        # Wait until next candle close before starting
+        self._wait_for_next_candle_close()
 
         while not self._stop_requested:
             iteration += 1
@@ -183,34 +187,8 @@ class BotThread(QThread):
                         if self.config.dry_run and self.db:
                             self._save_dry_run_trade(signal)
 
-                # Wait until next check (1 hour or until stopped)
-                wait_time = 3600  # 1 hour
-                elapsed = 0
-                while elapsed < wait_time and not self._stop_requested:
-                    time.sleep(10)  # Check every 10 seconds
-                    elapsed += 10
-
-                    # Update status every 10 seconds for real-time monitoring
-                    status = self._get_bot_status()
-                    self.status_signal.emit(status)
-
-                    # ✅ Check TP/SL levels in real-time (every 10 seconds)
-                    if hasattr(self.bot, '_check_tp_sl_realtime'):
-                        try:
-                            self.bot._check_tp_sl_realtime()
-                        except Exception as e:
-                            self.log_signal.emit(f"[{self.config.bot_id}] Error checking TP/SL: {str(e)}")
-
-                    # ✅ Check for manually closed positions (sync with exchange)
-                    if hasattr(self.bot, '_sync_positions_with_exchange'):
-                        try:
-                            self.bot._sync_positions_with_exchange()
-                        except Exception as e:
-                            self.log_signal.emit(f"[{self.config.bot_id}] Error syncing positions: {str(e)}")
-
-                    # Update trailing stops for crypto bots
-                    if hasattr(self.bot, 'update_trailing_stops') and elapsed % 60 == 0:
-                        self.bot.update_trailing_stops()
+                # Wait until next candle close (with position monitoring every 5 seconds)
+                self._wait_for_next_candle_with_monitoring()
 
             except Exception as e:
                 self.log_signal.emit(f"[{self.config.bot_id}] Error in loop: {str(e)}")
@@ -283,6 +261,111 @@ class BotThread(QThread):
             '1d': mt5.TIMEFRAME_D1,
         }
         return tf_map.get(tf_str.lower(), mt5.TIMEFRAME_H1)
+
+    def _get_timeframe_seconds(self, tf_str: str) -> int:
+        """Convert timeframe string to seconds"""
+        tf_map = {
+            '1m': 60,
+            '5m': 300,
+            '15m': 900,
+            '30m': 1800,
+            '1h': 3600,
+            '4h': 14400,
+            '1d': 86400,
+        }
+        return tf_map.get(tf_str.lower(), 3600)  # Default to 1 hour
+
+    def _wait_for_next_candle_close(self):
+        """Wait until the next candle close time to ensure signal checks happen only after candle closes"""
+        import time
+        from datetime import datetime
+
+        # Get timeframe in seconds
+        timeframe_seconds = self._get_timeframe_seconds(self.config.timeframe)
+        
+        # Calculate seconds until next candle close
+        now = datetime.now()
+        current_timestamp = int(now.timestamp())
+        
+        # Calculate seconds since the last candle close
+        seconds_since_close = current_timestamp % timeframe_seconds
+        
+        # Calculate seconds until next candle close
+        seconds_until_close = timeframe_seconds - seconds_since_close
+        
+        # Add a small buffer (5 seconds) to ensure candle is fully closed
+        seconds_until_close += 5
+        
+        if seconds_until_close > 60:  # Only wait if more than 1 minute
+            next_close = datetime.fromtimestamp(current_timestamp + seconds_until_close)
+            self.log_signal.emit(
+                f"[{self.config.bot_id}] Waiting for next candle close at {next_close.strftime('%H:%M:%S')} "
+                f"({seconds_until_close} seconds)..."
+            )
+            
+            # Wait in small increments to allow stopping
+            elapsed = 0
+            while elapsed < seconds_until_close and not self._stop_requested:
+                time.sleep(5)
+                elapsed += 5
+                
+                # Update status periodically during wait
+                if elapsed % 30 == 0:
+                    status = self._get_bot_status()
+                    self.status_signal.emit(status)
+        else:
+            self.log_signal.emit(
+                f"[{self.config.bot_id}] Candle just closed, starting signal check immediately"
+            )
+
+    def _wait_for_next_candle_with_monitoring(self):
+        """Wait until next candle close while monitoring positions every 5 seconds"""
+        import time
+        from datetime import datetime
+
+        # Get timeframe in seconds
+        timeframe_seconds = self._get_timeframe_seconds(self.config.timeframe)
+        
+        # Calculate seconds until next candle close
+        now = datetime.now()
+        current_timestamp = int(now.timestamp())
+        
+        # Calculate seconds since the last candle close
+        seconds_since_close = current_timestamp % timeframe_seconds
+        
+        # Calculate seconds until next candle close
+        seconds_until_close = timeframe_seconds - seconds_since_close
+        
+        # Add a small buffer (5 seconds) to ensure candle is fully closed
+        seconds_until_close += 5
+        
+        # Wait with position monitoring every 5 seconds
+        elapsed = 0
+        while elapsed < seconds_until_close and not self._stop_requested:
+            time.sleep(5)  # Check every 5 seconds for position monitoring
+            elapsed += 5
+
+            # Update status every 5 seconds for real-time monitoring
+            status = self._get_bot_status()
+            self.status_signal.emit(status)
+
+            # ✅ Check TP/SL levels in real-time (every 5 seconds)
+            if hasattr(self.bot, '_check_tp_sl_realtime'):
+                try:
+                    self.bot._check_tp_sl_realtime()
+                except Exception as e:
+                    self.log_signal.emit(f"[{self.config.bot_id}] Error checking TP/SL: {str(e)}")
+
+            # ✅ Check for manually closed positions (sync with exchange)
+            if hasattr(self.bot, '_sync_positions_with_exchange'):
+                try:
+                    self.bot._sync_positions_with_exchange()
+                except Exception as e:
+                    self.log_signal.emit(f"[{self.config.bot_id}] Error syncing positions: {str(e)}")
+
+            # Update trailing stops for crypto bots
+            if hasattr(self.bot, 'update_trailing_stops') and elapsed % 60 == 0:
+                self.bot.update_trailing_stops()
 
     def _save_dry_run_trade(self, signal):
         """Save DRY RUN trade to database - supports 3-position mode"""
