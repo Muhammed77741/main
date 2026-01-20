@@ -45,7 +45,8 @@ class LiveBotBinanceFullAuto:
                  dry_run=False, testnet=True, api_key=None, api_secret=None,
                  trailing_stop_enabled=True, trailing_stop_percent=1.5,
                  bot_id=None, use_database=True, use_3_position_mode=False,
-                 total_position_size=None, min_order_size=None, trailing_stop_pct=0.5):
+                 total_position_size=None, min_order_size=None, use_trailing_stops=True, trailing_stop_pct=0.5,
+                 use_regime_based_sl=False, trend_sl=0.8, range_sl=0.6):
         """
         Initialize bot
 
@@ -65,6 +66,9 @@ class LiveBotBinanceFullAuto:
             trailing_stop_percent: Trailing stop activation threshold (%)
             bot_id: Unique bot identifier for database tracking
             use_database: If True, use database for position tracking
+            use_regime_based_sl: Use fixed regime-based SL instead of strategy SL
+            trend_sl: TREND mode SL in percent (default 0.8% for crypto)
+            range_sl: RANGE mode SL in percent (default 0.6% for crypto)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -86,7 +90,13 @@ class LiveBotBinanceFullAuto:
         self.use_3_position_mode = use_3_position_mode
         self.total_position_size = total_position_size
         self.min_order_size = min_order_size
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops
         self.trailing_stop_pct = trailing_stop_pct  # Trailing stop percentage for 3-position mode
+
+        # Regime-based SL settings
+        self.use_regime_based_sl = use_regime_based_sl
+        self.trend_sl_pct = trend_sl  # SL for TREND mode in percent
+        self.range_sl_pct = range_sl  # SL for RANGE mode in percent
 
         # Trailing stop settings
         self.trailing_stop_enabled = trailing_stop_enabled
@@ -692,7 +702,7 @@ class LiveBotBinanceFullAuto:
         - When any position reaches TP1, activate trailing for Pos 2 & 3
         - Trailing formula: 50% retracement from max profit
         """
-        if not self.use_3_position_mode:
+        if not self.use_3_position_mode or not self.use_trailing_stops:
             return
 
         # Group positions by position_group_id
@@ -792,6 +802,39 @@ class LiveBotBinanceFullAuto:
             if self.use_database and self.db:
                 try:
                     db_trades = self.db.get_open_trades(self.bot_id)
+                    if self.dry_run:
+                        # Always log for dry-run mode so user knows monitoring is running
+                        if db_trades:
+                            print(f"🧪 DRY RUN: Monitoring {len(db_trades)} open position(s) from database (bot_id: {self.bot_id})")
+                        else:
+                            # Debug: Check if there are ANY open trades in database
+                            cursor = self.db.conn.cursor()
+                            cursor.execute("""
+                                SELECT bot_id, symbol, COUNT(*) as count 
+                                FROM trades 
+                                WHERE status = 'OPEN'
+                                GROUP BY bot_id, symbol
+                            """)
+                            results = cursor.fetchall()
+                            total_open = sum(row['count'] for row in results)
+                            
+                            print(f"🧪 DRY RUN: No open positions for bot_id '{self.bot_id}'")
+                            print(f"   📊 Total OPEN positions in DB: {total_open}")
+                            if results:
+                                print(f"   🤖 Bot IDs with open positions:")
+                                for row in results:
+                                    symbol = row['symbol'] if row['symbol'] else 'Unknown'
+                                    print(f"      - '{row['bot_id']}' ({symbol}): {row['count']} positions")
+                                
+                                # Suggest possible matches
+                                possible_matches = [r for r in results if self.symbol in (r['symbol'] or '')]
+                                if possible_matches:
+                                    print(f"   💡 POSSIBLE FIX: Update bot_id to match database:")
+                                    for match in possible_matches:
+                                        print(f"      bot_id = '{match['bot_id']}'  # For {match['symbol']}")
+                    elif db_trades:
+                        # Log for live mode too
+                        print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
                     for trade in db_trades:
                         positions_to_check[trade.order_id] = {
                             'tp': trade.take_profit,
@@ -906,7 +949,48 @@ class LiveBotBinanceFullAuto:
                 tp_target = tracked_pos['tp']
                 sl_target = tracked_pos['sl']
                 position_type = tracked_pos['type']
+                entry_price = tracked_pos['entry_price']
+                
+                # Skip if TP or SL is None/missing
+                if tp_target is None or sl_target is None:
+                    print(f"⚠️  Position {order_id} has missing TP ({tp_target}) or SL ({sl_target}) - skipping check")
+                    continue
+                
+                # Convert to float to ensure proper comparison
+                try:
+                    tp_target = float(tp_target)
+                    sl_target = float(sl_target)
+                except (ValueError, TypeError) as e:
+                    print(f"⚠️  Position {order_id} has invalid TP/SL values - skipping check: {e}")
+                    continue
+                
+                # Determine which TP level this is from position_num or comment
+                tp_level = 'TP1'  # Default for single-position mode
+                position_num = tracked_pos.get('position_num', 0)
+                if position_num == 1:
+                    tp_level = 'TP1'
+                elif position_num == 2:
+                    tp_level = 'TP2'
+                elif position_num == 3:
+                    tp_level = 'TP3'
+                elif 'TP1' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP1'
+                elif 'TP2' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP2'
+                elif 'TP3' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP3'
 
+                # DEBUG: Log position monitoring details
+                print(f"🔍 DEBUG Position {order_id} ({position_type} {tp_level}):")
+                print(f"   Entry: ${entry_price:.4f}")
+                print(f"   Current: ${current_price:.4f}")
+                print(f"   TP Target: ${tp_target:.4f}")
+                print(f"   SL Target: ${sl_target:.4f}")
+                if bar_high and bar_low:
+                    print(f"   Bar H/L: ${bar_high:.4f} / ${bar_low:.4f}")
+                if tracked_pos.get('position_group_id'):
+                    print(f"   Group: {tracked_pos.get('position_group_id')} (Pos {tracked_pos.get('position_num', 0)})")
+                
                 # Check if TP or SL is hit based on bar high/low OR current price
                 tp_hit = False
                 sl_hit = False
@@ -916,21 +1000,28 @@ class LiveBotBinanceFullAuto:
                     # Check if bar high reached TP OR current price is already at/past TP
                     if (bar_high and bar_high >= tp_target) or (current_price >= tp_target):
                         tp_hit = True
+                        print(f"   ✅ TP HIT: price ${current_price:.4f} >= target ${tp_target:.4f}")
                     # Check if bar low reached SL OR current price is already at/past SL
                     if (bar_low and bar_low <= sl_target) or (current_price <= sl_target):
                         sl_hit = True
+                        print(f"   ❌ SL HIT: price ${current_price:.4f} <= target ${sl_target:.4f}")
                 else:  # SELL
                     # For SELL: TP is below entry, SL is above entry
                     # Check if bar low reached TP OR current price is already at/past TP
                     if (bar_low and bar_low <= tp_target) or (current_price <= tp_target):
                         tp_hit = True
+                        print(f"   ✅ TP HIT: price ${current_price:.4f} <= target ${tp_target:.4f}")
                     # Check if bar high reached SL OR current price is already at/past SL
                     if (bar_high and bar_high >= sl_target) or (current_price >= sl_target):
                         sl_hit = True
+                        print(f"   ❌ SL HIT: price ${current_price:.4f} >= target ${sl_target:.4f}")
+                
+                if not tp_hit and not sl_hit:
+                    print(f"   ⏳ Waiting: TP/SL not reached yet")
                 
                 # If TP or SL is hit
                 if tp_hit or sl_hit:
-                    hit_type = 'TP' if tp_hit else 'SL'
+                    hit_type = tp_level if tp_hit else 'SL'
                     target_price = tp_target if tp_hit else sl_target
                     
                     # Update status in both tracker and database immediately
@@ -1191,7 +1282,18 @@ class LiveBotBinanceFullAuto:
 
             # Calculate TP levels in price
             entry = last_signal['entry_price']
-            sl = last_signal['stop_loss']
+            
+            # Calculate SL based on settings
+            if self.use_regime_based_sl:
+                # Use regime-based fixed SL (percentage)
+                sl_pct = self.trend_sl_pct if self.current_regime == 'TREND' else self.range_sl_pct
+                if last_signal['signal'] == 1:  # LONG
+                    sl = entry * (1 - sl_pct / 100)
+                else:  # SHORT
+                    sl = entry * (1 + sl_pct / 100)
+            else:
+                # Use strategy-calculated SL
+                sl = last_signal['stop_loss']
 
             if last_signal['signal'] == 1:  # LONG
                 tp1 = entry * (1 + tp1_pct / 100)
@@ -1446,17 +1548,14 @@ class LiveBotBinanceFullAuto:
             total_size * 0.34   # Pos 3 (slightly larger for rounding)
         ]
 
-        # Auto-adjust if below minimum
-        adjusted = False
-        for i in range(len(pos_sizes)):
-            if pos_sizes[i] < min_size:
-                print(f"   ⚠️  Position {i+1} size {pos_sizes[i]:.6f} < minimum {min_size}, adjusting...")
-                pos_sizes[i] = min_size
-                adjusted = True
-
-        if adjusted:
-            total_size = sum(pos_sizes)
-            print(f"   Adjusted total size: {total_size:.6f}")
+        # Check if ANY lot size is below minimum - if so, fallback to single position
+        if any(size < min_size for size in pos_sizes):
+            print(f"   ⚠️  WARNING: Position sizes too small for 3-position mode")
+            print(f"   Position 1: {pos_sizes[0]:.6f} (min: {min_size})")
+            print(f"   Position 2: {pos_sizes[1]:.6f} (min: {min_size})")
+            print(f"   Position 3: {pos_sizes[2]:.6f} (min: {min_size})")
+            print(f"   🔄 FALLBACK: Opening single position with TP2 instead")
+            return self._open_single_position(signal)
 
         # Position configuration
         positions_data = [

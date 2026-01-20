@@ -67,9 +67,13 @@ class DatabaseManager:
                 range_tp2 REAL,
                 range_tp3 REAL,
                 total_position_size REAL,
-                use_3_position_mode INTEGER DEFAULT 0,
+                use_3_position_mode INTEGER DEFAULT 1,
                 min_order_size REAL,
+                use_trailing_stops INTEGER DEFAULT 1,
                 trailing_stop_pct REAL DEFAULT 0.5,
+                use_regime_based_sl INTEGER DEFAULT 0,
+                trend_sl REAL DEFAULT 0.8,
+                range_sl REAL DEFAULT 0.6,
                 telegram_enabled INTEGER DEFAULT 0,
                 telegram_token TEXT,
                 telegram_chat_id TEXT,
@@ -180,8 +184,16 @@ class DatabaseManager:
 
             if 'use_3_position_mode' not in columns:
                 print("📊 Migrating bot_configs: adding use_3_position_mode column...")
-                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_3_position_mode INTEGER DEFAULT 0")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_3_position_mode INTEGER DEFAULT 1")
                 print("✅ use_3_position_mode column added")
+            else:
+                # Update existing records where use_3_position_mode is 0 to default to 1
+                print("📊 Updating existing bot_configs: setting use_3_position_mode to 1...")
+                cursor.execute("UPDATE bot_configs SET use_3_position_mode = 1 WHERE use_3_position_mode = 0")
+                updated_rows = cursor.rowcount
+                if updated_rows > 0:
+                    print(f"✅ Updated {updated_rows} bot config(s) to enable 3-position mode")
+
 
             if 'min_order_size' not in columns:
                 print("📊 Migrating bot_configs: adding min_order_size column...")
@@ -192,6 +204,27 @@ class DatabaseManager:
                 print("📊 Migrating bot_configs: adding trailing_stop_pct column...")
                 cursor.execute("ALTER TABLE bot_configs ADD COLUMN trailing_stop_pct REAL DEFAULT 0.5")
                 print("✅ trailing_stop_pct column added")
+
+            if 'use_trailing_stops' not in columns:
+                print("📊 Migrating bot_configs: adding use_trailing_stops column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_trailing_stops INTEGER DEFAULT 1")
+                print("✅ use_trailing_stops column added")
+
+            if 'use_regime_based_sl' not in columns:
+                print("📊 Migrating bot_configs: adding use_regime_based_sl column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_regime_based_sl INTEGER DEFAULT 0")
+                print("✅ use_regime_based_sl column added")
+
+            if 'trend_sl' not in columns:
+                print("📊 Migrating bot_configs: adding trend_sl column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN trend_sl REAL DEFAULT 0.8")
+                print("✅ trend_sl column added")
+
+            if 'range_sl' not in columns:
+                print("📊 Migrating bot_configs: adding range_sl column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN range_sl REAL DEFAULT 0.6")
+                print("✅ range_sl column added")
+
 
         except Exception as e:
             print(f"⚠️  Phase 2 config migration warning: {e}")
@@ -208,10 +241,12 @@ class DatabaseManager:
                 risk_percent, max_positions, timeframe, strategy,
                 trend_tp1, trend_tp2, trend_tp3,
                 range_tp1, range_tp2, range_tp3,
-                total_position_size, use_3_position_mode, min_order_size, trailing_stop_pct,
+                total_position_size, use_3_position_mode, min_order_size,
+                use_trailing_stops, trailing_stop_pct,
+                use_regime_based_sl, trend_sl, range_sl,
                 telegram_enabled, telegram_token, telegram_chat_id,
                 dry_run, testnet, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             config.bot_id, config.name, config.symbol, config.exchange,
             config.api_key, config.api_secret,
@@ -219,9 +254,13 @@ class DatabaseManager:
             config.trend_tp1, config.trend_tp2, config.trend_tp3,
             config.range_tp1, config.range_tp2, config.range_tp3,
             getattr(config, 'total_position_size', None),
-            1 if getattr(config, 'use_3_position_mode', False) else 0,
+            1 if getattr(config, 'use_3_position_mode', True) else 0,
             getattr(config, 'min_order_size', None),
+            1 if getattr(config, 'use_trailing_stops', True) else 0,
             getattr(config, 'trailing_stop_pct', 0.5),
+            1 if getattr(config, 'use_regime_based_sl', False) else 0,
+            getattr(config, 'trend_sl', 0.8),
+            getattr(config, 'range_sl', 0.6),
             1 if config.telegram_enabled else 0,
             config.telegram_token, config.telegram_chat_id,
             1 if config.dry_run else 0,
@@ -252,9 +291,13 @@ class DatabaseManager:
                 max_positions=row['max_positions'],
                 timeframe=row['timeframe'],
                 total_position_size=row['total_position_size'] if 'total_position_size' in columns else None,
-                use_3_position_mode=bool(row['use_3_position_mode']) if 'use_3_position_mode' in columns else False,
+                use_3_position_mode=bool(row['use_3_position_mode']) if 'use_3_position_mode' in columns else True,
                 min_order_size=row['min_order_size'] if 'min_order_size' in columns else None,
+                use_trailing_stops=bool(row['use_trailing_stops']) if 'use_trailing_stops' in columns else True,
                 trailing_stop_pct=row['trailing_stop_pct'] if 'trailing_stop_pct' in columns else 0.5,
+                use_regime_based_sl=bool(row['use_regime_based_sl']) if 'use_regime_based_sl' in columns else False,
+                trend_sl=row['trend_sl'] if 'trend_sl' in columns else 0.8,
+                range_sl=row['range_sl'] if 'range_sl' in columns else 0.6,
                 strategy=row['strategy'],
                 trend_tp1=row['trend_tp1'],
                 trend_tp2=row['trend_tp2'],
