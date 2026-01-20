@@ -692,13 +692,20 @@ class LiveBotMT5FullAuto:
                 print(f"⚠️  Position #{ticket} has invalid TP/SL values - skipping check: {e}")
                 continue
             
-            # Determine which TP level this is from the comment
-            tp_level = 'UNKNOWN'
-            if 'TP1' in tracked_pos['comment']:
+            # Determine which TP level this is from position_num or comment
+            tp_level = 'TP1'  # Default for single-position mode
+            position_num = tracked_pos.get('position_num', 0)
+            if position_num == 1:
                 tp_level = 'TP1'
-            elif 'TP2' in tracked_pos['comment']:
+            elif position_num == 2:
                 tp_level = 'TP2'
-            elif 'TP3' in tracked_pos['comment']:
+            elif position_num == 3:
+                tp_level = 'TP3'
+            elif 'TP1' in tracked_pos.get('comment', ''):
+                tp_level = 'TP1'
+            elif 'TP2' in tracked_pos.get('comment', ''):
+                tp_level = 'TP2'
+            elif 'TP3' in tracked_pos.get('comment', ''):
                 tp_level = 'TP3'
             
             # DEBUG: Log position monitoring details
