@@ -498,50 +498,134 @@ class LiveBotMT5FullAuto:
 
                             # Only update if new SL is better (higher) than current
                             if new_sl > pos_data['sl']:
-                                print(f"   📊 Pos {pos_num} trailing SL updated: {pos_data['sl']:.2f} → {new_sl:.2f}")
-                                pos_data['sl'] = new_sl
-                                # Update in tracker
-                                if ticket in self.positions_tracker:
-                                    self.positions_tracker[ticket]['sl'] = new_sl
+                                old_sl = pos_data['sl']
+                                print(f"   📊 Pos {pos_num} trailing SL updated: {old_sl:.2f} → {new_sl:.2f}")
                                 
-                                # Send Telegram notification for trailing stop update
-                                if self.telegram_bot:
-                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
-                                    message += f"Ticket: #{ticket}\n"
-                                    message += f"Position: {pos_num}/3\n"
-                                    message += f"Type: {pos_data['type']}\n"
-                                    message += f"Entry: ${entry_price:.2f}\n"
-                                    message += f"New SL: ${new_sl:.2f}\n"
-                                    message += f"Max Price: ${group_info['max_price']:.2f}"
+                                # Update SL on MT5 broker (CRITICAL FIX #3)
+                                sl_updated_on_broker = False
+                                if not self.dry_run:
                                     try:
-                                        self.send_telegram(message)
+                                        request = {
+                                            "action": mt5.TRADE_ACTION_SLTP,
+                                            "position": ticket,
+                                            "sl": new_sl,
+                                            "tp": pos_data['tp'],
+                                            "symbol": self.symbol,
+                                            "magic": 234000,
+                                        }
+                                        result = mt5.order_send(request)
+                                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                            sl_updated_on_broker = True
+                                            print(f"   ✅ SL updated on MT5 broker: {new_sl:.2f}")
+                                        else:
+                                            error_msg = result.comment if result else "No result"
+                                            print(f"   ❌ Failed to update SL on MT5: {error_msg}")
                                     except Exception as e:
-                                        print(f"⚠️  Failed to send Telegram notification: {e}")
+                                        print(f"   ❌ Error updating SL on MT5: {e}")
+                                else:
+                                    sl_updated_on_broker = True  # Simulate success in dry-run
+                                
+                                # Only update in memory if broker update succeeded
+                                if sl_updated_on_broker:
+                                    pos_data['sl'] = new_sl
+                                    # Update in tracker
+                                    if ticket in self.positions_tracker:
+                                        self.positions_tracker[ticket]['sl'] = new_sl
+                                    
+                                    # Update in database
+                                    if self.use_database and self.db:
+                                        try:
+                                            open_trades = self.db.get_open_trades(self.bot_id)
+                                            for trade in open_trades:
+                                                if trade.order_id == str(ticket):
+                                                    trade.stop_loss = new_sl
+                                                    self.db.update_trade(trade)
+                                                    break
+                                        except Exception as e:
+                                            print(f"   ⚠️  Failed to update SL in database: {e}")
+                                    
+                                    # Send Telegram notification for trailing stop update
+                                    if self.telegram_bot:
+                                        message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                        message += f"Ticket: #{ticket}\n"
+                                        message += f"Position: {pos_num}/3\n"
+                                        message += f"Type: {pos_data['type']}\n"
+                                        message += f"Entry: ${entry_price:.2f}\n"
+                                        message += f"New SL: ${new_sl:.2f}\n"
+                                        message += f"Max Price: ${group_info['max_price']:.2f}"
+                                        try:
+                                            self.send_telegram(message)
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to send Telegram notification: {e}")
+                                else:
+                                    print(f"   ⚠️  SL not updated in memory - broker update failed")
                         else:  # SELL
                             # Trailing stop: configurable % retracement from min price
                             new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
 
                             # Only update if new SL is better (lower) than current
                             if new_sl < pos_data['sl']:
-                                print(f"   📊 Pos {pos_num} trailing SL updated: {pos_data['sl']:.2f} → {new_sl:.2f}")
-                                pos_data['sl'] = new_sl
-                                # Update in tracker
-                                if ticket in self.positions_tracker:
-                                    self.positions_tracker[ticket]['sl'] = new_sl
+                                old_sl = pos_data['sl']
+                                print(f"   📊 Pos {pos_num} trailing SL updated: {old_sl:.2f} → {new_sl:.2f}")
                                 
-                                # Send Telegram notification for trailing stop update
-                                if self.telegram_bot:
-                                    message = f"📊 <b>Trailing Stop Updated</b>\n\n"
-                                    message += f"Ticket: #{ticket}\n"
-                                    message += f"Position: {pos_num}/3\n"
-                                    message += f"Type: {pos_data['type']}\n"
-                                    message += f"Entry: ${entry_price:.2f}\n"
-                                    message += f"New SL: ${new_sl:.2f}\n"
-                                    message += f"Min Price: ${group_info['min_price']:.2f}"
+                                # Update SL on MT5 broker (CRITICAL FIX #3)
+                                sl_updated_on_broker = False
+                                if not self.dry_run:
                                     try:
-                                        self.send_telegram(message)
+                                        request = {
+                                            "action": mt5.TRADE_ACTION_SLTP,
+                                            "position": ticket,
+                                            "sl": new_sl,
+                                            "tp": pos_data['tp'],
+                                            "symbol": self.symbol,
+                                            "magic": 234000,
+                                        }
+                                        result = mt5.order_send(request)
+                                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                            sl_updated_on_broker = True
+                                            print(f"   ✅ SL updated on MT5 broker: {new_sl:.2f}")
+                                        else:
+                                            error_msg = result.comment if result else "No result"
+                                            print(f"   ❌ Failed to update SL on MT5: {error_msg}")
                                     except Exception as e:
-                                        print(f"⚠️  Failed to send Telegram notification: {e}")
+                                        print(f"   ❌ Error updating SL on MT5: {e}")
+                                else:
+                                    sl_updated_on_broker = True  # Simulate success in dry-run
+                                
+                                # Only update in memory if broker update succeeded
+                                if sl_updated_on_broker:
+                                    pos_data['sl'] = new_sl
+                                    # Update in tracker
+                                    if ticket in self.positions_tracker:
+                                        self.positions_tracker[ticket]['sl'] = new_sl
+                                    
+                                    # Update in database
+                                    if self.use_database and self.db:
+                                        try:
+                                            open_trades = self.db.get_open_trades(self.bot_id)
+                                            for trade in open_trades:
+                                                if trade.order_id == str(ticket):
+                                                    trade.stop_loss = new_sl
+                                                    self.db.update_trade(trade)
+                                                    break
+                                        except Exception as e:
+                                            print(f"   ⚠️  Failed to update SL in database: {e}")
+                                    
+                                    # Send Telegram notification for trailing stop update
+                                    if self.telegram_bot:
+                                        message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                        message += f"Ticket: #{ticket}\n"
+                                        message += f"Position: {pos_num}/3\n"
+                                        message += f"Type: {pos_data['type']}\n"
+                                        message += f"Entry: ${entry_price:.2f}\n"
+                                        message += f"New SL: ${new_sl:.2f}\n"
+                                        message += f"Min Price: ${group_info['min_price']:.2f}"
+                                        try:
+                                            self.send_telegram(message)
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to send Telegram notification: {e}")
+                                else:
+                                    print(f"   ⚠️  SL not updated in memory - broker update failed")
 
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
