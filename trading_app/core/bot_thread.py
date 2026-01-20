@@ -91,6 +91,8 @@ class BotThread(QThread):
             risk_percent=self.config.risk_percent,
             max_positions=self.config.max_positions,
             dry_run=self.config.dry_run,
+            bot_id=self.config.bot_id,  # Pass bot_id from config
+            use_database=True if self.db else False,  # Enable database if available
             use_3_position_mode=self.config.use_3_position_mode,
             total_position_size=self.config.total_position_size,
             min_order_size=self.config.min_order_size,
@@ -108,6 +110,10 @@ class BotThread(QThread):
         self.bot.range_tp1 = self.config.range_tp1
         self.bot.range_tp2 = self.config.range_tp2
         self.bot.range_tp3 = self.config.range_tp3
+        
+        # Set database if available
+        if self.db:
+            self.bot.db = self.db
 
     def _init_binance_bot(self):
         """Initialize Binance bot"""
@@ -124,6 +130,8 @@ class BotThread(QThread):
             testnet=self.config.testnet,
             api_key=self.config.api_key,
             api_secret=self.config.api_secret,
+            bot_id=self.config.bot_id,  # Pass bot_id from config
+            use_database=True if self.db else False,  # Enable database if available
             use_3_position_mode=self.config.use_3_position_mode,
             total_position_size=self.config.total_position_size,
             min_order_size=self.config.min_order_size,
@@ -141,6 +149,10 @@ class BotThread(QThread):
         self.bot.range_tp1_pct = self.config.range_tp1
         self.bot.range_tp2_pct = self.config.range_tp2
         self.bot.range_tp3_pct = self.config.range_tp3
+        
+        # Set database if available
+        if self.db:
+            self.bot.db = self.db
 
     def _run_bot_loop(self):
         """Run bot loop with periodic status updates"""
