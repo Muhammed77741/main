@@ -708,17 +708,6 @@ class LiveBotMT5FullAuto:
             elif 'TP3' in tracked_pos.get('comment', ''):
                 tp_level = 'TP3'
             
-            # DEBUG: Log position monitoring details
-            print(f"🔍 DEBUG Position #{ticket} ({tracked_pos['type']} {tp_level}):")
-            print(f"   Entry: {tracked_pos['entry_price']:.2f}")
-            print(f"   Current: {current_price:.2f}")
-            print(f"   TP Target: {tp_target:.2f}")
-            print(f"   SL Target: {sl_target:.2f}")
-            if bar_high and bar_low:
-                print(f"   Bar H/L: {bar_high:.2f} / {bar_low:.2f}")
-            if tracked_pos.get('position_group_id'):
-                print(f"   Group: {tracked_pos.get('position_group_id')} (Pos {tracked_pos.get('position_num', 0)})")
-            
             # Check if TP or SL is hit based on bar high/low OR current price
             tp_hit = False
             sl_hit = False
@@ -728,24 +717,17 @@ class LiveBotMT5FullAuto:
                 # Check if bar high reached TP OR current price is already at/past TP
                 if (bar_high and bar_high >= tp_target) or (current_price >= tp_target):
                     tp_hit = True
-                    print(f"   ✅ TP HIT: price {current_price:.2f} >= target {tp_target:.2f}")
                 # Check if bar low reached SL OR current price is already at/past SL
                 if (bar_low and bar_low <= sl_target) or (current_price <= sl_target):
                     sl_hit = True
-                    print(f"   ❌ SL HIT: price {current_price:.2f} <= target {sl_target:.2f}")
             else:  # SELL
                 # For SELL: TP is below entry, SL is above entry
                 # Check if bar low reached TP OR current price is already at/past TP
                 if (bar_low and bar_low <= tp_target) or (current_price <= tp_target):
                     tp_hit = True
-                    print(f"   ✅ TP HIT: price {current_price:.2f} <= target {tp_target:.2f}")
                 # Check if bar high reached SL OR current price is already at/past SL
                 if (bar_high and bar_high >= sl_target) or (current_price >= sl_target):
                     sl_hit = True
-                    print(f"   ❌ SL HIT: price {current_price:.2f} >= target {sl_target:.2f}")
-            
-            if not tp_hit and not sl_hit:
-                print(f"   ⏳ Waiting: TP/SL not reached yet")
             
             # If TP or SL is hit
             if tp_hit or sl_hit:
@@ -863,7 +845,7 @@ class LiveBotMT5FullAuto:
                         ticket=ticket,
                         close_price=current_price,
                         profit=profit,
-                        status=hit_type  # Status will be 'TP1', 'TP2', 'TP3', or 'SL'
+                        status='CLOSED'  # Status is always CLOSED after TP/SL hit
                     )
                 
                 # Send Telegram notification
