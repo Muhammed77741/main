@@ -809,10 +809,15 @@ class LiveBotBinanceFullAuto:
                         else:
                             # Debug: Check if there are ANY open trades in database
                             cursor = self.db.conn.cursor()
-                            cursor.execute("SELECT COUNT(*) as count FROM trades WHERE status = 'OPEN'")
-                            total_open = cursor.fetchone()['count']
-                            cursor.execute("SELECT DISTINCT bot_id FROM trades WHERE status = 'OPEN'")
-                            bot_ids = [row['bot_id'] for row in cursor.fetchall()]
+                            cursor.execute("""
+                                SELECT bot_id, COUNT(*) as count 
+                                FROM trades 
+                                WHERE status = 'OPEN'
+                                GROUP BY bot_id
+                            """)
+                            results = cursor.fetchall()
+                            total_open = sum(row['count'] for row in results)
+                            bot_ids = [row['bot_id'] for row in results]
                             print(f"🧪 DRY RUN: No open positions for bot_id '{self.bot_id}'")
                             print(f"   📊 Total OPEN positions in DB: {total_open}")
                             if bot_ids:
