@@ -520,6 +520,8 @@ class LiveBotMT5FullAuto:
         if self.use_database and self.db:
             try:
                 db_trades = self.db.get_open_trades(self.bot_id)
+                if self.dry_run and db_trades:
+                    print(f"🧪 DRY RUN: Monitoring {len(db_trades)} open position(s) from database")
                 for trade in db_trades:
                     # Convert order_id (stored as string) back to int for MT5 ticket
                     try:
