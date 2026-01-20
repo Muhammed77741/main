@@ -41,6 +41,7 @@ Thumbs.db
 .coverage
 htmlcov/
 test_candle_timing.py
+test_precise_timing.py
 
 # Data files
 *.csv

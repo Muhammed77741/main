@@ -276,7 +276,7 @@ class BotThread(QThread):
 
     def _calculate_seconds_until_next_candle_close(self) -> tuple:
         """
-        Calculate seconds until next candle close
+        Calculate seconds until next candle close with precise timing
         
         Returns:
             tuple: (seconds_until_close, next_close_datetime)
@@ -284,8 +284,24 @@ class BotThread(QThread):
         # Get timeframe in seconds
         timeframe_seconds = self._get_timeframe_seconds(self.config.timeframe)
         
-        # Calculate seconds until next candle close
-        now = datetime.now()
+        # Try to get accurate internet time first, fall back to system time
+        try:
+            import ntplib
+            from datetime import timezone
+            ntp_client = ntplib.NTPClient()
+            response = ntp_client.request('pool.ntp.org', version=3, timeout=2)
+            now = datetime.fromtimestamp(response.tx_time)
+            # Log that we're using NTP time (only once per session)
+            if not hasattr(self, '_ntp_time_logged'):
+                self.log_signal.emit(f"[{self.config.bot_id}] Using NTP time for precise synchronization")
+                self._ntp_time_logged = True
+        except Exception:
+            # Fall back to system time if NTP fails
+            now = datetime.now()
+            if not hasattr(self, '_system_time_logged'):
+                self.log_signal.emit(f"[{self.config.bot_id}] Using system time (NTP unavailable)")
+                self._system_time_logged = True
+        
         current_timestamp = int(now.timestamp())
         
         # Calculate seconds since the last candle close
@@ -294,11 +310,16 @@ class BotThread(QThread):
         # Calculate seconds until next candle close
         seconds_until_close = timeframe_seconds - seconds_since_close
         
-        # Add a small buffer (5 seconds) to ensure candle is fully closed
-        seconds_until_close += 5
+        # Start 3 seconds BEFORE the candle close to allow strategy processing time
+        # This ensures signals are ready exactly when the candle closes
+        seconds_until_close -= 3
+        
+        # Ensure we don't go negative
+        if seconds_until_close < 0:
+            seconds_until_close += timeframe_seconds
         
         # Calculate next close datetime
-        next_close = datetime.fromtimestamp(current_timestamp + seconds_until_close)
+        next_close = datetime.fromtimestamp(current_timestamp + seconds_until_close + 3)  # +3 to show actual candle close time
         
         return seconds_until_close, next_close
 
