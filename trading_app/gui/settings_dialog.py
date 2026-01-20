@@ -181,6 +181,10 @@ class SettingsDialog(QDialog):
         self.min_order_size_spin.setSuffix(f" {unit}")
         layout.addRow("Min order size:", self.min_order_size_spin)
 
+        self.use_trailing_check = QCheckBox("Enable trailing stops (Pos 2 & 3)")
+        self.use_trailing_check.setToolTip("Enable trailing stops for positions 2 and 3 after TP1 is hit")
+        layout.addRow("", self.use_trailing_check)
+
         self.trailing_stop_pct_spin = QSpinBox()
         self.trailing_stop_pct_spin.setRange(10, 90)
         self.trailing_stop_pct_spin.setValue(50)
@@ -195,9 +199,12 @@ class SettingsDialog(QDialog):
         group = QGroupBox("Strategy - V3 Adaptive")
         layout = QVBoxLayout(group)
 
-        # TREND mode TP
+        # Two-column layout for TP levels
+        tp_columns_layout = QHBoxLayout()
+
+        # TREND mode TP (left column)
         trend_layout = QFormLayout()
-        trend_label = QLabel("<b>TREND Mode TP Levels:</b>")
+        trend_label = QLabel("<b>TREND Mode TP:</b>")
         trend_layout.addRow(trend_label)
 
         self.trend_tp1_spin = QDoubleSpinBox()
@@ -218,11 +225,9 @@ class SettingsDialog(QDialog):
         self.trend_tp3_spin.setDecimals(2)
         trend_layout.addRow("TP3:", self.trend_tp3_spin)
 
-        layout.addLayout(trend_layout)
-
-        # RANGE mode TP
+        # RANGE mode TP (right column)
         range_layout = QFormLayout()
-        range_label = QLabel("<b>RANGE Mode TP Levels:</b>")
+        range_label = QLabel("<b>RANGE Mode TP:</b>")
         range_layout.addRow(range_label)
 
         self.range_tp1_spin = QDoubleSpinBox()
@@ -243,11 +248,43 @@ class SettingsDialog(QDialog):
         self.range_tp3_spin.setDecimals(2)
         range_layout.addRow("TP3:", self.range_tp3_spin)
 
-        layout.addLayout(range_layout)
+        # Add both columns to horizontal layout
+        tp_columns_layout.addLayout(trend_layout)
+        tp_columns_layout.addLayout(range_layout)
+        layout.addLayout(tp_columns_layout)
+
+        # Regime-based SL section (compact layout with checkbox on same row)
+        sl_layout = QFormLayout()
+        sl_label = QLabel("<b>Regime-based SL:</b>")
+        sl_layout.addRow(sl_label)
+
+        self.use_regime_sl_check = QCheckBox("Use fixed regime-based SL")
+        self.use_regime_sl_check.setToolTip("When enabled, uses fixed SL based on market regime (TREND/RANGE)\nWhen disabled, uses dynamic SL from strategy signals")
+        sl_layout.addRow("", self.use_regime_sl_check)
+
+        # SL values in compact row
+        sl_values_layout = QHBoxLayout()
+
+        sl_values_layout.addWidget(QLabel("TREND SL:"))
+        self.trend_sl_spin = QDoubleSpinBox()
+        self.trend_sl_spin.setRange(0.1, 1000.0)
+        self.trend_sl_spin.setSingleStep(0.5)
+        self.trend_sl_spin.setDecimals(2)
+        sl_values_layout.addWidget(self.trend_sl_spin)
+
+        sl_values_layout.addWidget(QLabel("RANGE SL:"))
+        self.range_sl_spin = QDoubleSpinBox()
+        self.range_sl_spin.setRange(0.1, 1000.0)
+        self.range_sl_spin.setSingleStep(0.5)
+        self.range_sl_spin.setDecimals(2)
+        sl_values_layout.addWidget(self.range_sl_spin)
+
+        sl_layout.addRow("", sl_values_layout)
+        layout.addLayout(sl_layout)
 
         # Unit label
         unit = "%" if self.original_config.exchange == 'Binance' else "points"
-        unit_label = QLabel(f"<i>Unit: {unit}</i>")
+        unit_label = QLabel(f"<i>Unit: {unit} (TP and SL)</i>")
         layout.addWidget(unit_label)
 
         return group
@@ -297,8 +334,19 @@ class SettingsDialog(QDialog):
         self.range_tp2_spin.setValue(self.config.get('range_tp2', 1.75))
         self.range_tp3_spin.setValue(self.config.get('range_tp3', 2.5))
 
+        # Regime-based SL
+        self.use_regime_sl_check.setChecked(self.config.get('use_regime_based_sl', False))
+        if self.original_config.exchange == 'Binance':
+            # Crypto: percentage
+            self.trend_sl_spin.setValue(self.config.get('trend_sl', 0.8))
+            self.range_sl_spin.setValue(self.config.get('range_sl', 0.6))
+        else:
+            # XAUUSD: points
+            self.trend_sl_spin.setValue(self.config.get('trend_sl', 16))
+            self.range_sl_spin.setValue(self.config.get('range_sl', 12))
+
         # Phase 2: 3-Position Mode
-        self.use_3pos_check.setChecked(self.config.get('use_3_position_mode', False))
+        self.use_3pos_check.setChecked(self.config.get('use_3_position_mode', True))
 
         # Handle None values by using 'or' fallback
         total_pos_default = 100.0 if self.original_config.exchange == 'Binance' else 0.1
@@ -306,6 +354,7 @@ class SettingsDialog(QDialog):
 
         self.total_pos_size_spin.setValue(self.config.get('total_position_size') or total_pos_default)
         self.min_order_size_spin.setValue(self.config.get('min_order_size') or min_order_default)
+        self.use_trailing_check.setChecked(self.config.get('use_trailing_stops', True))
         self.trailing_stop_pct_spin.setValue(int((self.config.get('trailing_stop_pct') or 0.5) * 100))  # Convert 0.5 to 50
 
         # Telegram
@@ -335,10 +384,16 @@ class SettingsDialog(QDialog):
         self.config['range_tp2'] = self.range_tp2_spin.value()
         self.config['range_tp3'] = self.range_tp3_spin.value()
 
+        # Regime-based SL
+        self.config['use_regime_based_sl'] = self.use_regime_sl_check.isChecked()
+        self.config['trend_sl'] = self.trend_sl_spin.value()
+        self.config['range_sl'] = self.range_sl_spin.value()
+
         # Phase 2: 3-Position Mode
         self.config['use_3_position_mode'] = self.use_3pos_check.isChecked()
         self.config['total_position_size'] = self.total_pos_size_spin.value()
         self.config['min_order_size'] = self.min_order_size_spin.value()
+        self.config['use_trailing_stops'] = self.use_trailing_check.isChecked()
         self.config['trailing_stop_pct'] = self.trailing_stop_pct_spin.value() / 100.0  # Convert 50 to 0.5
 
         self.config['telegram_enabled'] = self.telegram_enable_check.isChecked()

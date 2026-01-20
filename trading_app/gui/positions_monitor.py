@@ -360,9 +360,16 @@ class PositionsMonitor(QDialog):
         for row in range(self.table.rowCount()):
             checkbox = self.table.cellWidget(row, 0)
             if checkbox and checkbox.isChecked():
-                order_id = self.table.item(row, 1).text()
-                pos_type = self.table.item(row, 2).text()
-                amount = self.table.item(row, 3).text()
+                order_id_item = self.table.item(row, 1)
+                pos_type_item = self.table.item(row, 2)
+                amount_item = self.table.item(row, 3)
+                
+                if not all([order_id_item, pos_type_item, amount_item]):
+                    continue
+                
+                order_id = order_id_item.text()
+                pos_type = pos_type_item.text()
+                amount = amount_item.text()
                 selected_positions.append({
                     'row': row,
                     'order_id': order_id,
@@ -908,8 +915,6 @@ class PositionsMonitor(QDialog):
                 self.table.setItem(i, 9, pnl_pct_item)
 
                 total_pnl += pnl
-
-                print(f"   ✅ Row {i+1}: {pos_type} {amount:.4f} @ ${entry:.2f} | P&L: ${pnl:+.2f} ({pnl_pct:+.2f}%)")
 
             # Update summary
             summary_color = "green" if total_pnl >= 0 else "red"
