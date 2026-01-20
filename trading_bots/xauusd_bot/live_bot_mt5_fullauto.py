@@ -171,6 +171,18 @@ class LiveBotMT5FullAuto:
                 ])
             print(f"📝 Created TP hits log file: {self.tp_hits_file}")
     
+    def _get_position_group_model(self):
+        """Helper to get PositionGroup model class (cached import)"""
+        if not hasattr(self, '_PositionGroup'):
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.position_group import PositionGroup
+                self._PositionGroup = PositionGroup
+            except Exception as e:
+                print(f"⚠️  Could not import PositionGroup model: {e}")
+                self._PositionGroup = None
+        return self._PositionGroup
+    
     def _log_position_opened(self, ticket, position_type, volume, entry_price,
                              sl, tp, regime, comment='', position_group_id=None, position_num=0):
         """Log when position is opened"""
@@ -476,8 +488,9 @@ class LiveBotMT5FullAuto:
                     # Save to database
                     if self.use_database and self.db:
                         try:
-                            from models.position_group import PositionGroup
-                            new_group = PositionGroup(
+                            PositionGroup = self._get_position_group_model()
+                            if PositionGroup:
+                                new_group = PositionGroup(
                                 group_id=group_id,
                                 bot_id=self.bot_id,
                                 tp1_hit=False,
@@ -509,8 +522,9 @@ class LiveBotMT5FullAuto:
             # Save to database if price was updated
             if price_updated and self.use_database and self.db:
                 try:
-                    from models.position_group import PositionGroup
-                    updated_group = PositionGroup(
+                    PositionGroup = self._get_position_group_model()
+                    if PositionGroup:
+                        updated_group = PositionGroup(
                         group_id=group_id,
                         bot_id=self.bot_id,
                         tp1_hit=group_info['tp1_hit'],
@@ -545,8 +559,9 @@ class LiveBotMT5FullAuto:
             # Save tp1_hit to database
             if tp1_just_hit and self.use_database and self.db:
                 try:
-                    from models.position_group import PositionGroup
-                    updated_group = PositionGroup(
+                    PositionGroup = self._get_position_group_model()
+                    if PositionGroup:
+                        updated_group = PositionGroup(
                         group_id=group_id,
                         bot_id=self.bot_id,
                         tp1_hit=True,

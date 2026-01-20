@@ -6,6 +6,7 @@ import os
 from typing import List, Optional
 from datetime import datetime
 from models import BotConfig, BotStatus, TradeRecord
+from models.position_group import PositionGroup
 
 
 class DatabaseManager:
@@ -574,8 +575,6 @@ class DatabaseManager:
     # Position Groups methods (CRITICAL FIX #4)
     def save_position_group(self, group):
         """Save or update a position group"""
-        from models.position_group import PositionGroup
-        
         if not self.conn:
             return
         
@@ -601,8 +600,6 @@ class DatabaseManager:
 
     def get_position_group(self, group_id: str):
         """Get a position group by ID"""
-        from models.position_group import PositionGroup
-        
         if not self.conn:
             return None
         
@@ -631,8 +628,6 @@ class DatabaseManager:
 
     def get_active_position_groups(self, bot_id: str):
         """Get all active position groups for a bot"""
-        from models.position_group import PositionGroup
-        
         if not self.conn:
             return []
         
