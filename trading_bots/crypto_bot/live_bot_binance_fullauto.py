@@ -387,7 +387,7 @@ class LiveBotBinanceFullAuto:
                 # Send to Telegram
                 if self.telegram_bot:
                     try:
-                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}\n\nPlease configure API credentials."))
+                        self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}\n\nPlease configure API credentials.")
                     except Exception as e:
                         print(f"⚠️  Failed to send Telegram notification: {e}")
                 
@@ -400,7 +400,7 @@ class LiveBotBinanceFullAuto:
                 # Send to Telegram
                 if self.telegram_bot:
                     try:
-                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}"))
+                        self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}")
                     except Exception as e:
                         print(f"⚠️  Failed to send Telegram notification: {e}")
                 
@@ -474,7 +474,7 @@ class LiveBotBinanceFullAuto:
             # Send success notification to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}"))
+                    self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -496,7 +496,7 @@ class LiveBotBinanceFullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>Authentication Failed</b>\n\n{str(e)}\n\nPlease check your API credentials."))
+                    self.send_telegram(f"❌ <b>Authentication Failed</b>\n\n{str(e)}\n\nPlease check your API credentials.")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -525,7 +525,7 @@ class LiveBotBinanceFullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>Binance Exchange Error</b>\n\n{error_msg}\n\nPlease check the logs for details."))
+                    self.send_telegram(f"❌ <b>Binance Exchange Error</b>\n\n{error_msg}\n\nPlease check the logs for details.")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
 
@@ -538,7 +538,7 @@ class LiveBotBinanceFullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>Connection Failed</b>\n\n{str(e)}\n\nType: {type(e).__name__}"))
+                    self.send_telegram(f"❌ <b>Connection Failed</b>\n\n{str(e)}\n\nType: {type(e).__name__}")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -781,7 +781,7 @@ class LiveBotBinanceFullAuto:
                                     message += f"New SL: ${new_sl:.2f}\n"
                                     message += f"Max Price: ${group_info['max_price']:.2f}"
                                     try:
-                                        asyncio.run(self.send_telegram(message))
+                                        self.send_telegram(message)
                                     except Exception as e:
                                         print(f"⚠️  Failed to send Telegram notification: {e}")
                         else:  # SELL
@@ -806,7 +806,7 @@ class LiveBotBinanceFullAuto:
                                     message += f"New SL: ${new_sl:.2f}\n"
                                     message += f"Min Price: ${group_info['min_price']:.2f}"
                                     try:
-                                        asyncio.run(self.send_telegram(message))
+                                        self.send_telegram(message)
                                     except Exception as e:
                                         print(f"⚠️  Failed to send Telegram notification: {e}")
 
@@ -1116,7 +1116,7 @@ class LiveBotBinanceFullAuto:
                         message += f"Status: CLOSED"
                         
                         try:
-                            asyncio.run(self.send_telegram(message))
+                            self.send_telegram(message)
                         except Exception as e:
                             print(f"⚠️  Failed to send Telegram notification: {e}")
         
@@ -1487,7 +1487,7 @@ class LiveBotBinanceFullAuto:
                 message += f"SL: ${signal['sl']:.2f}\n"
                 message += f"TP: ${signal['tp2']:.2f}\n"
                 message += f"Risk: {self.risk_percent}%"
-                asyncio.run(self.send_telegram(message))
+                self.send_telegram(message)
 
             return True
 
@@ -1629,7 +1629,7 @@ class LiveBotBinanceFullAuto:
                 message += f"Position 2: {pos_sizes[1]:.6f} → TP2 ${signal['tp2']:.2f} (trails)\n"
                 message += f"Position 3: {pos_sizes[2]:.6f} → TP3 ${signal['tp3']:.2f} (trails)\n"
                 message += f"\nRisk: {self.risk_percent}%"
-                asyncio.run(self.send_telegram(message))
+                self.send_telegram(message)
 
             return True
 
@@ -1639,17 +1639,43 @@ class LiveBotBinanceFullAuto:
             traceback.print_exc()
             return False
 
-    async def send_telegram(self, message):
-        """Send Telegram notification"""
+    def send_telegram(self, message):
+        """Send Telegram notification (synchronous wrapper for async bot)"""
         if self.telegram_bot and self.telegram_chat_id:
             try:
-                await self.telegram_bot.send_message(
-                    chat_id=self.telegram_chat_id,
-                    text=message,
-                    parse_mode='HTML'
-                )
+                # Use asyncio.run() in a way that handles closed event loops
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_closed():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    if loop.is_running():
+                        # If loop is already running (e.g., in a thread), schedule the coroutine
+                        asyncio.create_task(self._send_telegram_async(message))
+                    else:
+                        # Run the coroutine in the event loop
+                        loop.run_until_complete(self._send_telegram_async(message))
+                except RuntimeError:
+                    # Fallback: create a new event loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(self._send_telegram_async(message))
+                    finally:
+                        loop.close()
             except Exception as e:
                 print(f"⚠️  Telegram send failed: {e}")
+
+    async def _send_telegram_async(self, message):
+        """Async helper for sending Telegram messages"""
+        try:
+            await self.telegram_bot.send_message(
+                chat_id=self.telegram_chat_id,
+                text=message,
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            print(f"⚠️  Telegram message send error: {e}")
 
     def _check_closed_positions(self):
         """Check for positions that have been closed and log them"""
@@ -1754,7 +1780,7 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
 ✅ Bot is now active and monitoring the market!
 """
             try:
-                asyncio.run(self.send_telegram(startup_message))
+                self.send_telegram(startup_message)
                 print("📱 Startup notification sent to Telegram")
             except Exception as e:
                 print(f"⚠️  Failed to send startup notification: {e}")
@@ -1906,7 +1932,7 @@ Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 🛑 Bot has been stopped by user.
 """
                 try:
-                    asyncio.run(self.send_telegram(shutdown_message))
+                    self.send_telegram(shutdown_message)
                     print("📱 Shutdown notification sent to Telegram")
                 except Exception as e:
                     print(f"⚠️  Failed to send shutdown notification: {e}")

@@ -500,7 +500,7 @@ class LiveBotMT5FullAuto:
                                     message += f"New SL: ${new_sl:.2f}\n"
                                     message += f"Max Price: ${group_info['max_price']:.2f}"
                                     try:
-                                        asyncio.run(self.send_telegram(message))
+                                        self.send_telegram(message)
                                     except Exception as e:
                                         print(f"⚠️  Failed to send Telegram notification: {e}")
                         else:  # SELL
@@ -525,7 +525,7 @@ class LiveBotMT5FullAuto:
                                     message += f"New SL: ${new_sl:.2f}\n"
                                     message += f"Min Price: ${group_info['min_price']:.2f}"
                                     try:
-                                        asyncio.run(self.send_telegram(message))
+                                        self.send_telegram(message)
                                     except Exception as e:
                                         print(f"⚠️  Failed to send Telegram notification: {e}")
 
@@ -871,7 +871,7 @@ class LiveBotMT5FullAuto:
                     message += f"Status: CLOSED"
                     
                     try:
-                        asyncio.run(self.send_telegram(message))
+                        self.send_telegram(message)
                     except Exception as e:
                         print(f"⚠️  Failed to send Telegram notification: {e}")
         
@@ -884,7 +884,7 @@ class LiveBotMT5FullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure:\n1. MetaTrader 5 is installed and running\n2. 'Algo Trading' is enabled\n3. You're logged into an account"))
+                    self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure:\n1. MetaTrader 5 is installed and running\n2. 'Algo Trading' is enabled\n3. You're logged into an account")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -899,7 +899,7 @@ class LiveBotMT5FullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure you're logged into an MT5 account"))
+                    self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure you're logged into an MT5 account")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -912,7 +912,7 @@ class LiveBotMT5FullAuto:
         # Send success notification to Telegram
         if self.telegram_bot:
             try:
-                asyncio.run(self.send_telegram(f"✅ <b>Connected to MT5</b>\n\nServer: {account_info.server}\nAccount: {account_info.login}\nBalance: ${account_info.balance:.2f}"))
+                self.send_telegram(f"✅ <b>Connected to MT5</b>\n\nServer: {account_info.server}\nAccount: {account_info.login}\nBalance: ${account_info.balance:.2f}")
             except Exception as e:
                 print(f"⚠️  Failed to send Telegram notification: {e}")
         
@@ -969,17 +969,43 @@ class LiveBotMT5FullAuto:
                         status='CLOSED'
                     )
             
-    async def send_telegram(self, message):
-        """Send Telegram notification"""
+    def send_telegram(self, message):
+        """Send Telegram notification (synchronous wrapper for async bot)"""
         if self.telegram_bot and self.telegram_chat_id:
             try:
-                await self.telegram_bot.send_message(
-                    chat_id=self.telegram_chat_id,
-                    text=message,
-                    parse_mode='HTML'
-                )
+                # Use asyncio.run() in a way that handles closed event loops
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_closed():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    if loop.is_running():
+                        # If loop is already running (e.g., in a thread), schedule the coroutine
+                        asyncio.create_task(self._send_telegram_async(message))
+                    else:
+                        # Run the coroutine in the event loop
+                        loop.run_until_complete(self._send_telegram_async(message))
+                except RuntimeError:
+                    # Fallback: create a new event loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(self._send_telegram_async(message))
+                    finally:
+                        loop.close()
             except Exception as e:
                 print(f"⚠️  Telegram send failed: {e}")
+
+    async def _send_telegram_async(self, message):
+        """Async helper for sending Telegram messages"""
+        try:
+            await self.telegram_bot.send_message(
+                chat_id=self.telegram_chat_id,
+                text=message,
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            print(f"⚠️  Telegram message send error: {e}")
                 
     def get_market_data(self, bars=500):
         """Get historical data from MT5"""
@@ -1348,7 +1374,7 @@ class LiveBotMT5FullAuto:
             message += f"TP: ${signal['tp2']:.2f}\n"
             message += f"Risk: {self.risk_percent}%"
             try:
-                asyncio.run(self.send_telegram(message))
+                self.send_telegram(message)
             except Exception as e:
                 print(f"⚠️  Failed to send Telegram notification: {e}")
 
@@ -1498,7 +1524,7 @@ class LiveBotMT5FullAuto:
             for ticket, tp_name, tp_price in positions_opened:
                 message += f"  {tp_name}: ${tp_price:.2f} (#{ticket})\n"
             message += f"\nTotal risk: {self.risk_percent}%"
-            asyncio.run(self.send_telegram(message))
+            self.send_telegram(message)
             
         return True
     
@@ -1651,7 +1677,7 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
 ✅ Bot is now active and monitoring the market!
 """
             try:
-                asyncio.run(self.send_telegram(startup_message))
+                self.send_telegram(startup_message)
                 print("📱 Startup notification sent to Telegram")
             except Exception as e:
                 print(f"⚠️  Failed to send startup notification: {e}")
@@ -1798,7 +1824,7 @@ Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 🛑 Bot has been stopped by user.
 """
                 try:
-                    asyncio.run(self.send_telegram(shutdown_message))
+                    self.send_telegram(shutdown_message)
                     print("📱 Shutdown notification sent to Telegram")
                 except Exception as e:
                     print(f"⚠️  Failed to send shutdown notification: {e}")
