@@ -7,6 +7,8 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from typing import Optional
 import traceback
+import time
+from datetime import datetime
 
 # Add trading_bots to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_bots'))
@@ -156,9 +158,6 @@ class BotThread(QThread):
 
     def _run_bot_loop(self):
         """Run bot loop with periodic status updates"""
-        import time
-        from datetime import datetime
-
         # Custom run loop to allow stopping
         iteration = 0
 
@@ -275,11 +274,13 @@ class BotThread(QThread):
         }
         return tf_map.get(tf_str.lower(), 3600)  # Default to 1 hour
 
-    def _wait_for_next_candle_close(self):
-        """Wait until the next candle close time to ensure signal checks happen only after candle closes"""
-        import time
-        from datetime import datetime
-
+    def _calculate_seconds_until_next_candle_close(self) -> tuple:
+        """
+        Calculate seconds until next candle close
+        
+        Returns:
+            tuple: (seconds_until_close, next_close_datetime)
+        """
         # Get timeframe in seconds
         timeframe_seconds = self._get_timeframe_seconds(self.config.timeframe)
         
@@ -296,8 +297,16 @@ class BotThread(QThread):
         # Add a small buffer (5 seconds) to ensure candle is fully closed
         seconds_until_close += 5
         
+        # Calculate next close datetime
+        next_close = datetime.fromtimestamp(current_timestamp + seconds_until_close)
+        
+        return seconds_until_close, next_close
+
+    def _wait_for_next_candle_close(self):
+        """Wait until the next candle close time to ensure signal checks happen only after candle closes"""
+        seconds_until_close, next_close = self._calculate_seconds_until_next_candle_close()
+        
         if seconds_until_close > 60:  # Only wait if more than 1 minute
-            next_close = datetime.fromtimestamp(current_timestamp + seconds_until_close)
             self.log_signal.emit(
                 f"[{self.config.bot_id}] Waiting for next candle close at {next_close.strftime('%H:%M:%S')} "
                 f"({seconds_until_close} seconds)..."
@@ -320,24 +329,7 @@ class BotThread(QThread):
 
     def _wait_for_next_candle_with_monitoring(self):
         """Wait until next candle close while monitoring positions every 5 seconds"""
-        import time
-        from datetime import datetime
-
-        # Get timeframe in seconds
-        timeframe_seconds = self._get_timeframe_seconds(self.config.timeframe)
-        
-        # Calculate seconds until next candle close
-        now = datetime.now()
-        current_timestamp = int(now.timestamp())
-        
-        # Calculate seconds since the last candle close
-        seconds_since_close = current_timestamp % timeframe_seconds
-        
-        # Calculate seconds until next candle close
-        seconds_until_close = timeframe_seconds - seconds_since_close
-        
-        # Add a small buffer (5 seconds) to ensure candle is fully closed
-        seconds_until_close += 5
+        seconds_until_close, _ = self._calculate_seconds_until_next_candle_close()
         
         # Wait with position monitoring every 5 seconds
         elapsed = 0
