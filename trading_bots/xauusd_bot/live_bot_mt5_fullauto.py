@@ -117,9 +117,19 @@ class LiveBotMT5FullAuto:
         self.running = True  # Flag for graceful shutdown
         self.watchdog = None  # Will be initialized in run()
         
-        # Register signal handlers for graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # Register signal handlers for graceful shutdown (only works in main thread)
+        try:
+            import threading
+            if threading.current_thread() is threading.main_thread():
+                signal.signal(signal.SIGINT, self._signal_handler)
+                signal.signal(signal.SIGTERM, self._signal_handler)
+                print("✅ Signal handlers registered")
+            else:
+                print("⚠️  Running in worker thread - signal handlers not registered")
+                print("   Bot will use self.running flag for graceful shutdown")
+        except ValueError as e:
+            print(f"⚠️  Could not register signal handlers: {e}")
+            print("   Bot will use self.running flag for graceful shutdown")
 
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
