@@ -2163,9 +2163,3 @@ Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         finally:
             # Always cleanup resources
             self._cleanup()
-            import traceback
-            traceback.print_exc()
-        finally:
-            print("🔌 Disconnecting from MT5...")
-            self.disconnect_mt5()
-            print("✅ Shutdown complete")
