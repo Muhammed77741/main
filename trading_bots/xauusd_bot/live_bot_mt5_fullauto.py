@@ -16,12 +16,14 @@ import csv
 import os
 import asyncio
 import uuid
+import signal
 
 # Add parent directory to path to access shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.pattern_recognition_strategy import PatternRecognitionStrategy
 from shared.telegram_helper import check_telegram_bot_import
+from shared.bot_resilience import retry_with_timeout, BotWatchdog, interruptible_sleep
 
 
 class LiveBotMT5FullAuto:
@@ -111,6 +113,14 @@ class LiveBotMT5FullAuto:
         # Phase 2: 3-Position Mode tracking
         self.position_groups = {}  # {group_id: {'tp1_hit': bool, 'max_price': float, 'min_price': float, 'positions': [...]}}
 
+        # Resilience features (CRITICAL: Network stability)
+        self.running = True  # Flag for graceful shutdown
+        self.watchdog = None  # Will be initialized in run()
+        
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
         
@@ -170,6 +180,48 @@ class LiveBotMT5FullAuto:
                     'Profit', 'Pips', 'Market_Regime', 'Duration_Minutes', 'Comment'
                 ])
             print(f"📝 Created TP hits log file: {self.tp_hits_file}")
+    
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals for graceful exit"""
+        print(f"\n⚠️  Received signal {signum}, initiating graceful shutdown...")
+        self.running = False
+    
+    def _cleanup(self):
+        """Cleanup resources on shutdown"""
+        print("\n🧹 Cleaning up resources...")
+        
+        # 1. Stop watchdog
+        if self.watchdog:
+            try:
+                self.watchdog.stop()
+            except Exception as e:
+                print(f"⚠️  Error stopping watchdog: {e}")
+        
+        # 2. Close MT5 connection
+        if self.mt5_connected:
+            try:
+                mt5.shutdown()
+                print("✅ MT5 connection closed")
+            except Exception as e:
+                print(f"⚠️  Error closing MT5: {e}")
+        
+        # 3. Close database
+        if self.db:
+            try:
+                self.db.close()
+                print("✅ Database connection closed")
+            except Exception as e:
+                print(f"⚠️  Error closing database: {e}")
+        
+        # 4. Send shutdown notification
+        if self.telegram_bot:
+            try:
+                self.send_telegram("🛑 <b>Bot Stopped</b>\n\nBot has been shut down gracefully.")
+                print("✅ Shutdown notification sent")
+            except Exception as e:
+                print(f"⚠️  Error sending notification: {e}")
+        
+        print("✅ Cleanup complete")
     
     def _get_position_group_model(self):
         """Helper to get PositionGroup model class (cached import)"""
@@ -1081,33 +1133,55 @@ class LiveBotMT5FullAuto:
                         print(f"⚠️  Failed to send Telegram notification: {e}")
         
     def connect_mt5(self):
-        """Connect to MT5"""
-        if not mt5.initialize():
-            error_msg = "❌ Failed to initialize MT5"
-            print(error_msg)
+        """Connect to MT5 with retry and timeout"""
+        
+        def _connect():
+            """Internal connection function with timeout protection"""
+            start_time = time.time()
             
-            # Send to Telegram
-            if self.telegram_bot:
-                try:
-                    self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure:\n1. MetaTrader 5 is installed and running\n2. 'Algo Trading' is enabled\n3. You're logged into an account")
-                except Exception as e:
-                    print(f"⚠️  Failed to send Telegram notification: {e}")
+            if not mt5.initialize():
+                raise Exception("Failed to initialize MT5")
             
-            return False
+            # Check timeout
+            if time.time() - start_time > 25:
+                mt5.shutdown()
+                raise Exception("MT5 initialization timeout")
             
-        account_info = mt5.account_info()
+            account_info = mt5.account_info()
+            if account_info is None:
+                mt5.shutdown()
+                raise Exception("Failed to get account info")
+            
+            return account_info
+        
+        # Retry with timeout: 3 attempts, 10 sec interval, 30 sec timeout
+        account_info = retry_with_timeout(
+            func=_connect,
+            max_attempts=3,
+            retry_interval=10,
+            timeout_seconds=30,
+            description="MT5 Connection"
+        )
+        
         if account_info is None:
-            error_msg = "❌ Failed to get account info"
+            error_msg = "❌ Failed to connect to MT5 after 3 attempts"
             print(error_msg)
-            mt5.shutdown()
             
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure you're logged into an MT5 account")
+                    self.send_telegram(
+                        f"❌ <b>MT5 Connection Error</b>\n\n"
+                        f"{error_msg}\n\n"
+                        f"Please ensure:\n"
+                        f"1. MetaTrader 5 is installed and running\n"
+                        f"2. 'Algo Trading' is enabled\n"
+                        f"3. You're logged into an account"
+                    )
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
+            self.mt5_connected = False
             return False
             
         self.mt5_connected = True
@@ -1835,38 +1909,70 @@ class LiveBotMT5FullAuto:
                 self._check_closed_positions()
             
     def run(self):
-        """Main bot loop - runs exactly on the hour (01:00, 02:00, etc.)"""
+        """Main bot loop with resilience features"""
         print(f"\n{'='*80}")
-        print(f"🤖 BOT STARTED - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'='*80}")
-        print(f"📊 Configuration:")
+        print(f"🤖 BOT STARTING - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'='*80}\n")
+        
+        # Detailed startup logging
+        print("📡 Step 1/5: Connecting to MT5...")
+        start_time = time.time()
+        if not self.connect_mt5():
+            print(f"❌ Failed after {time.time() - start_time:.1f}s")
+            return
+        print(f"✅ Connected in {time.time() - start_time:.1f}s\n")
+        
+        print("💾 Step 2/5: Verifying database connection...")
+        start_time = time.time()
+        if self.use_database and not self.db:
+            print(f"⚠️  Database not available, continuing without it")
+        print(f"✅ Database ready in {time.time() - start_time:.1f}s\n")
+        
+        print("📊 Step 3/5: Loading initial market data...")
+        start_time = time.time()
+        
+        def _fetch_initial_data():
+            rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, 200)
+            if rates is None or len(rates) == 0:
+                raise Exception("No data received")
+            return rates
+        
+        rates = retry_with_timeout(
+            func=_fetch_initial_data,
+            max_attempts=3,
+            retry_interval=10,
+            timeout_seconds=20,
+            description=f"Download {self.symbol} data"
+        )
+        
+        if rates is None:
+            print(f"❌ Failed to download initial data after 3 attempts")
+            return
+        print(f"✅ Downloaded {len(rates)} bars in {time.time() - start_time:.1f}s\n")
+        
+        print("🛡️  Step 4/5: Starting watchdog...")
+        self.watchdog = BotWatchdog(timeout=300, check_interval=30)
+        self.watchdog.start()
+        print()
+        
+        print("🎯 Step 5/5: Final configuration...")
         print(f"   Symbol: {self.symbol}")
         print(f"   Timeframe: H1")
         print(f"   Strategy: V3 Adaptive (TREND/RANGE detection)")
-        print(f"   Check interval: Every hour on the hour (01:00, 02:00, 03:00...)")
-        print(f"   Signal source: ONLY latest closed candle (no historical signals)")
+        print(f"   Check interval: Every hour on the hour")
         print(f"   Risk per trade: {self.risk_percent}%")
         print(f"   Max positions: {self.max_positions}")
         print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
-        print(f"   🎯 Real-time TP/SL monitoring: Every 10 seconds (checks bar high/low)")
-        print(f"\n🎯 Adaptive TP Levels:")
-        print(f"   TREND Mode: {self.trend_tp1}p / {self.trend_tp2}p / {self.trend_tp3}p")
-        print(f"   RANGE Mode: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p")
-        print(f"\n📁 Log Files:")
-        print(f"   Trade log: {self.trades_file}")
-        print(f"   TP hits log: {self.tp_hits_file}")
+        print()
+        
+        print(f"{'='*80}")
+        print(f"✅ BOT FULLY STARTED - Ready to trade!")
         print(f"{'='*80}\n")
         
         if self.dry_run:
-            print("🧪 DRY RUN MODE: All trades will be simulated only")
-            print("   ✅ Analysis will run normally")
-            print("   ✅ Signals will be detected")
-            print("   ✅ Position sizing will be calculated")
-            print("   ⚠️  NO real trades will be executed\n")
+            print("🧪 DRY RUN MODE: All trades will be simulated only\n")
         else:
-            print("🚀 LIVE TRADING MODE: Real trades will be executed!")
-            print("   ⚠️  Monitor your account regularly")
-            print("   ⚠️  Stop the bot with Ctrl+C\n")
+            print("🚀 LIVE TRADING MODE: Real trades will be executed!\n")
         
         # Send startup notification to Telegram
         if self.telegram_bot and self.telegram_chat_id:
@@ -1902,7 +2008,8 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
         iteration = 0
         
         try:
-            while True:
+            while self.running:  # ✅ Check running flag instead of while True
+                self.watchdog.heartbeat()  # Send heartbeat at start of iteration
                 iteration += 1
                 
                 print(f"\n{'='*80}")
@@ -1911,11 +2018,14 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 
                 # Check connection
                 if not self.mt5_connected:
+                    self.watchdog.heartbeat()
                     print("❌ MT5 disconnected! Attempting to reconnect...")
                     if not self.connect_mt5():
                         print("❌ Reconnection failed. Waiting 60s...")
-                        time.sleep(60)
+                        interruptible_sleep(60, check_func=lambda: self.running)
                         continue
+                
+                self.watchdog.heartbeat()
                 
                 # Check current positions
                 open_positions = self.get_open_positions()
@@ -2048,6 +2158,11 @@ Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             print(f"{'='*80}\n")
         except Exception as e:
             print(f"\n\n❌ BOT ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            # Always cleanup resources
+            self._cleanup()
             import traceback
             traceback.print_exc()
         finally:
