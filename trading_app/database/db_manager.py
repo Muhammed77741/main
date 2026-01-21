@@ -173,6 +173,21 @@ class DatabaseManager:
             )
         """)
 
+        # Trade events table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trade_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER NOT NULL,
+                bot_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                position_num INTEGER,
+                position_group_id TEXT,
+                details TEXT,
+                FOREIGN KEY (trade_id) REFERENCES trades(id)
+            )
+        """)
+
         # Migrate existing tables - add symbol column if it doesn't exist
         try:
             cursor.execute("PRAGMA table_info(trades)")
@@ -571,6 +586,73 @@ class DatabaseManager:
             pass  # Silently skip if database is closed
         except Exception:
             pass  # Silently skip other errors during logging
+
+    # Trade Events methods
+    def log_trade_event(self, trade_id: int, bot_id: str, event_type: str, 
+                       position_num: int = None, position_group_id: str = None, details: str = None):
+        """Log a trade event (TP hit, SL hit, trailing activated, etc.)"""
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed, skipping event log for {bot_id}")
+            return
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO trade_events (
+                    trade_id, bot_id, event_type, event_time,
+                    position_num, position_group_id, details
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                trade_id, bot_id, event_type, datetime.now(),
+                position_num, position_group_id, details
+            ))
+            self.conn.commit()
+        except sqlite3.ProgrammingError as e:
+            print(f"⚠️  Warning: Database error during event log: {e}")
+        except Exception as e:
+            print(f"⚠️  Warning: Unexpected error during event log: {e}")
+
+    def get_trade_events(self, bot_id: str = None, trade_id: int = None, event_type: str = None):
+        """Get trade events with optional filters"""
+        if not self.conn:
+            return []
+
+        cursor = self.conn.cursor()
+        
+        # Build query based on filters
+        query = "SELECT * FROM trade_events WHERE 1=1"
+        params = []
+        
+        if bot_id:
+            query += " AND bot_id = ?"
+            params.append(bot_id)
+        
+        if trade_id:
+            query += " AND trade_id = ?"
+            params.append(trade_id)
+        
+        if event_type:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        
+        query += " ORDER BY event_time DESC LIMIT 1000"
+        
+        cursor.execute(query, params)
+        
+        events = []
+        for row in cursor.fetchall():
+            events.append({
+                'event_id': row['event_id'],
+                'trade_id': row['trade_id'],
+                'bot_id': row['bot_id'],
+                'event_type': row['event_type'],
+                'event_time': self._parse_datetime(row['event_time']),
+                'position_num': row['position_num'],
+                'position_group_id': row['position_group_id'],
+                'details': row['details']
+            })
+        
+        return events
 
     # Position Groups methods (CRITICAL FIX #4)
     def save_position_group(self, group):

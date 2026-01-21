@@ -185,9 +185,10 @@ class LiveBotMT5FullAuto:
             with open(self.tp_hits_file, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    'Timestamp', 'Ticket', 'TP_Level', 'Type', 'Volume',
-                    'Entry_Price', 'TP_Target', 'Current_Price', 'SL',
-                    'Profit', 'Pips', 'Market_Regime', 'Duration_Minutes', 'Comment'
+                    'Timestamp', 'Order_ID', 'Position_Num', 'Position_Group_ID', 
+                    'TP_Level', 'Type', 'Amount',
+                    'Entry_Price', 'TP_Target', 'Current_Price', 'SL', 'Trailing_Active',
+                    'Profit', 'Profit_Pct'
                 ])
             print(f"📝 Created TP hits log file: {self.tp_hits_file}")
     
@@ -415,6 +416,8 @@ class LiveBotMT5FullAuto:
             writer.writerow([
                 datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 ticket,
+                pos.get('position_num', ''),
+                pos.get('position_group_id', ''),
                 tp_level,
                 pos['type'],
                 pos['volume'],
@@ -422,12 +425,39 @@ class LiveBotMT5FullAuto:
                 pos['tp'],
                 current_price,
                 pos['sl'],
+                'TRUE' if pos.get('trailing_stop_active', False) else 'FALSE',
                 round(profit, 2),
-                round(pips, 1),
-                pos['regime'],
-                round(duration_minutes, 1),
-                pos['comment']
+                round((profit / (pos['entry_price'] * pos['volume']) * 100) if pos['entry_price'] > 0 else 0, 2)
             ])
+        
+        # Log TP hit event to database
+        if self.use_database and self.db:
+            try:
+                # Find trade_id by order_id
+                trades = self.db.get_trades(self.bot_id, limit=1000)
+                trade_id = None
+                for trade in trades:
+                    if trade.order_id == str(ticket):
+                        trade_id = trade.trade_id
+                        break
+                
+                if trade_id:
+                    import json
+                    details = json.dumps({
+                        'price': current_price,
+                        'profit': round(profit, 2),
+                        'pips': round(pips, 1)
+                    })
+                    self.db.log_trade_event(
+                        trade_id=trade_id,
+                        bot_id=self.bot_id,
+                        event_type='TP_HIT',
+                        position_num=pos.get('position_num'),
+                        position_group_id=pos.get('position_group_id'),
+                        details=details
+                    )
+            except Exception as e:
+                print(f"⚠️  Failed to log TP hit to database: {e}")
         
         print(f"🎯 TP HIT LOGGED: Ticket={ticket}, Level={tp_level}, Price={current_price:.2f}, Pips={pips:.1f}")
     
@@ -657,6 +687,25 @@ class LiveBotMT5FullAuto:
                                         trade.trailing_stop_active = True
                                         self.db.update_trade(trade)
                                         print(f"✓ Pos {pos_num} (#{ticket}) marked as trailing stop active in database")
+                                        
+                                        # Log trailing activation event
+                                        try:
+                                            import json
+                                            details = json.dumps({
+                                                'max_price': group_info['max_price'],
+                                                'entry_price': entry_price
+                                            })
+                                            self.db.log_trade_event(
+                                                trade_id=trade.trade_id,
+                                                bot_id=self.bot_id,
+                                                event_type='TRAILING_ACTIVATED',
+                                                position_num=pos_num,
+                                                position_group_id=group_id,
+                                                details=details
+                                            )
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to log trailing activation: {e}")
+                                        
                                         break  # Exit loop after updating the target trade
                             except Exception as e:
                                 print(f"⚠️  Error updating trailing_stop_active in DB: {e}")
@@ -1123,6 +1172,39 @@ class LiveBotMT5FullAuto:
                         profit=profit,
                         status='CLOSED'  # Status is always CLOSED after TP/SL hit
                     )
+                    
+                    # Log SL/TP event to database
+                    if self.use_database and self.db and sl_hit:
+                        try:
+                            # Find trade_id by order_id
+                            trades = self.db.get_trades(self.bot_id, limit=1000)
+                            trade_id = None
+                            is_trailing = False
+                            for trade in trades:
+                                if trade.order_id == str(ticket):
+                                    trade_id = trade.trade_id
+                                    is_trailing = getattr(trade, 'trailing_stop_active', False)
+                                    break
+                            
+                            if trade_id:
+                                import json
+                                details = json.dumps({
+                                    'price': current_price,
+                                    'profit': round(profit, 2),
+                                    'pips': round(pips, 1)
+                                })
+                                # Log as TRAILING_HIT if trailing was active, otherwise SL_HIT
+                                event_type = 'TRAILING_HIT' if is_trailing else 'SL_HIT'
+                                self.db.log_trade_event(
+                                    trade_id=trade_id,
+                                    bot_id=self.bot_id,
+                                    event_type=event_type,
+                                    position_num=tracked_pos.get('position_num'),
+                                    position_group_id=tracked_pos.get('position_group_id'),
+                                    details=details
+                                )
+                        except Exception as e:
+                            print(f"⚠️  Failed to log SL hit to database: {e}")
                 
                 # Send Telegram notification
                 if self.telegram_bot and close_successful:
