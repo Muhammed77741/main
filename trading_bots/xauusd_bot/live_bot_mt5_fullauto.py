@@ -105,10 +105,12 @@ class LiveBotMT5FullAuto:
         
         # Current market regime
         self.current_regime = 'RANGE'
-        
+
         # Position tracking
-        self.trades_file = 'bot_trades_log.csv'
-        self.tp_hits_file = 'bot_tp_hits_log.csv'
+        # FIX: Add symbol to filename for consistency with GUI and crypto bot
+        symbol_clean = self.symbol.replace("/", "_")
+        self.trades_file = f'bot_trades_log_{symbol_clean}.csv'
+        self.tp_hits_file = f'bot_tp_hits_log_{symbol_clean}.csv'
         self.positions_tracker = {}  # {ticket: position_data}
 
         # Phase 2: 3-Position Mode tracking
@@ -275,12 +277,15 @@ class LiveBotMT5FullAuto:
             try:
                 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
                 from models.trade_record import TradeRecord
-                
+
+                # FIX: Ensure consistent order_id format with DRY- prefix for dry-run
+                order_id_str = f"DRY-{ticket}" if self.dry_run else str(ticket)
+
                 trade = TradeRecord(
                     trade_id=0,  # Will be auto-assigned by database
                     bot_id=self.bot_id,
                     symbol=self.symbol,  # Add symbol field
-                    order_id=str(ticket),
+                    order_id=order_id_str,
                     open_time=open_time,
                     trade_type=position_type,
                     amount=volume,
@@ -294,7 +299,7 @@ class LiveBotMT5FullAuto:
                     position_num=position_num
                 )
                 self.db.add_trade(trade)
-                print(f"📊 Position saved to database: Ticket={ticket}")
+                print(f"📊 Position saved to database: Ticket={ticket}, OrderID={order_id_str}")
             except Exception as e:
                 print(f"⚠️  Failed to save position to database: {e}")
         
@@ -336,12 +341,15 @@ class LiveBotMT5FullAuto:
             try:
                 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
                 from models.trade_record import TradeRecord
-                
+
+                # FIX: Use same order_id format as when position was opened
+                order_id_str = f"DRY-{ticket}" if self.dry_run else str(ticket)
+
                 trade = TradeRecord(
                     trade_id=0,  # Not used for update
                     bot_id=self.bot_id,
                     symbol=self.symbol,  # Add symbol field
-                    order_id=str(ticket),
+                    order_id=order_id_str,
                     open_time=pos['open_time'],
                     close_time=close_time,
                     duration_hours=pos['duration'],
@@ -358,7 +366,7 @@ class LiveBotMT5FullAuto:
                     comment=pos['comment']
                 )
                 self.db.update_trade(trade)
-                print(f"📊 Position updated in database: Ticket={ticket}, Status={status}")
+                print(f"📊 Position updated in database: Ticket={ticket}, OrderID={order_id_str}, Status={status}")
             except Exception as e:
                 print(f"⚠️  Failed to update position in database: {e}")
         
@@ -898,11 +906,16 @@ class LiveBotMT5FullAuto:
                     # Log for live mode too
                     print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
                 for trade in db_trades:
-                    # Convert order_id (stored as string) back to int for MT5 ticket
+                    # FIX: Handle dry-run order_ids with DRY- prefix
+                    # Keep ticket as string for dry-run, int for live
                     try:
-                        ticket = int(trade.order_id)
+                        # Try to extract number from DRY-xxx format
+                        if isinstance(trade.order_id, str) and trade.order_id.startswith('DRY-'):
+                            ticket = trade.order_id  # Keep as string "DRY-12345"
+                        else:
+                            ticket = int(trade.order_id)  # Convert to int for live
                     except (ValueError, TypeError):
-                        ticket = trade.order_id
+                        ticket = trade.order_id  # Fallback: keep as-is
                     
                     positions_to_check[ticket] = {
                         'tp': trade.take_profit,
@@ -1085,6 +1098,14 @@ class LiveBotMT5FullAuto:
             if tp_hit or sl_hit:
                 hit_type = tp_level if tp_hit else 'SL'
                 target_price = tp_target if tp_hit else sl_target
+
+                # FIX: Add debug logging for dry-run
+                if self.dry_run:
+                    print(f"🧪 DRY-RUN: Detected {hit_type} hit for position #{ticket}")
+                    print(f"   Type: {tracked_pos['type']}, Entry: ${tracked_pos['entry_price']:.2f}")
+                    print(f"   TP Target: ${tp_target:.2f}, SL Target: ${sl_target:.2f}")
+                    print(f"   Current Price: ${current_price:.2f}")
+                    print(f"   Ticket type: {type(ticket)}, Tracker has: {ticket in self.positions_tracker}")
                 
                 # Update status in both tracker and database immediately
                 processing_status = f'{hit_type}_PROCESSING'
@@ -1119,7 +1140,19 @@ class LiveBotMT5FullAuto:
                 
                 # Log the hit
                 self._log_tp_hit(ticket, hit_type, current_price)
-                
+
+                # FIX: Add detailed logging for TP/SL events
+                print(f"📊 EVENT LOGGED: {hit_type} hit for ticket={ticket}, price={current_price:.2f}")
+                if self.use_database and self.db:
+                    try:
+                        # Count total TP/SL events in database for verification
+                        all_events = self.db.get_trade_events(bot_id=self.bot_id)
+                        tp_events = [e for e in all_events if 'TP' in e.get('event_type', '')]
+                        sl_events = [e for e in all_events if 'SL' in e.get('event_type', '')]
+                        print(f"   Total events in DB: {len(all_events)} (TP: {len(tp_events)}, SL: {len(sl_events)})")
+                    except Exception as e:
+                        print(f"⚠️  Could not query events: {e}")
+
                 # Close the position at current price
                 close_successful = False
                 if not self.dry_run:
@@ -1199,7 +1232,12 @@ class LiveBotMT5FullAuto:
                         profit=profit,
                         status='CLOSED'  # Status is always CLOSED after TP/SL hit
                     )
-                    
+
+                    # FIX: Add verification logging after position closed
+                    print(f"✅ Position #{ticket} closed successfully")
+                    print(f"   Profit: ${profit:.2f}, Pips: {pips:.1f}")
+                    print(f"   Reason: {hit_type}, Price: ${current_price:.2f}")
+
                     # Log SL/TP event to database
                     if self.use_database and self.db and sl_hit:
                         try:

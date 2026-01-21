@@ -340,9 +340,18 @@ class StatisticsDialog(QDialog):
         return group
 
     def load_statistics(self):
-        """Load statistics from database"""
-        # Get trades
+        """Load statistics from database with CSV fallback"""
+        # Get trades from database
         trades = self.db.get_trades(self.config.bot_id, limit=1000)
+
+        # FIX: Add CSV fallback if database is empty
+        if not trades:
+            print(f"ℹ️  No trades in database for {self.config.bot_id}, trying CSV fallback...")
+            trades = self._load_trades_from_csv()
+            if trades:
+                print(f"✅ Loaded {len(trades)} trades from CSV")
+            else:
+                print(f"⚠️  No trades found in CSV either")
 
         # Filter by mode (dry-run vs live)
         mode_index = self.mode_combo.currentIndex()
@@ -638,3 +647,71 @@ class StatisticsDialog(QDialog):
         if trade.comment and 'DRY RUN' in trade.comment.upper():
             return True
         return False
+
+    def _load_trades_from_csv(self):
+        """Load trades from CSV file as fallback when database is empty"""
+        from pathlib import Path
+        from models.trade_record import TradeRecord
+
+        # Build CSV filename
+        symbol_clean = self.config.symbol.replace("/", "_")
+        csv_filename = f'bot_trades_log_{symbol_clean}.csv'
+
+        # Try multiple locations
+        csv_paths = [
+            csv_filename,  # Current directory
+            Path.cwd() / csv_filename,
+            Path(__file__).parent.parent.parent / 'trading_bots' / csv_filename,
+            Path(__file__).parent.parent.parent / 'trading_bots' / 'xauusd_bot' / csv_filename,
+            Path(__file__).parent.parent.parent / 'trading_bots' / 'crypto_bot' / csv_filename,
+        ]
+
+        csv_file = None
+        for path in csv_paths:
+            if Path(path).exists():
+                csv_file = str(path)
+                break
+
+        if not csv_file:
+            print(f"⚠️  CSV file not found: {csv_filename}")
+            return []
+
+        # Read CSV and convert to TradeRecord objects
+        trades = []
+        try:
+            import csv
+            with open(csv_file, 'r', newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        # Parse CSV row into TradeRecord
+                        trade = TradeRecord(
+                            trade_id=int(row.get('Ticket', 0)),
+                            bot_id=self.config.bot_id,
+                            symbol=self.config.symbol,
+                            order_id=str(row.get('Ticket', '')),
+                            open_time=datetime.strptime(row['Open_Time'], '%Y-%m-%d %H:%M:%S') if row.get('Open_Time') else datetime.now(),
+                            close_time=datetime.strptime(row['Close_Time'], '%Y-%m-%d %H:%M:%S') if row.get('Close_Time') and row['Close_Time'] else None,
+                            duration_hours=float(row.get('Duration_Hours', 0)) if row.get('Duration_Hours') else None,
+                            trade_type=row.get('Type', 'BUY'),
+                            amount=float(row.get('Volume', 0)),
+                            entry_price=float(row.get('Entry_Price', 0)),
+                            close_price=float(row.get('Close_Price', 0)) if row.get('Close_Price') else None,
+                            stop_loss=float(row.get('SL', 0)) if row.get('SL') else None,
+                            take_profit=float(row.get('TP', 0)) if row.get('TP') else None,
+                            profit=float(row.get('Profit', 0)) if row.get('Profit') else None,
+                            profit_percent=None,  # Not in CSV
+                            status=row.get('Status', 'OPEN'),
+                            market_regime=row.get('Market_Regime'),
+                            comment=row.get('Comment')
+                        )
+                        trades.append(trade)
+                    except Exception as e:
+                        print(f"⚠️  Error parsing CSV row: {e}")
+                        continue
+
+        except Exception as e:
+            print(f"❌ Error reading CSV file {csv_file}: {e}")
+            return []
+
+        return trades

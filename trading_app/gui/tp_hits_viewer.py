@@ -37,21 +37,47 @@ class TPHitsViewer(QDialog):
         self.refresh_data()
 
     def _get_tp_hits_file(self):
-        """Get TP hits file path for this bot"""
-        # File is in trading_bots directory
-        symbol_clean = self.config.symbol.replace("/", "_")
-        filename = f'bot_tp_hits_log_{symbol_clean}.csv'
+        """Get TP hits file path for this bot with fallback logic"""
+        # Normalize symbol name
+        symbol_clean = self.config.symbol.replace("/", "_").upper()
 
-        # Check in current directory first
-        if os.path.exists(filename):
-            return filename
+        # FIX: Try multiple filename variations for XAUUSD compatibility
+        possible_filenames = [
+            f'bot_tp_hits_log_{symbol_clean}.csv',  # Standard: bot_tp_hits_log_XAUUSD.csv
+            f'bot_tp_hits_log_{symbol_clean.lower()}.csv',  # Lowercase variant
+        ]
 
-        # Check in trading_bots directory
-        trading_bots_path = Path(__file__).parent.parent.parent / 'trading_bots' / filename
-        if trading_bots_path.exists():
-            return str(trading_bots_path)
+        # Add specific fallbacks for XAUUSD/Gold
+        if 'XAU' in symbol_clean or 'GOLD' in symbol_clean:
+            possible_filenames.extend([
+                'bot_tp_hits_log_XAUUSD.csv',
+                'bot_tp_hits_log_xauusd.csv',
+                'bot_tp_hits_log_XAU.csv',
+                'bot_tp_hits_log_GOLD.csv',
+            ])
 
-        return filename  # Return anyway, will create if needed
+        # Add generic fallback (old format without symbol)
+        possible_filenames.append('bot_tp_hits_log.csv')
+
+        # Search in multiple locations
+        base_paths = [
+            Path.cwd(),  # Current directory
+            Path(__file__).parent.parent.parent / 'trading_bots',
+            Path(__file__).parent.parent.parent / 'trading_bots' / 'xauusd_bot',
+            Path(__file__).parent.parent.parent / 'trading_bots' / 'crypto_bot',
+        ]
+
+        for filename in possible_filenames:
+            for base_path in base_paths:
+                full_path = base_path / filename
+                if full_path.exists():
+                    print(f"✅ Found TP hits file: {full_path}")
+                    return str(full_path)
+
+        # Not found, return default (first option)
+        default_file = possible_filenames[0]
+        print(f"⚠️  TP hits file not found, will use: {default_file}")
+        return default_file
 
     def init_ui(self):
         """Initialize UI"""

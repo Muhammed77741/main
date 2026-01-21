@@ -408,76 +408,106 @@ class LiveBotBinanceFullAuto:
 
             print(f"🔄 Connecting to Binance {'Testnet' if self.testnet else 'Mainnet'}...")
             print(f"   Symbol: {self.symbol}")
-            print(f"   API Key: {self.api_key[:8]}...{self.api_key[-4:]}")
 
-            if self.testnet:
-                # Testnet configuration
-                print("⚠️  Using TESTNET - no real money will be traded")
-                self.exchange = ccxt.binance({
-                    'apiKey': self.api_key,
-                    'secret': self.api_secret,
-                    'enableRateLimit': True,
-                    'options': {
-                        'defaultType': 'future',
-                        'adjustForTimeDifference': True,
-                    },
-                    'urls': {
-                        'api': {
-                            'public': 'https://testnet.binancefuture.com/fapi/v1',
-                            'private': 'https://testnet.binancefuture.com/fapi/v1',
-                        },
-                        'test': {
-                            'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
-                            'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
-                        }
-                    }
-                })
+            # FIX: In dry-run mode, show API key status
+            if self.dry_run:
+                print(f"   DRY-RUN Mode: Public API only (no authentication needed)")
             else:
-                # Mainnet configuration
-                print("⚠️  Using MAINNET - real money trading!")
-                self.exchange = ccxt.binance({
-                    'apiKey': self.api_key,
-                    'secret': self.api_secret,
-                    'enableRateLimit': True,
-                    'options': {
-                        'defaultType': 'future',
-                        'adjustForTimeDifference': True,  # Auto-adjust for time sync
-                    }
-                })
+                print(f"   API Key: {self.api_key[:8]}...{self.api_key[-4:]}")
 
-            # Test connection
-            print("🔄 Testing connection...")
-            balance = self.exchange.fetch_balance()
+            # FIX: In dry-run mode, use public API without authentication
+            if self.dry_run:
+                # Dry-run: Public API only (no API keys needed)
+                print("🧪 DRY-RUN: Connecting with public API (no authentication)")
+                if self.testnet:
+                    self.exchange = ccxt.binance({
+                        'enableRateLimit': True,
+                        'options': {'defaultType': 'future'},
+                        'urls': {
+                            'api': {
+                                'public': 'https://testnet.binancefuture.com/fapi/v1',
+                            }
+                        }
+                    })
+                else:
+                    self.exchange = ccxt.binance({
+                        'enableRateLimit': True,
+                        'options': {'defaultType': 'future'}
+                    })
+                # Mark as connected immediately (no balance check needed)
+                self.exchange_connected = True
+                print(f"✅ Connected to Binance {'Testnet' if self.testnet else 'Mainnet'} (public API)")
+                print(f"   DRY-RUN Mode: TP/SL monitoring active, no real trades")
+            else:
+                # Live mode: Requires API keys
+                if self.testnet:
+                    # Testnet configuration
+                    print("⚠️  Using TESTNET - no real money will be traded")
+                    self.exchange = ccxt.binance({
+                        'apiKey': self.api_key,
+                        'secret': self.api_secret,
+                        'enableRateLimit': True,
+                        'options': {
+                            'defaultType': 'future',
+                            'adjustForTimeDifference': True,
+                        },
+                        'urls': {
+                            'api': {
+                                'public': 'https://testnet.binancefuture.com/fapi/v1',
+                                'private': 'https://testnet.binancefuture.com/fapi/v1',
+                            },
+                            'test': {
+                                'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
+                                'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
+                            }
+                        }
+                    })
+                else:
+                    # Mainnet configuration
+                    print("⚠️  Using MAINNET - real money trading!")
+                    self.exchange = ccxt.binance({
+                        'apiKey': self.api_key,
+                        'secret': self.api_secret,
+                        'enableRateLimit': True,
+                        'options': {
+                            'defaultType': 'future',
+                            'adjustForTimeDifference': True,  # Auto-adjust for time sync
+                        }
+                    })
 
-            # Set position mode to One-Way (not Hedge mode) for simpler position tracking
-            try:
-                # Check current position mode
-                position_mode = self.exchange.fapiPrivateGetPositionSideDual()
-                is_hedge = position_mode.get('dualSidePosition', True)
+                # Test connection
+                print("🔄 Testing connection...")
+                balance = self.exchange.fetch_balance()
 
-                print(f"📊 Position mode: {'Hedge Mode' if is_hedge else 'One-Way Mode'}")
-
-                # If in hedge mode, switch to one-way mode
-                if is_hedge:
-                    print("🔄 Switching to One-Way position mode...")
-                    self.exchange.fapiPrivatePostPositionSideDual({'dualSidePosition': 'false'})
-                    print("✅ Switched to One-Way position mode")
-            except Exception as e:
-                print(f"⚠️  Could not check/set position mode: {e}")
-
-            self.exchange_connected = True
-
-            usdt_free = balance.get('USDT', {}).get('free', 0) or 0
-            print(f"✅ Connected to Binance {'Testnet' if self.testnet else 'Mainnet'}")
-            print(f"   Available balance: {usdt_free:.2f} USDT")
-            
-            # Send success notification to Telegram
-            if self.telegram_bot:
+                # Set position mode to One-Way (not Hedge mode) for simpler position tracking
                 try:
-                    self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}")
+                    # Check current position mode
+                    position_mode = self.exchange.fapiPrivateGetPositionSideDual()
+                    is_hedge = position_mode.get('dualSidePosition', True)
+
+                    print(f"📊 Position mode: {'Hedge Mode' if is_hedge else 'One-Way Mode'}")
+
+                    # If in hedge mode, switch to one-way mode
+                    if is_hedge:
+                        print("🔄 Switching to One-Way position mode...")
+                        self.exchange.fapiPrivatePostPositionSideDual({'dualSidePosition': 'false'})
+                        print("✅ Switched to One-Way position mode")
                 except Exception as e:
-                    print(f"⚠️  Failed to send Telegram notification: {e}")
-            
+                    print(f"⚠️  Could not check/set position mode: {e}")
+
+                self.exchange_connected = True
+
+                usdt_free = balance.get('USDT', {}).get('free', 0) or 0
+                print(f"✅ Connected to Binance {'Testnet' if self.testnet else 'Mainnet'}")
+                print(f"   Available balance: {usdt_free:.2f} USDT")
+
+                # Send success notification to Telegram (live mode only)
+                if self.telegram_bot:
+                    try:
+                        self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}")
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+
             return True
 
         except ccxt.AuthenticationError as e:

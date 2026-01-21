@@ -563,6 +563,26 @@ class DatabaseManager:
                 trade.bot_id, trade.order_id
             ))
 
+            # FIX: Add logging to detect update failures
+            rows_affected = cursor.rowcount
+            if rows_affected == 0:
+                print(f"⚠️  WARNING: update_trade() affected 0 rows for order_id={trade.order_id}")
+                print(f"   Bot: {trade.bot_id}, Status: {trade.status}")
+                print(f"   This means the trade was not found in database!")
+                print(f"   Possible reasons: order_id mismatch, trade never added, or already deleted")
+
+                # Debug: check if trade exists with similar order_id
+                cursor.execute("""
+                    SELECT order_id, status FROM trades
+                    WHERE bot_id = ?
+                    ORDER BY open_time DESC LIMIT 5
+                """, (trade.bot_id,))
+                recent = cursor.fetchall()
+                if recent:
+                    print(f"   Recent order_ids in DB: {[r['order_id'] for r in recent]}")
+            else:
+                print(f"✅ Updated {rows_affected} trade(s): order_id={trade.order_id}, status={trade.status}")
+
             self.conn.commit()
         except sqlite3.ProgrammingError as e:
             print(f"⚠️  Warning: Database error during trade update: {e}")
