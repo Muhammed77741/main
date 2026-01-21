@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QGroupBox, QHeaderView, QDateEdit, QComboBox,
-    QSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
+    QSpinBox, QDoubleSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QDate
 from models import BotConfig
@@ -61,7 +61,7 @@ class SignalAnalysisWorker(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None, custom_sl_levels=None):
+                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True, starting_balance=10000, use_breakeven=True):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -75,6 +75,9 @@ class SignalAnalysisWorker(QThread):
         self.use_multi_tp = use_multi_tp
         self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
         self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops for 3-position mode
+        self.starting_balance = starting_balance  # Starting balance for USD calculations
+        self.use_breakeven = use_breakeven  # Move SL to breakeven after TP1
         
     def run(self):
         """Run signal analysis in background"""
@@ -222,6 +225,7 @@ class SignalAnalysisWorker(QThread):
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
         signals_df['profit_pct'] = 0.0
+        signals_df['profit_usd'] = 0.0  # USD profit/loss
         signals_df['bars_held'] = 0
         
         # Add multi-TP column if enabled
@@ -425,19 +429,19 @@ class SignalAnalysisWorker(QThread):
         Calculate outcomes for 3 separate positions with different TP targets and trailing stops.
         
         Position 1: Targets TP1 only, no trailing
-        Position 2: Targets TP2, trailing activates after TP1 hits
-        Position 3: Targets TP3, trailing activates after TP1 hits
+        Position 2: Targets TP2, trailing activates after TP1 hits (if enabled)
+        Position 3: Targets TP3, trailing activates after TP1 hits (if enabled)
         
         Returns list of 3 position dictionaries with outcomes
         """
         # Track TP1 hit for trailing activation
         tp1_hit = False
         
-        # Initialize positions
+        # Initialize positions - use_trailing_stops controls whether pos 2 & 3 use trailing
         positions = [
             {'position_num': 1, 'target_tp': tp1, 'use_trailing': False, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
-            {'position_num': 2, 'target_tp': tp2, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
-            {'position_num': 3, 'target_tp': tp3, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
+            {'position_num': 2, 'target_tp': tp2, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
+            {'position_num': 3, 'target_tp': tp3, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
         ]
         
         # Tracking for trailing stops (positions 2 and 3)
@@ -457,6 +461,9 @@ class SignalAnalysisWorker(QThread):
                 if not tp1_hit and future_candle['high'] >= tp1:
                     tp1_hit = True
                     max_price_since_tp1 = future_candle['high']
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 # Update max price since TP1 for trailing calculation
                 if tp1_hit:
@@ -519,6 +526,9 @@ class SignalAnalysisWorker(QThread):
                 if not tp1_hit and future_candle['low'] <= tp1:
                     tp1_hit = True
                     min_price_since_tp1 = future_candle['low']
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 # Update min price since TP1 for trailing calculation
                 if tp1_hit:
@@ -634,8 +644,9 @@ class SignalAnalysisWorker(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['high'] >= tp2:
                     # TP2 hit - close 30%
@@ -672,8 +683,9 @@ class SignalAnalysisWorker(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['low'] <= tp2:
                     # TP2 hit - close 30%
@@ -762,8 +774,9 @@ class SignalAnalysisWorker(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['high'] >= tp2_price:
                     # TP2 hit - close 30%
@@ -800,8 +813,9 @@ class SignalAnalysisWorker(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['low'] <= tp2_price:
                     # TP2 hit - close 30%
@@ -946,7 +960,7 @@ class SignalAnalysisWorkerMT5(QThread):
     
     def __init__(self, symbol, days, start_date=None, end_date=None, 
                  tp_multiplier=162, sl_multiplier=100, use_trailing=False, trailing_pct=50, timeframe='1h', use_multi_tp=False,
-                 custom_tp_levels=None, custom_sl_levels=None):
+                 custom_tp_levels=None, custom_sl_levels=None, use_trailing_stops=True, starting_balance=10000, use_breakeven=True):
         super().__init__()
         self.symbol = symbol
         self.days = days
@@ -960,6 +974,9 @@ class SignalAnalysisWorkerMT5(QThread):
         self.use_multi_tp = use_multi_tp
         self.custom_tp_levels = custom_tp_levels  # Custom TP levels override
         self.custom_sl_levels = custom_sl_levels  # Custom SL levels override
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops for 3-position mode
+        self.starting_balance = starting_balance  # Starting balance for USD calculations
+        self.use_breakeven = use_breakeven  # Move SL to breakeven after TP1
         
     def run(self):
         """Run signal analysis in background using MT5"""
@@ -1081,6 +1098,7 @@ class SignalAnalysisWorkerMT5(QThread):
         # Add outcome columns
         signals_df['outcome'] = 'Unknown'
         signals_df['profit_pct'] = 0.0
+        signals_df['profit_usd'] = 0.0  # USD profit/loss
         signals_df['bars_held'] = 0
         
         # Add multi-TP column if enabled
@@ -1346,19 +1364,19 @@ class SignalAnalysisWorkerMT5(QThread):
         Calculate outcomes for 3 separate positions with different TP targets and trailing stops.
         
         Position 1: Targets TP1 only, no trailing
-        Position 2: Targets TP2, trailing activates after TP1 hits
-        Position 3: Targets TP3, trailing activates after TP1 hits
+        Position 2: Targets TP2, trailing activates after TP1 hits (if enabled)
+        Position 3: Targets TP3, trailing activates after TP1 hits (if enabled)
         
         Returns list of 3 position dictionaries with outcomes
         """
         # Track TP1 hit for trailing activation
         tp1_hit = False
         
-        # Initialize positions
+        # Initialize positions - use_trailing_stops controls whether pos 2 & 3 use trailing
         positions = [
             {'position_num': 1, 'target_tp': tp1, 'use_trailing': False, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
-            {'position_num': 2, 'target_tp': tp2, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
-            {'position_num': 3, 'target_tp': tp3, 'use_trailing': True, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
+            {'position_num': 2, 'target_tp': tp2, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
+            {'position_num': 3, 'target_tp': tp3, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
         ]
         
         # Tracking for trailing stops (positions 2 and 3)
@@ -1378,6 +1396,9 @@ class SignalAnalysisWorkerMT5(QThread):
                 if not tp1_hit and future_candle['high'] >= tp1:
                     tp1_hit = True
                     max_price_since_tp1 = future_candle['high']
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 # Update max price since TP1 for trailing calculation
                 if tp1_hit:
@@ -1440,6 +1461,9 @@ class SignalAnalysisWorkerMT5(QThread):
                 if not tp1_hit and future_candle['low'] <= tp1:
                     tp1_hit = True
                     min_price_since_tp1 = future_candle['low']
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 # Update min price since TP1 for trailing calculation
                 if tp1_hit:
@@ -1555,8 +1579,9 @@ class SignalAnalysisWorkerMT5(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['high'] >= tp2:
                     # TP2 hit - close 30%
@@ -1593,8 +1618,9 @@ class SignalAnalysisWorkerMT5(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['low'] <= tp2:
                     # TP2 hit - close 30%
@@ -1683,8 +1709,9 @@ class SignalAnalysisWorkerMT5(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['high'] >= tp2_price:
                     # TP2 hit - close 30%
@@ -1721,8 +1748,9 @@ class SignalAnalysisWorkerMT5(QThread):
                     remaining_position -= 0.5
                     tps_hit.append('TP1')
                     tp1_hit = True
-                    # Move SL to breakeven
-                    stop_loss = entry_price
+                    # Move SL to breakeven if enabled
+                    if self.use_breakeven:
+                        stop_loss = entry_price
                 
                 if tp1_hit and not tp2_hit and future_candle['low'] <= tp2_price:
                     # TP2 hit - close 30%
@@ -1866,8 +1894,8 @@ class SignalAnalysisDialog(QDialog):
         self.worker = None
         
         self.setWindowTitle(f"Signal Analysis - {config.name}")
-        self.setMinimumSize(1700, 1300)  # Increased height to ensure buttons always visible
-        self.resize(1900, 1350)  # Set initial size larger and make it resizable
+        self.setMinimumSize(1600, 950)  # Fit standard desktop resolution (1080p: 1920x1080)
+        self.resize(1800, 1000)  # Set initial size to fit desktop with buttons visible
         
         # Check dependencies
         if not DEPENDENCIES_AVAILABLE:
@@ -2072,6 +2100,22 @@ class SignalAnalysisDialog(QDialog):
 
         row1.addStretch()
         layout.addLayout(row1)
+        
+        # Starting balance row
+        row_balance = QHBoxLayout()
+        row_balance.setSpacing(5)
+        row_balance.addWidget(QLabel("Starting Balance:"))
+        self.starting_balance_spin = QDoubleSpinBox()
+        self.starting_balance_spin.setRange(100, 10000000)
+        self.starting_balance_spin.setValue(10000)  # Default $10,000
+        self.starting_balance_spin.setPrefix("$")
+        self.starting_balance_spin.setDecimals(2)
+        self.starting_balance_spin.setSingleStep(1000)
+        self.starting_balance_spin.setToolTip("Starting balance for USD profit/loss calculations")
+        self.starting_balance_spin.setMaximumWidth(150)
+        row_balance.addWidget(self.starting_balance_spin)
+        row_balance.addStretch()
+        layout.addLayout(row_balance)
 
         # Backtest Parameters (collapsible group)
         self.backtest_params_group = QGroupBox("⚙️ Backtest Parameters (optional)")
@@ -2228,6 +2272,26 @@ class SignalAnalysisDialog(QDialog):
         range_sl_row.addStretch()
         multi_tp_layout.addLayout(range_sl_row)
 
+        # Trailing stop enable/disable checkbox
+        trailing_enable_row = QHBoxLayout()
+        trailing_enable_row.setSpacing(3)
+        self.use_trailing_check = QCheckBox("Enable Trailing Stops (Pos 2 & 3)")
+        self.use_trailing_check.setChecked(True)  # Enabled by default
+        self.use_trailing_check.setToolTip("Enable trailing stops for positions 2 and 3 after TP1 is hit")
+        trailing_enable_row.addWidget(self.use_trailing_check)
+        trailing_enable_row.addStretch()
+        multi_tp_layout.addLayout(trailing_enable_row)
+        
+        # Breakeven after TP1 checkbox
+        breakeven_row = QHBoxLayout()
+        breakeven_row.setSpacing(3)
+        self.use_breakeven_check = QCheckBox("Move SL to Breakeven after TP1")
+        self.use_breakeven_check.setChecked(True)  # Enabled by default to match current behavior
+        self.use_breakeven_check.setToolTip("When TP1 is hit, move stop loss to entry price (breakeven) to protect profits")
+        breakeven_row.addWidget(self.use_breakeven_check)
+        breakeven_row.addStretch()
+        multi_tp_layout.addLayout(breakeven_row)
+
         # Trailing stop percentage (for 3-position mode)
         trailing_row = QHBoxLayout()
         trailing_row.setSpacing(3)
@@ -2249,26 +2313,25 @@ class SignalAnalysisDialog(QDialog):
         help_label.setStyleSheet("color: gray;")
         multi_tp_layout.addWidget(help_label)
         
-        # Save as Default button - compact
+        # Save as Default button - very compact
         save_button_row = QHBoxLayout()
         save_button_row.addStretch()
-        self.save_tp_defaults_btn = QPushButton("💾 Save")
+        self.save_tp_defaults_btn = QPushButton("💾")
         self.save_tp_defaults_btn.setToolTip(
             "Save current TP/SL values as defaults.\n"
             "These values will be loaded automatically\n"
             "when you open the Signal Analysis dialog."
         )
         self.save_tp_defaults_btn.clicked.connect(self.on_save_tp_defaults)
-        self.save_tp_defaults_btn.setMaximumWidth(80)
+        self.save_tp_defaults_btn.setMaximumWidth(35)
         self.save_tp_defaults_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
                 color: white;
                 border: none;
                 border-radius: 3px;
-                padding: 4px 8px;
-                font-size: 11px;
-                font-weight: bold;
+                padding: 3px;
+                font-size: 14px;
             }
             QPushButton:hover {
                 background-color: #45a049;
@@ -2508,6 +2571,10 @@ class SignalAnalysisDialog(QDialog):
 
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
+        
+        # Set maximum height to ensure buttons remain visible on standard desktop (1080p)
+        # Reduced to fit within ~950-1000px total window height
+        self.results_table.setMaximumHeight(450)
 
         layout.addWidget(self.results_table)
 
@@ -2560,6 +2627,9 @@ class SignalAnalysisDialog(QDialog):
         sl_multiplier = self.sl_multiplier_spin.value()
         use_trailing = False  # Fibonacci trailing stop removed
         use_multi_tp = self.use_multi_tp_check.isChecked()
+        use_trailing_stops = self.use_trailing_check.isChecked()  # Get trailing stops checkbox state
+        use_breakeven = self.use_breakeven_check.isChecked()  # Get breakeven checkbox state
+        starting_balance = self.starting_balance_spin.value()  # Get starting balance for USD calculations
 
         # Use different trailing percentage based on mode
         if use_multi_tp:
@@ -2626,14 +2696,14 @@ class SignalAnalysisDialog(QDialog):
             self.worker = SignalAnalysisWorkerMT5(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels, custom_sl_levels
+                custom_tp_levels, custom_sl_levels, use_trailing_stops, starting_balance, use_breakeven
             )
         else:
             # Use Binance worker for BTC/ETH
             self.worker = SignalAnalysisWorker(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
-                custom_tp_levels, custom_sl_levels
+                custom_tp_levels, custom_sl_levels, use_trailing_stops, starting_balance, use_breakeven
             )
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_analysis_complete)
@@ -2664,6 +2734,10 @@ class SignalAnalysisDialog(QDialog):
             )
             return
             
+        # Calculate profit_usd based on profit_pct and starting balance
+        starting_balance = self.starting_balance_spin.value()
+        signals_df['profit_usd'] = (signals_df['profit_pct'] / 100.0) * starting_balance
+        
         # Store results
         self.current_results = signals_df
         
@@ -2689,6 +2763,7 @@ class SignalAnalysisDialog(QDialog):
             
             # Calculate P&L metrics
             total_profit_pct = signals_df['profit_pct'].sum()
+            total_profit_usd = signals_df['profit_usd'].sum()
             completed_trades = wins + losses
             avg_pnl = signals_df[signals_df['outcome'].str.contains('Win|Loss', na=False)]['profit_pct'].mean()
             
@@ -2705,8 +2780,10 @@ class SignalAnalysisDialog(QDialog):
                 f"<b>Signals:</b> {total_signals} (📈{buy_signals} / 📉{sell_signals})  |  "
                 f"<b style='color: green;'>Wins:</b> {wins} ({win_rate:.1f}%)  |  "
                 f"<b style='color: red;'>Losses:</b> {losses}  |  "
-                f"<b>PF:</b> <span style='color: {'green' if profit_factor > 1 else 'red'};'>{profit_factor:.2f}</span>  |  "
-                f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold;'>{total_profit_pct:+.2f}%</span><br>"
+                f"<b>PF:</b> <span style='color: {'green' if profit_factor > 1 else 'red'};'>{profit_factor:.2f}</span><br>"
+                f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold;'>{total_profit_pct:+.2f}%</span> "
+                f"(<span style='color: {pnl_color}; font-weight: bold;'>${total_profit_usd:+.2f}</span>)  |  "
+                f"<b>Balance:</b> ${starting_balance:.2f} → ${starting_balance + total_profit_usd:.2f}<br>"
             )
             
             # Second line with additional metrics
@@ -2797,26 +2874,27 @@ class SignalAnalysisDialog(QDialog):
         # Update table columns dynamically
         if has_position_groups:
             # Show position column in 3-position mode
-            self.results_table.setColumnCount(12)
+            self.results_table.setColumnCount(13)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         elif has_tp_levels:
-            self.results_table.setColumnCount(11)
+            self.results_table.setColumnCount(12)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         else:
-            self.results_table.setColumnCount(10)
+            self.results_table.setColumnCount(11)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'Bars', 'Entry Reason', 'Regime'
             ])
         
         # Configure table header
         header = self.results_table.horizontalHeader()
         header.setStretchLastSection(True)
-        # Resize all columns to contents for better visibility
-        for i in range(9):  # All columns except last
+        # Resize all columns to contents for better visibility (except last which stretches)
+        column_count = self.results_table.columnCount()
+        for i in range(column_count - 1):  # All columns except last
             header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
         
         self.results_table.setRowCount(len(signals_df))
@@ -2889,7 +2967,11 @@ class SignalAnalysisDialog(QDialog):
                 tp1 = row['tp1_used']
                 tp2 = row['tp2_used']
                 tp3 = row['tp3_used']
-                tp_item = QTableWidgetItem(f"${tp1:.2f}/${tp2:.2f}/${tp3:.2f}")
+                # Check if TP values are actually set (> 0) to avoid showing $0.00/$0.00/$0.00
+                if tp1 > 0 and tp2 > 0 and tp3 > 0:
+                    tp_item = QTableWidgetItem(f"${tp1:.2f}/${tp2:.2f}/${tp3:.2f}")
+                else:
+                    tp_item = QTableWidgetItem("Pending")
             else:
                 tp_value = row.get('take_profit', 0)
                 if pd.isna(tp_value):
@@ -2924,6 +3006,20 @@ class SignalAnalysisDialog(QDialog):
             if has_position_groups and group_color_toggle:
                 profit_item.setBackground(Qt.lightGray)
             self.results_table.setItem(row_idx, col_idx, profit_item)
+            col_idx += 1
+            
+            # Profit USD (calculate from profit_pct)
+            profit_usd = row.get('profit_usd', 0)
+            if pd.isna(profit_usd):
+                profit_usd = 0
+            profit_usd_item = QTableWidgetItem(f"${profit_usd:+.2f}" if profit_usd != 0 else "$0.00")
+            if profit_usd > 0:
+                profit_usd_item.setForeground(Qt.darkGreen)
+            elif profit_usd < 0:
+                profit_usd_item.setForeground(Qt.darkRed)
+            if has_position_groups and group_color_toggle:
+                profit_usd_item.setBackground(Qt.lightGray)
+            self.results_table.setItem(row_idx, col_idx, profit_usd_item)
             col_idx += 1
             
             # TP Levels Hit (only in multi-TP mode)

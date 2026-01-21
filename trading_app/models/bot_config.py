@@ -29,6 +29,7 @@ class BotConfig:
     total_position_size: Optional[float] = None  # Total position size in base currency
     use_3_position_mode: bool = True  # Enable 3-position trading mode (TP1, TP2, TP3)
     min_order_size: Optional[float] = None  # Minimum order size for exchange
+    use_trailing_stops: bool = True  # Enable trailing stops for positions 2 and 3
     trailing_stop_pct: float = 0.5  # Trailing stop percentage (0.5 = 50% retracement from max profit)
 
     # Strategy parameters
@@ -43,6 +44,11 @@ class BotConfig:
     range_tp1: float = 1.0
     range_tp2: float = 1.75
     range_tp3: float = 2.5
+
+    # Regime-based SL settings
+    use_regime_based_sl: bool = False  # Use fixed regime-based SL instead of strategy SL
+    trend_sl: float = 0.8  # TREND mode SL: 0.8% for crypto, 16 points for XAUUSD
+    range_sl: float = 0.6  # RANGE mode SL: 0.6% for crypto, 12 points for XAUUSD
 
     # Telegram settings
     telegram_enabled: bool = False
@@ -85,6 +91,8 @@ class BotConfig:
             range_tp1=20,
             range_tp2=35,
             range_tp3=50,
+            trend_sl=16,  # points
+            range_sl=12,  # points
         )
 
     @classmethod

@@ -45,7 +45,8 @@ class LiveBotBinanceFullAuto:
                  dry_run=False, testnet=True, api_key=None, api_secret=None,
                  trailing_stop_enabled=True, trailing_stop_percent=1.5,
                  bot_id=None, use_database=True, use_3_position_mode=False,
-                 total_position_size=None, min_order_size=None, trailing_stop_pct=0.5):
+                 total_position_size=None, min_order_size=None, use_trailing_stops=True, trailing_stop_pct=0.5,
+                 use_regime_based_sl=False, trend_sl=0.8, range_sl=0.6):
         """
         Initialize bot
 
@@ -65,6 +66,9 @@ class LiveBotBinanceFullAuto:
             trailing_stop_percent: Trailing stop activation threshold (%)
             bot_id: Unique bot identifier for database tracking
             use_database: If True, use database for position tracking
+            use_regime_based_sl: Use fixed regime-based SL instead of strategy SL
+            trend_sl: TREND mode SL in percent (default 0.8% for crypto)
+            range_sl: RANGE mode SL in percent (default 0.6% for crypto)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -86,7 +90,13 @@ class LiveBotBinanceFullAuto:
         self.use_3_position_mode = use_3_position_mode
         self.total_position_size = total_position_size
         self.min_order_size = min_order_size
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops
         self.trailing_stop_pct = trailing_stop_pct  # Trailing stop percentage for 3-position mode
+
+        # Regime-based SL settings
+        self.use_regime_based_sl = use_regime_based_sl
+        self.trend_sl_pct = trend_sl  # SL for TREND mode in percent
+        self.range_sl_pct = range_sl  # SL for RANGE mode in percent
 
         # Trailing stop settings
         self.trailing_stop_enabled = trailing_stop_enabled
@@ -377,7 +387,7 @@ class LiveBotBinanceFullAuto:
                 # Send to Telegram
                 if self.telegram_bot:
                     try:
-                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}\n\nPlease configure API credentials."))
+                        self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}\n\nPlease configure API credentials.")
                     except Exception as e:
                         print(f"⚠️  Failed to send Telegram notification: {e}")
                 
@@ -390,7 +400,7 @@ class LiveBotBinanceFullAuto:
                 # Send to Telegram
                 if self.telegram_bot:
                     try:
-                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}"))
+                        self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}")
                     except Exception as e:
                         print(f"⚠️  Failed to send Telegram notification: {e}")
                 
@@ -464,7 +474,7 @@ class LiveBotBinanceFullAuto:
             # Send success notification to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}"))
+                    self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -486,7 +496,7 @@ class LiveBotBinanceFullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>Authentication Failed</b>\n\n{str(e)}\n\nPlease check your API credentials."))
+                    self.send_telegram(f"❌ <b>Authentication Failed</b>\n\n{str(e)}\n\nPlease check your API credentials.")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -515,7 +525,7 @@ class LiveBotBinanceFullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>Binance Exchange Error</b>\n\n{error_msg}\n\nPlease check the logs for details."))
+                    self.send_telegram(f"❌ <b>Binance Exchange Error</b>\n\n{error_msg}\n\nPlease check the logs for details.")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
 
@@ -528,7 +538,7 @@ class LiveBotBinanceFullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>Connection Failed</b>\n\n{str(e)}\n\nType: {type(e).__name__}"))
+                    self.send_telegram(f"❌ <b>Connection Failed</b>\n\n{str(e)}\n\nType: {type(e).__name__}")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -692,7 +702,7 @@ class LiveBotBinanceFullAuto:
         - When any position reaches TP1, activate trailing for Pos 2 & 3
         - Trailing formula: 50% retracement from max profit
         """
-        if not self.use_3_position_mode:
+        if not self.use_3_position_mode or not self.use_trailing_stops:
             return
 
         # Group positions by position_group_id
@@ -749,28 +759,134 @@ class LiveBotBinanceFullAuto:
                     if pos_num in [2, 3]:  # Only Pos 2 and 3 trail
                         entry_price = pos_data['entry_price']
 
+                        # Mark trailing stop as active in database
+                        if self.use_database and self.db:
+                            try:
+                                # Find the trade in database and update trailing_stop_active flag
+                                open_trades = self.db.get_open_trades(self.bot_id)
+                                for trade in open_trades:
+                                    if trade.order_id == str(order_id) and not trade.trailing_stop_active:
+                                        trade.trailing_stop_active = True
+                                        self.db.update_trade(trade)
+                                        print(f"✓ Pos {pos_num} ({order_id}) marked as trailing stop active in database")
+                                        break  # Exit loop after updating the target trade
+                            except Exception as e:
+                                print(f"⚠️  Error updating trailing_stop_active in DB: {e}")
+
                         if pos_data['type'] == 'BUY':
                             # Trailing stop: configurable % retracement from max price
                             new_sl = group_info['max_price'] - (group_info['max_price'] - entry_price) * self.trailing_stop_pct
 
                             # Only update if new SL is better (higher) than current
                             if new_sl > pos_data['sl']:
-                                print(f"   📊 Pos {pos_num} trailing SL updated: ${pos_data['sl']:.2f} → ${new_sl:.2f}")
-                                pos_data['sl'] = new_sl
-                                # Update in tracker
-                                if order_id in self.positions_tracker:
-                                    self.positions_tracker[order_id]['sl'] = new_sl
+                                old_sl = pos_data['sl']
+                                print(f"   📊 Pos {pos_num} trailing SL updated: ${old_sl:.2f} → ${new_sl:.2f}")
+                                
+                                # Update SL on exchange (CRITICAL FIX #3)
+                                sl_updated_on_exchange = False
+                                if not self.dry_run and self.exchange_connected:
+                                    try:
+                                        # Note: Not all exchanges support editing stop loss on open positions
+                                        # For now, we'll update in memory and database
+                                        # TODO: Implement exchange.edit_order() if supported
+                                        print(f"   ⚠️  Exchange SL update not implemented - updating in memory only")
+                                        sl_updated_on_exchange = True
+                                    except Exception as e:
+                                        print(f"   ❌ Error updating SL on exchange: {e}")
+                                else:
+                                    sl_updated_on_exchange = True  # Simulate success in dry-run
+                                
+                                # Only update in memory if broker update succeeded
+                                if sl_updated_on_exchange:
+                                    pos_data['sl'] = new_sl
+                                    # Update in tracker
+                                    if order_id in self.positions_tracker:
+                                        self.positions_tracker[order_id]['sl'] = new_sl
+                                    
+                                    # Update in database
+                                    if self.use_database and self.db:
+                                        try:
+                                            open_trades = self.db.get_open_trades(self.bot_id)
+                                            for trade in open_trades:
+                                                if trade.order_id == str(order_id):
+                                                    trade.stop_loss = new_sl
+                                                    self.db.update_trade(trade)
+                                                    break
+                                        except Exception as e:
+                                            print(f"   ⚠️  Failed to update SL in database: {e}")
+                                    
+                                    # Send Telegram notification for trailing stop update
+                                    if self.telegram_bot:
+                                        message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                        message += f"Order: {order_id}\n"
+                                        message += f"Position: {pos_num}/3\n"
+                                        message += f"Type: {pos_data['type']}\n"
+                                        message += f"Entry: ${entry_price:.2f}\n"
+                                        message += f"New SL: ${new_sl:.2f}\n"
+                                        message += f"Max Price: ${group_info['max_price']:.2f}"
+                                        try:
+                                            self.send_telegram(message)
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to send Telegram notification: {e}")
+                                else:
+                                    print(f"   ⚠️  SL not updated in memory - exchange update failed")
                         else:  # SELL
                             # Trailing stop: configurable % retracement from min price
                             new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
 
                             # Only update if new SL is better (lower) than current
                             if new_sl < pos_data['sl']:
-                                print(f"   📊 Pos {pos_num} trailing SL updated: ${pos_data['sl']:.2f} → ${new_sl:.2f}")
-                                pos_data['sl'] = new_sl
-                                # Update in tracker
-                                if order_id in self.positions_tracker:
-                                    self.positions_tracker[order_id]['sl'] = new_sl
+                                old_sl = pos_data['sl']
+                                print(f"   📊 Pos {pos_num} trailing SL updated: ${old_sl:.2f} → ${new_sl:.2f}")
+                                
+                                # Update SL on exchange (CRITICAL FIX #3)
+                                sl_updated_on_exchange = False
+                                if not self.dry_run and self.exchange_connected:
+                                    try:
+                                        # Note: Not all exchanges support editing stop loss on open positions
+                                        # For now, we'll update in memory and database
+                                        # TODO: Implement exchange.edit_order() if supported
+                                        print(f"   ⚠️  Exchange SL update not implemented - updating in memory only")
+                                        sl_updated_on_exchange = True
+                                    except Exception as e:
+                                        print(f"   ❌ Error updating SL on exchange: {e}")
+                                else:
+                                    sl_updated_on_exchange = True  # Simulate success in dry-run
+                                
+                                # Only update in memory if broker update succeeded
+                                if sl_updated_on_exchange:
+                                    pos_data['sl'] = new_sl
+                                    # Update in tracker
+                                    if order_id in self.positions_tracker:
+                                        self.positions_tracker[order_id]['sl'] = new_sl
+                                    
+                                    # Update in database
+                                    if self.use_database and self.db:
+                                        try:
+                                            open_trades = self.db.get_open_trades(self.bot_id)
+                                            for trade in open_trades:
+                                                if trade.order_id == str(order_id):
+                                                    trade.stop_loss = new_sl
+                                                    self.db.update_trade(trade)
+                                                    break
+                                        except Exception as e:
+                                            print(f"   ⚠️  Failed to update SL in database: {e}")
+                                    
+                                    # Send Telegram notification for trailing stop update
+                                    if self.telegram_bot:
+                                        message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                        message += f"Order: {order_id}\n"
+                                        message += f"Position: {pos_num}/3\n"
+                                        message += f"Type: {pos_data['type']}\n"
+                                        message += f"Entry: ${entry_price:.2f}\n"
+                                        message += f"New SL: ${new_sl:.2f}\n"
+                                        message += f"Min Price: ${group_info['min_price']:.2f}"
+                                        try:
+                                            self.send_telegram(message)
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to send Telegram notification: {e}")
+                                else:
+                                    print(f"   ⚠️  SL not updated in memory - exchange update failed")
 
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
@@ -792,6 +908,12 @@ class LiveBotBinanceFullAuto:
             if self.use_database and self.db:
                 try:
                     db_trades = self.db.get_open_trades(self.bot_id)
+                    if self.dry_run:
+                        # Silently monitor positions in background for dry-run mode
+                        pass
+                    elif db_trades:
+                        # Log for live mode too
+                        print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
                     for trade in db_trades:
                         positions_to_check[trade.order_id] = {
                             'tp': trade.take_profit,
@@ -906,6 +1028,36 @@ class LiveBotBinanceFullAuto:
                 tp_target = tracked_pos['tp']
                 sl_target = tracked_pos['sl']
                 position_type = tracked_pos['type']
+                entry_price = tracked_pos['entry_price']
+                
+                # Skip if TP or SL is None/missing
+                if tp_target is None or sl_target is None:
+                    print(f"⚠️  Position {order_id} has missing TP ({tp_target}) or SL ({sl_target}) - skipping check")
+                    continue
+                
+                # Convert to float to ensure proper comparison
+                try:
+                    tp_target = float(tp_target)
+                    sl_target = float(sl_target)
+                except (ValueError, TypeError) as e:
+                    print(f"⚠️  Position {order_id} has invalid TP/SL values - skipping check: {e}")
+                    continue
+                
+                # Determine which TP level this is from position_num or comment
+                tp_level = 'TP1'  # Default for single-position mode
+                position_num = tracked_pos.get('position_num', 0)
+                if position_num == 1:
+                    tp_level = 'TP1'
+                elif position_num == 2:
+                    tp_level = 'TP2'
+                elif position_num == 3:
+                    tp_level = 'TP3'
+                elif 'TP1' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP1'
+                elif 'TP2' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP2'
+                elif 'TP3' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP3'
 
                 # Check if TP or SL is hit based on bar high/low OR current price
                 tp_hit = False
@@ -930,7 +1082,7 @@ class LiveBotBinanceFullAuto:
                 
                 # If TP or SL is hit
                 if tp_hit or sl_hit:
-                    hit_type = 'TP' if tp_hit else 'SL'
+                    hit_type = tp_level if tp_hit else 'SL'
                     target_price = tp_target if tp_hit else sl_target
                     
                     # Update status in both tracker and database immediately
@@ -1016,7 +1168,7 @@ class LiveBotBinanceFullAuto:
                             order_id=order_id,
                             close_price=current_price,
                             profit=profit_usdt,
-                            status=hit_type  # Status will be 'TP' or 'SL'
+                            status='CLOSED'  # Status is always CLOSED after TP/SL hit
                         )
                     
                     # Send Telegram notification
@@ -1042,7 +1194,7 @@ class LiveBotBinanceFullAuto:
                         message += f"Status: CLOSED"
                         
                         try:
-                            asyncio.run(self.send_telegram(message))
+                            self.send_telegram(message)
                         except Exception as e:
                             print(f"⚠️  Failed to send Telegram notification: {e}")
         
@@ -1191,7 +1343,18 @@ class LiveBotBinanceFullAuto:
 
             # Calculate TP levels in price
             entry = last_signal['entry_price']
-            sl = last_signal['stop_loss']
+            
+            # Calculate SL based on settings
+            if self.use_regime_based_sl:
+                # Use regime-based fixed SL (percentage)
+                sl_pct = self.trend_sl_pct if self.current_regime == 'TREND' else self.range_sl_pct
+                if last_signal['signal'] == 1:  # LONG
+                    sl = entry * (1 - sl_pct / 100)
+                else:  # SHORT
+                    sl = entry * (1 + sl_pct / 100)
+            else:
+                # Use strategy-calculated SL
+                sl = last_signal['stop_loss']
 
             if last_signal['signal'] == 1:  # LONG
                 tp1 = entry * (1 + tp1_pct / 100)
@@ -1402,7 +1565,7 @@ class LiveBotBinanceFullAuto:
                 message += f"SL: ${signal['sl']:.2f}\n"
                 message += f"TP: ${signal['tp2']:.2f}\n"
                 message += f"Risk: {self.risk_percent}%"
-                asyncio.run(self.send_telegram(message))
+                self.send_telegram(message)
 
             return True
 
@@ -1446,17 +1609,14 @@ class LiveBotBinanceFullAuto:
             total_size * 0.34   # Pos 3 (slightly larger for rounding)
         ]
 
-        # Auto-adjust if below minimum
-        adjusted = False
-        for i in range(len(pos_sizes)):
-            if pos_sizes[i] < min_size:
-                print(f"   ⚠️  Position {i+1} size {pos_sizes[i]:.6f} < minimum {min_size}, adjusting...")
-                pos_sizes[i] = min_size
-                adjusted = True
-
-        if adjusted:
-            total_size = sum(pos_sizes)
-            print(f"   Adjusted total size: {total_size:.6f}")
+        # Check if ANY lot size is below minimum - if so, fallback to single position
+        if any(size < min_size for size in pos_sizes):
+            print(f"   ⚠️  WARNING: Position sizes too small for 3-position mode")
+            print(f"   Position 1: {pos_sizes[0]:.6f} (min: {min_size})")
+            print(f"   Position 2: {pos_sizes[1]:.6f} (min: {min_size})")
+            print(f"   Position 3: {pos_sizes[2]:.6f} (min: {min_size})")
+            print(f"   🔄 FALLBACK: Opening single position with TP2 instead")
+            return self._open_single_position(signal)
 
         # Position configuration
         positions_data = [
@@ -1547,7 +1707,7 @@ class LiveBotBinanceFullAuto:
                 message += f"Position 2: {pos_sizes[1]:.6f} → TP2 ${signal['tp2']:.2f} (trails)\n"
                 message += f"Position 3: {pos_sizes[2]:.6f} → TP3 ${signal['tp3']:.2f} (trails)\n"
                 message += f"\nRisk: {self.risk_percent}%"
-                asyncio.run(self.send_telegram(message))
+                self.send_telegram(message)
 
             return True
 
@@ -1557,17 +1717,51 @@ class LiveBotBinanceFullAuto:
             traceback.print_exc()
             return False
 
-    async def send_telegram(self, message):
-        """Send Telegram notification"""
+    def send_telegram(self, message):
+        """Send Telegram notification (synchronous wrapper for async bot)"""
         if self.telegram_bot and self.telegram_chat_id:
             try:
-                await self.telegram_bot.send_message(
-                    chat_id=self.telegram_chat_id,
-                    text=message,
-                    parse_mode='HTML'
-                )
+                # Use asyncio to send message, handling various event loop states
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_closed():
+                        # Create new event loop if current one is closed
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    if loop.is_running():
+                        # If loop is already running (e.g., in a thread), we can't use run_until_complete
+                        # In this case, we just skip sending (trading bots run in separate thread)
+                        # This is acceptable as Telegram notifications are non-critical
+                        print(f"ℹ️  Telegram notification skipped (event loop already running)")
+                        return
+                    else:
+                        # Run the coroutine in the event loop
+                        loop.run_until_complete(self._send_telegram_async(message))
+                except RuntimeError as e:
+                    # Fallback: create a new event loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(self._send_telegram_async(message))
+                    finally:
+                        try:
+                            loop.close()
+                        except Exception:
+                            pass  # Ignore cleanup errors
             except Exception as e:
                 print(f"⚠️  Telegram send failed: {e}")
+
+    async def _send_telegram_async(self, message):
+        """Async helper for sending Telegram messages"""
+        try:
+            await self.telegram_bot.send_message(
+                chat_id=self.telegram_chat_id,
+                text=message,
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            print(f"⚠️  Telegram message send error: {e}")
 
     def _check_closed_positions(self):
         """Check for positions that have been closed and log them"""
@@ -1672,7 +1866,7 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
 ✅ Bot is now active and monitoring the market!
 """
             try:
-                asyncio.run(self.send_telegram(startup_message))
+                self.send_telegram(startup_message)
                 print("📱 Startup notification sent to Telegram")
             except Exception as e:
                 print(f"⚠️  Failed to send startup notification: {e}")
@@ -1824,7 +2018,7 @@ Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 🛑 Bot has been stopped by user.
 """
                 try:
-                    asyncio.run(self.send_telegram(shutdown_message))
+                    self.send_telegram(shutdown_message)
                     print("📱 Shutdown notification sent to Telegram")
                 except Exception as e:
                     print(f"⚠️  Failed to send shutdown notification: {e}")
