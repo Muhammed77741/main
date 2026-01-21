@@ -302,10 +302,10 @@ class StatisticsDialog(QDialog):
 
         # Table
         self.history_table = QTableWidget()
-        self.history_table.setColumnCount(12)
+        self.history_table.setColumnCount(15)
         self.history_table.setHorizontalHeaderLabels([
-            'Date', 'Type', 'Amount', 'Entry', 'Exit', 'SL', 'TP', 
-            'Profit', 'Profit %', 'Duration', 'Regime', 'Status'
+            'Date', 'Type', 'Amount', 'Pos #', 'Group', 'Entry', 'Exit', 'SL', 'TP', 
+            'Profit', 'Profit %', 'Duration', 'Trailing', 'Regime', 'Status'
         ])
         
         # Enable alternating row colors
@@ -319,15 +319,18 @@ class StatisticsDialog(QDialog):
         self.history_table.setColumnWidth(0, 130)  # Date
         self.history_table.setColumnWidth(1, 60)   # Type
         self.history_table.setColumnWidth(2, 80)   # Amount
-        self.history_table.setColumnWidth(3, 100)  # Entry
-        self.history_table.setColumnWidth(4, 100)  # Exit
-        self.history_table.setColumnWidth(5, 100)  # SL
-        self.history_table.setColumnWidth(6, 100)  # TP
-        self.history_table.setColumnWidth(7, 100)  # Profit
-        self.history_table.setColumnWidth(8, 80)   # Profit %
-        self.history_table.setColumnWidth(9, 90)   # Duration
-        self.history_table.setColumnWidth(10, 80)  # Regime
-        # Status (column 11) will stretch automatically
+        self.history_table.setColumnWidth(3, 50)   # Pos #
+        self.history_table.setColumnWidth(4, 80)   # Group
+        self.history_table.setColumnWidth(5, 100)  # Entry
+        self.history_table.setColumnWidth(6, 100)  # Exit
+        self.history_table.setColumnWidth(7, 100)  # SL
+        self.history_table.setColumnWidth(8, 100)  # TP
+        self.history_table.setColumnWidth(9, 100)  # Profit
+        self.history_table.setColumnWidth(10, 80)  # Profit %
+        self.history_table.setColumnWidth(11, 90)  # Duration
+        self.history_table.setColumnWidth(12, 70)  # Trailing
+        self.history_table.setColumnWidth(13, 80)  # Regime
+        # Status (column 14) will stretch automatically
 
         # Allow user to resize columns
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -436,20 +439,30 @@ class StatisticsDialog(QDialog):
             amount_str = f"{trade.amount:.4f}" if trade.amount else '-'
             self.history_table.setItem(i, 2, QTableWidgetItem(amount_str))
 
+            # Pos #
+            pos_num = getattr(trade, 'position_num', 0)
+            pos_num_str = f"{pos_num}/3" if pos_num > 0 else '-'
+            self.history_table.setItem(i, 3, QTableWidgetItem(pos_num_str))
+
+            # Group (first 8 chars)
+            group_id = getattr(trade, 'position_group_id', None)
+            group_str = group_id[:8] if group_id else '-'
+            self.history_table.setItem(i, 4, QTableWidgetItem(group_str))
+
             # Entry
-            self.history_table.setItem(i, 3, QTableWidgetItem(f"${trade.entry_price:.2f}"))
+            self.history_table.setItem(i, 5, QTableWidgetItem(f"${trade.entry_price:.2f}"))
 
             # Exit
             exit_str = f"${trade.close_price:.2f}" if trade.close_price else '-'
-            self.history_table.setItem(i, 4, QTableWidgetItem(exit_str))
+            self.history_table.setItem(i, 6, QTableWidgetItem(exit_str))
 
             # SL
             sl_str = f"${trade.stop_loss:.2f}" if trade.stop_loss else '-'
-            self.history_table.setItem(i, 5, QTableWidgetItem(sl_str))
+            self.history_table.setItem(i, 7, QTableWidgetItem(sl_str))
 
             # TP
             tp_str = f"${trade.take_profit:.2f}" if trade.take_profit else '-'
-            self.history_table.setItem(i, 6, QTableWidgetItem(tp_str))
+            self.history_table.setItem(i, 8, QTableWidgetItem(tp_str))
 
             # Profit
             if trade.profit is not None:
@@ -462,9 +475,9 @@ class StatisticsDialog(QDialog):
                     profit_item.setForeground(QColor("#4CAF50"))  # Green
                 elif trade.profit < 0:
                     profit_item.setForeground(QColor("#F44336"))  # Red
-                self.history_table.setItem(i, 7, profit_item)
+                self.history_table.setItem(i, 9, profit_item)
             else:
-                self.history_table.setItem(i, 7, QTableWidgetItem('-'))
+                self.history_table.setItem(i, 9, QTableWidgetItem('-'))
 
             # Profit %
             if trade.profit_percent is not None:
@@ -477,23 +490,28 @@ class StatisticsDialog(QDialog):
                     pct_item.setForeground(QColor("#4CAF50"))  # Green
                 elif trade.profit_percent < 0:
                     pct_item.setForeground(QColor("#F44336"))  # Red
-                self.history_table.setItem(i, 8, pct_item)
+                self.history_table.setItem(i, 10, pct_item)
             else:
-                self.history_table.setItem(i, 8, QTableWidgetItem('-'))
+                self.history_table.setItem(i, 10, QTableWidgetItem('-'))
 
             # Duration
             duration_str = f"{trade.duration_hours:.1f}h" if trade.duration_hours else '-'
-            self.history_table.setItem(i, 9, QTableWidgetItem(duration_str))
+            self.history_table.setItem(i, 11, QTableWidgetItem(duration_str))
+
+            # Trailing
+            trailing_active = getattr(trade, 'trailing_stop_active', False)
+            trailing_str = "✅ YES" if trailing_active else "❌ NO"
+            self.history_table.setItem(i, 12, QTableWidgetItem(trailing_str))
 
             # Regime
             regime = trade.market_regime or '-'
-            self.history_table.setItem(i, 10, QTableWidgetItem(regime))
+            self.history_table.setItem(i, 13, QTableWidgetItem(regime))
 
             # Status with badge styling
             status = trade.status or 'OPEN'
             status_item = QTableWidgetItem(f"{self.get_status_emoji(status)} {status}")
             status_item.setFont(QFont("Arial", 10, QFont.Bold))
-            self.history_table.setItem(i, 11, status_item)
+            self.history_table.setItem(i, 14, status_item)
     
     def get_status_emoji(self, status):
         """Get emoji for status"""
@@ -526,16 +544,22 @@ class StatisticsDialog(QDialog):
 
                 # Header
                 writer.writerow([
-                    'Date', 'Type', 'Amount', 'Entry', 'Exit', 'SL', 'TP',
-                    'Profit', 'Profit %', 'Duration (h)', 'Regime', 'Status'
+                    'Date', 'Type', 'Amount', 'Pos #', 'Group', 'Entry', 'Exit', 'SL', 'TP',
+                    'Profit', 'Profit %', 'Duration (h)', 'Trailing', 'Regime', 'Status'
                 ])
 
                 # Data
                 for trade in trades:
+                    pos_num = getattr(trade, 'position_num', 0)
+                    group_id = getattr(trade, 'position_group_id', None)
+                    trailing = getattr(trade, 'trailing_stop_active', False)
+                    
                     writer.writerow([
                         trade.open_time.strftime('%Y-%m-%d %H:%M:%S') if trade.open_time else '',
                         trade.trade_type,
                         trade.amount,
+                        f"{pos_num}/3" if pos_num > 0 else '',
+                        group_id[:8] if group_id else '',
                         trade.entry_price,
                         trade.close_price or '',
                         trade.stop_loss,
@@ -543,6 +567,7 @@ class StatisticsDialog(QDialog):
                         trade.profit or '',
                         trade.profit_percent or '',
                         trade.duration_hours or '',
+                        'YES' if trailing else 'NO',
                         trade.market_regime or '',
                         trade.status
                     ])

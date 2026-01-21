@@ -6,6 +6,7 @@ import os
 from typing import List, Optional
 from datetime import datetime
 from models import BotConfig, BotStatus, TradeRecord
+from models.position_group import PositionGroup
 
 
 class DatabaseManager:
@@ -132,6 +133,35 @@ class DatabaseManager:
             )
         """)
 
+        # Position Groups table (CRITICAL FIX #4: Persist state across restarts)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS position_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id TEXT UNIQUE NOT NULL,
+                bot_id TEXT NOT NULL,
+                tp1_hit INTEGER DEFAULT 0,
+                entry_price REAL NOT NULL,
+                max_price REAL NOT NULL,
+                min_price REAL NOT NULL,
+                trade_type TEXT NOT NULL,
+                tp1_close_price REAL,
+                status TEXT DEFAULT 'ACTIVE',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (bot_id) REFERENCES bot_configs(bot_id)
+            )
+        """)
+        
+        # Create index for faster lookups
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_position_groups_group_id 
+            ON position_groups(group_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_position_groups_bot_status 
+            ON position_groups(bot_id, status)
+        """)
+
         # App logs table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS app_logs (
@@ -140,6 +170,21 @@ class DatabaseManager:
                 level TEXT NOT NULL,
                 bot_id TEXT,
                 message TEXT NOT NULL
+            )
+        """)
+
+        # Trade events table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trade_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER NOT NULL,
+                bot_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                position_num INTEGER,
+                position_group_id TEXT,
+                details TEXT,
+                FOREIGN KEY (trade_id) REFERENCES trades(id)
             )
         """)
 
@@ -541,6 +586,174 @@ class DatabaseManager:
             pass  # Silently skip if database is closed
         except Exception:
             pass  # Silently skip other errors during logging
+
+    # Trade Events methods
+    def log_trade_event(self, trade_id: int, bot_id: str, event_type: str, 
+                       position_num: int = None, position_group_id: str = None, details: str = None):
+        """Log a trade event (TP hit, SL hit, trailing activated, etc.)"""
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed, skipping event log for {bot_id}")
+            return
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO trade_events (
+                    trade_id, bot_id, event_type, event_time,
+                    position_num, position_group_id, details
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                trade_id, bot_id, event_type, datetime.now(),
+                position_num, position_group_id, details
+            ))
+            self.conn.commit()
+        except sqlite3.ProgrammingError as e:
+            print(f"⚠️  Warning: Database error during event log: {e}")
+        except Exception as e:
+            print(f"⚠️  Warning: Unexpected error during event log: {e}")
+
+    def get_trade_events(self, bot_id: str = None, trade_id: int = None, event_type: str = None):
+        """Get trade events with optional filters"""
+        if not self.conn:
+            return []
+
+        cursor = self.conn.cursor()
+        
+        # Build query based on filters
+        query = "SELECT * FROM trade_events WHERE 1=1"
+        params = []
+        
+        if bot_id:
+            query += " AND bot_id = ?"
+            params.append(bot_id)
+        
+        if trade_id:
+            query += " AND trade_id = ?"
+            params.append(trade_id)
+        
+        if event_type:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        
+        query += " ORDER BY event_time DESC LIMIT 1000"
+        
+        cursor.execute(query, params)
+        
+        events = []
+        for row in cursor.fetchall():
+            events.append({
+                'event_id': row['event_id'],
+                'trade_id': row['trade_id'],
+                'bot_id': row['bot_id'],
+                'event_type': row['event_type'],
+                'event_time': self._parse_datetime(row['event_time']),
+                'position_num': row['position_num'],
+                'position_group_id': row['position_group_id'],
+                'details': row['details']
+            })
+        
+        return events
+
+    # Position Groups methods (CRITICAL FIX #4)
+    def save_position_group(self, group):
+        """Save or update a position group"""
+        if not self.conn:
+            return
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO position_groups (
+                group_id, bot_id, tp1_hit, entry_price, max_price, min_price,
+                trade_type, tp1_close_price, status, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            group.group_id,
+            group.bot_id,
+            1 if group.tp1_hit else 0,
+            group.entry_price,
+            group.max_price,
+            group.min_price,
+            group.trade_type,
+            group.tp1_close_price,
+            group.status,
+            datetime.now()
+        ))
+        self.conn.commit()
+
+    def get_position_group(self, group_id: str):
+        """Get a position group by ID"""
+        if not self.conn:
+            return None
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM position_groups WHERE group_id = ?
+        """, (group_id,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        return PositionGroup(
+            group_id=row['group_id'],
+            bot_id=row['bot_id'],
+            tp1_hit=bool(row['tp1_hit']),
+            entry_price=row['entry_price'],
+            max_price=row['max_price'],
+            min_price=row['min_price'],
+            trade_type=row['trade_type'],
+            tp1_close_price=row['tp1_close_price'],
+            status=row['status'],
+            created_at=self._parse_datetime(row['created_at']),
+            updated_at=self._parse_datetime(row['updated_at'])
+        )
+
+    def get_active_position_groups(self, bot_id: str):
+        """Get all active position groups for a bot"""
+        if not self.conn:
+            return []
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM position_groups 
+            WHERE bot_id = ? AND status = 'ACTIVE'
+            ORDER BY created_at DESC
+        """, (bot_id,))
+        
+        groups = []
+        for row in cursor.fetchall():
+            groups.append(PositionGroup(
+                group_id=row['group_id'],
+                bot_id=row['bot_id'],
+                tp1_hit=bool(row['tp1_hit']),
+                entry_price=row['entry_price'],
+                max_price=row['max_price'],
+                min_price=row['min_price'],
+                trade_type=row['trade_type'],
+                tp1_close_price=row['tp1_close_price'],
+                status=row['status'],
+                created_at=self._parse_datetime(row['created_at']),
+                updated_at=self._parse_datetime(row['updated_at'])
+            ))
+        
+        return groups
+
+    def update_position_group(self, group):
+        """Update an existing position group"""
+        self.save_position_group(group)  # INSERT OR REPLACE handles update
+
+    def close_position_group(self, group_id: str):
+        """Mark a position group as closed"""
+        if not self.conn:
+            return
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE position_groups 
+            SET status = 'CLOSED', updated_at = ?
+            WHERE group_id = ?
+        """, (datetime.now(), group_id))
+        self.conn.commit()
 
     def close(self):
         """Close database connection"""
