@@ -867,7 +867,15 @@ class LiveBotMT5FullAuto:
         
         if not self.dry_run:
             open_positions = mt5.positions_get(symbol=self.symbol)
-            mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+            
+            # Check if positions_get failed (returns None on error)
+            if open_positions is None:
+                print(f"⚠️  Failed to get positions from MT5 - skipping sync check")
+                print(f"   This might be a temporary connection issue")
+                return  # Don't sync if we can't verify MT5 state
+            
+            # Build set of ticket numbers from MT5 positions
+            mt5_position_tickets = set(pos.ticket for pos in open_positions)
         else:
             # In dry_run mode, all database positions are "valid" (use string tickets)
             mt5_position_tickets = set(positions_to_check.keys())
