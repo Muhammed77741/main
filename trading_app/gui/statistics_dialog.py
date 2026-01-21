@@ -302,7 +302,7 @@ class StatisticsDialog(QDialog):
 
         # Table
         self.history_table = QTableWidget()
-        self.history_table.setColumnCount(16)
+        self.history_table.setColumnCount(15)
         self.history_table.setHorizontalHeaderLabels([
             'Date', 'Type', 'Amount', 'Pos #', 'Group', 'Entry', 'Exit', 'SL', 'TP', 
             'Profit', 'Profit %', 'Duration', 'Trailing', 'Regime', 'Status'
