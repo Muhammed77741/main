@@ -1816,6 +1816,27 @@ class LiveBotMT5FullAuto:
         
         print(f"\n✅ Successfully opened {len(positions_opened)}/3 positions!")
         
+        # Save PositionGroup to database (CRITICAL FIX: Create position group record)
+        if self.use_database and self.db:
+            try:
+                PositionGroup = self._get_position_group_model()
+                if PositionGroup:
+                    new_group = PositionGroup(
+                        group_id=group_id,
+                        bot_id=self.bot_id,
+                        tp1_hit=False,
+                        entry_price=signal['entry'],
+                        max_price=signal['entry'],
+                        min_price=signal['entry'],
+                        trade_type=direction_str,
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    self.db.save_position_group(new_group)
+                    print(f"✅ Position group saved to database: {group_id[:8]}")
+            except Exception as e:
+                print(f"⚠️  Failed to save position group to database: {e}")
+        
         # Send Telegram notification
         if self.telegram_bot:
             import asyncio
