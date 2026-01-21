@@ -17,6 +17,7 @@ import os
 import asyncio
 import uuid
 import signal
+import json
 
 # Add parent directory to path to access shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -388,6 +389,40 @@ class LiveBotMT5FullAuto:
                 trade_data['comment']
             ])
     
+    def _get_trade_id_by_order(self, order_id):
+        """Get trade_id from database by order_id (cached for performance)"""
+        if not self.use_database or not self.db:
+            return None
+        
+        try:
+            # Create cache if it doesn't exist
+            if not hasattr(self, '_trade_id_cache'):
+                self._trade_id_cache = {}
+                self._cache_timestamp = datetime.now()
+            
+            # Refresh cache every 60 seconds
+            if (datetime.now() - self._cache_timestamp).total_seconds() > 60:
+                self._trade_id_cache = {}
+                self._cache_timestamp = datetime.now()
+            
+            # Check cache first
+            order_id_str = str(order_id)
+            if order_id_str in self._trade_id_cache:
+                return self._trade_id_cache[order_id_str]
+            
+            # Query database
+            trades = self.db.get_trades(self.bot_id, limit=1000)
+            for trade in trades:
+                if trade.order_id == order_id_str:
+                    # Cache the result
+                    self._trade_id_cache[order_id_str] = (trade.trade_id, trade)
+                    return (trade.trade_id, trade)
+            
+            return None
+        except Exception as e:
+            print(f"⚠️  Error looking up trade_id: {e}")
+            return None
+    
     def _log_tp_hit(self, ticket, tp_level, current_price):
         """Log when a TP level is hit"""
         if ticket not in self.positions_tracker:
@@ -433,16 +468,9 @@ class LiveBotMT5FullAuto:
         # Log TP hit event to database
         if self.use_database and self.db:
             try:
-                # Find trade_id by order_id
-                trades = self.db.get_trades(self.bot_id, limit=1000)
-                trade_id = None
-                for trade in trades:
-                    if trade.order_id == str(ticket):
-                        trade_id = trade.trade_id
-                        break
-                
-                if trade_id:
-                    import json
+                result = self._get_trade_id_by_order(ticket)
+                if result:
+                    trade_id, _ = result
                     details = json.dumps({
                         'price': current_price,
                         'profit': round(profit, 2),
@@ -690,7 +718,6 @@ class LiveBotMT5FullAuto:
                                         
                                         # Log trailing activation event
                                         try:
-                                            import json
                                             details = json.dumps({
                                                 'max_price': group_info['max_price'],
                                                 'entry_price': entry_price
@@ -1176,18 +1203,11 @@ class LiveBotMT5FullAuto:
                     # Log SL/TP event to database
                     if self.use_database and self.db and sl_hit:
                         try:
-                            # Find trade_id by order_id
-                            trades = self.db.get_trades(self.bot_id, limit=1000)
-                            trade_id = None
-                            is_trailing = False
-                            for trade in trades:
-                                if trade.order_id == str(ticket):
-                                    trade_id = trade.trade_id
-                                    is_trailing = getattr(trade, 'trailing_stop_active', False)
-                                    break
-                            
-                            if trade_id:
-                                import json
+                            result = self._get_trade_id_by_order(ticket)
+                            if result:
+                                trade_id, trade = result
+                                is_trailing = getattr(trade, 'trailing_stop_active', False)
+                                
                                 details = json.dumps({
                                     'price': current_price,
                                     'profit': round(profit, 2),
