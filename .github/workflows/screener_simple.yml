@@ -1,0 +1,44 @@
+name: Simple Stock Screener
+
+# Runs every day at 9 AM UTC
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  screen-stocks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ref: claude/simplify-stock-screener-WzlXB
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          cd main/stock_smc_trading
+          pip install pandas numpy
+
+      - name: Run screener
+        run: |
+          cd main/stock_smc_trading
+          python3 demo_screener.py
+
+      - name: Show results
+        run: |
+          cd main/stock_smc_trading
+          echo "=== Results ==="
+          cat demo_top_stocks.csv
+
+      - name: Save results
+        uses: actions/upload-artifact@v3
+        with:
+          name: results
+          path: main/stock_smc_trading/demo_top_stocks.csv
