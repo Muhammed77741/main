@@ -6,6 +6,7 @@ import os
 from typing import List, Optional
 from datetime import datetime
 from models import BotConfig, BotStatus, TradeRecord
+from models.position_group import PositionGroup
 
 
 class DatabaseManager:
@@ -67,9 +68,13 @@ class DatabaseManager:
                 range_tp2 REAL,
                 range_tp3 REAL,
                 total_position_size REAL,
-                use_3_position_mode INTEGER DEFAULT 0,
+                use_3_position_mode INTEGER DEFAULT 1,
                 min_order_size REAL,
+                use_trailing_stops INTEGER DEFAULT 1,
                 trailing_stop_pct REAL DEFAULT 0.5,
+                use_regime_based_sl INTEGER DEFAULT 0,
+                trend_sl REAL DEFAULT 0.8,
+                range_sl REAL DEFAULT 0.6,
                 telegram_enabled INTEGER DEFAULT 0,
                 telegram_token TEXT,
                 telegram_chat_id TEXT,
@@ -128,6 +133,35 @@ class DatabaseManager:
             )
         """)
 
+        # Position Groups table (CRITICAL FIX #4: Persist state across restarts)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS position_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id TEXT UNIQUE NOT NULL,
+                bot_id TEXT NOT NULL,
+                tp1_hit INTEGER DEFAULT 0,
+                entry_price REAL NOT NULL,
+                max_price REAL NOT NULL,
+                min_price REAL NOT NULL,
+                trade_type TEXT NOT NULL,
+                tp1_close_price REAL,
+                status TEXT DEFAULT 'ACTIVE',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (bot_id) REFERENCES bot_configs(bot_id)
+            )
+        """)
+        
+        # Create index for faster lookups
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_position_groups_group_id 
+            ON position_groups(group_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_position_groups_bot_status 
+            ON position_groups(bot_id, status)
+        """)
+
         # App logs table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS app_logs (
@@ -136,6 +170,21 @@ class DatabaseManager:
                 level TEXT NOT NULL,
                 bot_id TEXT,
                 message TEXT NOT NULL
+            )
+        """)
+
+        # Trade events table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trade_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER NOT NULL,
+                bot_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                position_num INTEGER,
+                position_group_id TEXT,
+                details TEXT,
+                FOREIGN KEY (trade_id) REFERENCES trades(id)
             )
         """)
 
@@ -165,6 +214,11 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trades ADD COLUMN position_num INTEGER DEFAULT 0")
                 print("✅ position_num column added")
 
+            if 'trailing_stop_active' not in columns:
+                print("📊 Migrating trades table: adding trailing_stop_active column...")
+                cursor.execute("ALTER TABLE trades ADD COLUMN trailing_stop_active INTEGER DEFAULT 0")
+                print("✅ trailing_stop_active column added")
+
         except Exception as e:
             print(f"⚠️  3-position migration warning: {e}")
 
@@ -180,8 +234,16 @@ class DatabaseManager:
 
             if 'use_3_position_mode' not in columns:
                 print("📊 Migrating bot_configs: adding use_3_position_mode column...")
-                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_3_position_mode INTEGER DEFAULT 0")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_3_position_mode INTEGER DEFAULT 1")
                 print("✅ use_3_position_mode column added")
+            else:
+                # Update existing records where use_3_position_mode is 0 to default to 1
+                print("📊 Updating existing bot_configs: setting use_3_position_mode to 1...")
+                cursor.execute("UPDATE bot_configs SET use_3_position_mode = 1 WHERE use_3_position_mode = 0")
+                updated_rows = cursor.rowcount
+                if updated_rows > 0:
+                    print(f"✅ Updated {updated_rows} bot config(s) to enable 3-position mode")
+
 
             if 'min_order_size' not in columns:
                 print("📊 Migrating bot_configs: adding min_order_size column...")
@@ -192,6 +254,27 @@ class DatabaseManager:
                 print("📊 Migrating bot_configs: adding trailing_stop_pct column...")
                 cursor.execute("ALTER TABLE bot_configs ADD COLUMN trailing_stop_pct REAL DEFAULT 0.5")
                 print("✅ trailing_stop_pct column added")
+
+            if 'use_trailing_stops' not in columns:
+                print("📊 Migrating bot_configs: adding use_trailing_stops column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_trailing_stops INTEGER DEFAULT 1")
+                print("✅ use_trailing_stops column added")
+
+            if 'use_regime_based_sl' not in columns:
+                print("📊 Migrating bot_configs: adding use_regime_based_sl column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN use_regime_based_sl INTEGER DEFAULT 0")
+                print("✅ use_regime_based_sl column added")
+
+            if 'trend_sl' not in columns:
+                print("📊 Migrating bot_configs: adding trend_sl column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN trend_sl REAL DEFAULT 0.8")
+                print("✅ trend_sl column added")
+
+            if 'range_sl' not in columns:
+                print("📊 Migrating bot_configs: adding range_sl column...")
+                cursor.execute("ALTER TABLE bot_configs ADD COLUMN range_sl REAL DEFAULT 0.6")
+                print("✅ range_sl column added")
+
 
         except Exception as e:
             print(f"⚠️  Phase 2 config migration warning: {e}")
@@ -208,10 +291,12 @@ class DatabaseManager:
                 risk_percent, max_positions, timeframe, strategy,
                 trend_tp1, trend_tp2, trend_tp3,
                 range_tp1, range_tp2, range_tp3,
-                total_position_size, use_3_position_mode, min_order_size, trailing_stop_pct,
+                total_position_size, use_3_position_mode, min_order_size,
+                use_trailing_stops, trailing_stop_pct,
+                use_regime_based_sl, trend_sl, range_sl,
                 telegram_enabled, telegram_token, telegram_chat_id,
                 dry_run, testnet, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             config.bot_id, config.name, config.symbol, config.exchange,
             config.api_key, config.api_secret,
@@ -219,9 +304,13 @@ class DatabaseManager:
             config.trend_tp1, config.trend_tp2, config.trend_tp3,
             config.range_tp1, config.range_tp2, config.range_tp3,
             getattr(config, 'total_position_size', None),
-            1 if getattr(config, 'use_3_position_mode', False) else 0,
+            1 if getattr(config, 'use_3_position_mode', True) else 0,
             getattr(config, 'min_order_size', None),
+            1 if getattr(config, 'use_trailing_stops', True) else 0,
             getattr(config, 'trailing_stop_pct', 0.5),
+            1 if getattr(config, 'use_regime_based_sl', False) else 0,
+            getattr(config, 'trend_sl', 0.8),
+            getattr(config, 'range_sl', 0.6),
             1 if config.telegram_enabled else 0,
             config.telegram_token, config.telegram_chat_id,
             1 if config.dry_run else 0,
@@ -252,9 +341,13 @@ class DatabaseManager:
                 max_positions=row['max_positions'],
                 timeframe=row['timeframe'],
                 total_position_size=row['total_position_size'] if 'total_position_size' in columns else None,
-                use_3_position_mode=bool(row['use_3_position_mode']) if 'use_3_position_mode' in columns else False,
+                use_3_position_mode=bool(row['use_3_position_mode']) if 'use_3_position_mode' in columns else True,
                 min_order_size=row['min_order_size'] if 'min_order_size' in columns else None,
+                use_trailing_stops=bool(row['use_trailing_stops']) if 'use_trailing_stops' in columns else True,
                 trailing_stop_pct=row['trailing_stop_pct'] if 'trailing_stop_pct' in columns else 0.5,
+                use_regime_based_sl=bool(row['use_regime_based_sl']) if 'use_regime_based_sl' in columns else False,
+                trend_sl=row['trend_sl'] if 'trend_sl' in columns else 0.8,
+                range_sl=row['range_sl'] if 'range_sl' in columns else 0.6,
                 strategy=row['strategy'],
                 trend_tp1=row['trend_tp1'],
                 trend_tp2=row['trend_tp2'],
@@ -347,14 +440,14 @@ class DatabaseManager:
                     bot_id, symbol, order_id, open_time, close_time, duration_hours,
                     trade_type, amount, entry_price, close_price,
                     stop_loss, take_profit, profit, profit_percent,
-                    status, market_regime, comment, position_group_id, position_num
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, market_regime, comment, position_group_id, position_num, trailing_stop_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade.bot_id, trade.symbol, trade.order_id, trade.open_time, trade.close_time, trade.duration_hours,
                 trade.trade_type, trade.amount, trade.entry_price, trade.close_price,
                 trade.stop_loss, trade.take_profit, trade.profit, trade.profit_percent,
                 trade.status, trade.market_regime, trade.comment,
-                trade.position_group_id, trade.position_num
+                trade.position_group_id, trade.position_num, 1 if trade.trailing_stop_active else 0
             ))
 
             self.conn.commit()
@@ -396,7 +489,8 @@ class DatabaseManager:
                 market_regime=row['market_regime'],
                 comment=row['comment'],
                 position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
-                position_num=row['position_num'] if 'position_num' in columns else 0
+                position_num=row['position_num'] if 'position_num' in columns else 0,
+                trailing_stop_active=bool(row['trailing_stop_active']) if 'trailing_stop_active' in columns else False
             ))
 
         return trades
@@ -433,7 +527,8 @@ class DatabaseManager:
                 market_regime=row['market_regime'],
                 comment=row['comment'],
                 position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
-                position_num=row['position_num'] if 'position_num' in columns else 0
+                position_num=row['position_num'] if 'position_num' in columns else 0,
+                trailing_stop_active=bool(row['trailing_stop_active']) if 'trailing_stop_active' in columns else False
             ))
 
         return trades
@@ -456,19 +551,171 @@ class DatabaseManager:
                     profit = ?,
                     profit_percent = ?,
                     status = ?,
-                    comment = ?
+                    comment = ?,
+                    stop_loss = ?,
+                    take_profit = ?,
+                    trailing_stop_active = ?
                 WHERE bot_id = ? AND order_id = ?
             """, (
                 trade.close_time, trade.duration_hours, trade.close_price,
                 trade.profit, trade.profit_percent, trade.status, trade.comment,
+                trade.stop_loss, trade.take_profit, 1 if trade.trailing_stop_active else 0,
                 trade.bot_id, trade.order_id
             ))
+
+            # FIX: Add logging to detect update failures
+            rows_affected = cursor.rowcount
+            if rows_affected == 0:
+                print(f"⚠️  WARNING: update_trade() affected 0 rows for order_id={trade.order_id}")
+                print(f"   Bot: {trade.bot_id}, Status: {trade.status}")
+                print(f"   This means the trade was not found in database!")
+                print(f"   Possible reasons: order_id mismatch, trade never added, or already deleted")
+
+                # Debug: check if trade exists with similar order_id
+                cursor.execute("""
+                    SELECT order_id, status FROM trades
+                    WHERE bot_id = ?
+                    ORDER BY open_time DESC LIMIT 5
+                """, (trade.bot_id,))
+                recent = cursor.fetchall()
+                if recent:
+                    print(f"   Recent order_ids in DB: {[r['order_id'] for r in recent]}")
+            else:
+                print(f"✅ Updated {rows_affected} trade(s): order_id={trade.order_id}, status={trade.status}")
 
             self.conn.commit()
         except sqlite3.ProgrammingError as e:
             print(f"⚠️  Warning: Database error during trade update: {e}")
         except Exception as e:
             print(f"⚠️  Warning: Unexpected error during trade update: {e}")
+
+    def clear_trade_history(self, bot_id: str = None, keep_open: bool = True):
+        """Clear trade history from database
+
+        Args:
+            bot_id: If specified, only clear trades for this bot. If None, clear all.
+            keep_open: If True, keep OPEN positions. If False, delete everything.
+
+        Returns:
+            Number of trades deleted
+        """
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed")
+            return 0
+
+        try:
+            cursor = self.conn.cursor()
+
+            if keep_open:
+                if bot_id:
+                    cursor.execute("""
+                        DELETE FROM trades
+                        WHERE bot_id = ? AND status != 'OPEN'
+                    """, (bot_id,))
+                else:
+                    cursor.execute("""
+                        DELETE FROM trades
+                        WHERE status != 'OPEN'
+                    """)
+            else:
+                if bot_id:
+                    cursor.execute("""
+                        DELETE FROM trades
+                        WHERE bot_id = ?
+                    """, (bot_id,))
+                else:
+                    cursor.execute("DELETE FROM trades")
+
+            rows_deleted = cursor.rowcount
+            self.conn.commit()
+
+            print(f"✅ Deleted {rows_deleted} trade record(s)")
+            return rows_deleted
+
+        except Exception as e:
+            print(f"❌ Error clearing trade history: {e}")
+            return 0
+
+    def clear_trade_events(self, bot_id: str = None):
+        """Clear trade events (TP hits, etc.) from database
+
+        Args:
+            bot_id: If specified, only clear events for this bot. If None, clear all.
+
+        Returns:
+            Number of events deleted
+        """
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed")
+            return 0
+
+        try:
+            cursor = self.conn.cursor()
+
+            if bot_id:
+                cursor.execute("""
+                    DELETE FROM trade_events
+                    WHERE bot_id = ?
+                """, (bot_id,))
+            else:
+                cursor.execute("DELETE FROM trade_events")
+
+            rows_deleted = cursor.rowcount
+            self.conn.commit()
+
+            print(f"✅ Deleted {rows_deleted} trade event(s)")
+            return rows_deleted
+
+        except Exception as e:
+            print(f"❌ Error clearing trade events: {e}")
+            return 0
+
+    def clear_position_groups(self, bot_id: str = None, keep_active: bool = True):
+        """Clear position groups from database
+
+        Args:
+            bot_id: If specified, only clear groups for this bot. If None, clear all.
+            keep_active: If True, keep ACTIVE groups. If False, delete everything.
+
+        Returns:
+            Number of groups deleted
+        """
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed")
+            return 0
+
+        try:
+            cursor = self.conn.cursor()
+
+            if keep_active:
+                if bot_id:
+                    cursor.execute("""
+                        DELETE FROM position_groups
+                        WHERE bot_id = ? AND status != 'ACTIVE'
+                    """, (bot_id,))
+                else:
+                    cursor.execute("""
+                        DELETE FROM position_groups
+                        WHERE status != 'ACTIVE'
+                    """)
+            else:
+                if bot_id:
+                    cursor.execute("""
+                        DELETE FROM position_groups
+                        WHERE bot_id = ?
+                    """, (bot_id,))
+                else:
+                    cursor.execute("DELETE FROM position_groups")
+
+            rows_deleted = cursor.rowcount
+            self.conn.commit()
+
+            print(f"✅ Deleted {rows_deleted} position group(s)")
+            return rows_deleted
+
+        except Exception as e:
+            print(f"❌ Error clearing position groups: {e}")
+            return 0
 
     def log(self, level: str, message: str, bot_id: str = None):
         """Add a log entry"""
@@ -487,6 +734,174 @@ class DatabaseManager:
             pass  # Silently skip if database is closed
         except Exception:
             pass  # Silently skip other errors during logging
+
+    # Trade Events methods
+    def log_trade_event(self, trade_id: int, bot_id: str, event_type: str, 
+                       position_num: int = None, position_group_id: str = None, details: str = None):
+        """Log a trade event (TP hit, SL hit, trailing activated, etc.)"""
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed, skipping event log for {bot_id}")
+            return
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO trade_events (
+                    trade_id, bot_id, event_type, event_time,
+                    position_num, position_group_id, details
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                trade_id, bot_id, event_type, datetime.now(),
+                position_num, position_group_id, details
+            ))
+            self.conn.commit()
+        except sqlite3.ProgrammingError as e:
+            print(f"⚠️  Warning: Database error during event log: {e}")
+        except Exception as e:
+            print(f"⚠️  Warning: Unexpected error during event log: {e}")
+
+    def get_trade_events(self, bot_id: str = None, trade_id: int = None, event_type: str = None):
+        """Get trade events with optional filters"""
+        if not self.conn:
+            return []
+
+        cursor = self.conn.cursor()
+        
+        # Build query based on filters
+        query = "SELECT * FROM trade_events WHERE 1=1"
+        params = []
+        
+        if bot_id:
+            query += " AND bot_id = ?"
+            params.append(bot_id)
+        
+        if trade_id:
+            query += " AND trade_id = ?"
+            params.append(trade_id)
+        
+        if event_type:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        
+        query += " ORDER BY event_time DESC LIMIT 1000"
+        
+        cursor.execute(query, params)
+        
+        events = []
+        for row in cursor.fetchall():
+            events.append({
+                'event_id': row['event_id'],
+                'trade_id': row['trade_id'],
+                'bot_id': row['bot_id'],
+                'event_type': row['event_type'],
+                'event_time': self._parse_datetime(row['event_time']),
+                'position_num': row['position_num'],
+                'position_group_id': row['position_group_id'],
+                'details': row['details']
+            })
+        
+        return events
+
+    # Position Groups methods (CRITICAL FIX #4)
+    def save_position_group(self, group):
+        """Save or update a position group"""
+        if not self.conn:
+            return
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO position_groups (
+                group_id, bot_id, tp1_hit, entry_price, max_price, min_price,
+                trade_type, tp1_close_price, status, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            group.group_id,
+            group.bot_id,
+            1 if group.tp1_hit else 0,
+            group.entry_price,
+            group.max_price,
+            group.min_price,
+            group.trade_type,
+            group.tp1_close_price,
+            group.status,
+            datetime.now()
+        ))
+        self.conn.commit()
+
+    def get_position_group(self, group_id: str):
+        """Get a position group by ID"""
+        if not self.conn:
+            return None
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM position_groups WHERE group_id = ?
+        """, (group_id,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        return PositionGroup(
+            group_id=row['group_id'],
+            bot_id=row['bot_id'],
+            tp1_hit=bool(row['tp1_hit']),
+            entry_price=row['entry_price'],
+            max_price=row['max_price'],
+            min_price=row['min_price'],
+            trade_type=row['trade_type'],
+            tp1_close_price=row['tp1_close_price'],
+            status=row['status'],
+            created_at=self._parse_datetime(row['created_at']),
+            updated_at=self._parse_datetime(row['updated_at'])
+        )
+
+    def get_active_position_groups(self, bot_id: str):
+        """Get all active position groups for a bot"""
+        if not self.conn:
+            return []
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM position_groups 
+            WHERE bot_id = ? AND status = 'ACTIVE'
+            ORDER BY created_at DESC
+        """, (bot_id,))
+        
+        groups = []
+        for row in cursor.fetchall():
+            groups.append(PositionGroup(
+                group_id=row['group_id'],
+                bot_id=row['bot_id'],
+                tp1_hit=bool(row['tp1_hit']),
+                entry_price=row['entry_price'],
+                max_price=row['max_price'],
+                min_price=row['min_price'],
+                trade_type=row['trade_type'],
+                tp1_close_price=row['tp1_close_price'],
+                status=row['status'],
+                created_at=self._parse_datetime(row['created_at']),
+                updated_at=self._parse_datetime(row['updated_at'])
+            ))
+        
+        return groups
+
+    def update_position_group(self, group):
+        """Update an existing position group"""
+        self.save_position_group(group)  # INSERT OR REPLACE handles update
+
+    def close_position_group(self, group_id: str):
+        """Mark a position group as closed"""
+        if not self.conn:
+            return
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE position_groups 
+            SET status = 'CLOSED', updated_at = ?
+            WHERE group_id = ?
+        """, (datetime.now(), group_id))
+        self.conn.commit()
 
     def close(self):
         """Close database connection"""
