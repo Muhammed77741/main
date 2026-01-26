@@ -80,10 +80,10 @@ class TPHitsViewer(QDialog):
 
         # TP hits table
         self.table = QTableWidget()
-        self.table.setColumnCount(11)
+        self.table.setColumnCount(14)
         self.table.setHorizontalHeaderLabels([
-            'Timestamp', 'Order ID', 'TP Level', 'Type', 'Amount',
-            'Entry', 'TP Target', 'Close Price', 'SL', 'Profit $', 'Profit %'
+            'Timestamp', 'Order ID', 'Pos #', 'Group', 'TP Level', 'Type', 'Amount',
+            'Entry', 'TP Target', 'Close Price', 'SL', 'Trailing', 'Profit $', 'Profit %'
         ])
 
         # Configure column widths
@@ -92,14 +92,17 @@ class TPHitsViewer(QDialog):
 
         self.table.setColumnWidth(0, 150)  # Timestamp
         self.table.setColumnWidth(1, 100)  # Order ID
-        self.table.setColumnWidth(2, 80)   # TP Level
-        self.table.setColumnWidth(3, 70)   # Type
-        self.table.setColumnWidth(4, 90)   # Amount
-        self.table.setColumnWidth(5, 90)   # Entry
-        self.table.setColumnWidth(6, 90)   # TP Target
-        self.table.setColumnWidth(7, 90)   # Close Price
-        self.table.setColumnWidth(8, 90)   # SL
-        self.table.setColumnWidth(9, 100)  # Profit $
+        self.table.setColumnWidth(2, 50)   # Pos #
+        self.table.setColumnWidth(3, 80)   # Group
+        self.table.setColumnWidth(4, 80)   # TP Level
+        self.table.setColumnWidth(5, 70)   # Type
+        self.table.setColumnWidth(6, 90)   # Amount
+        self.table.setColumnWidth(7, 90)   # Entry
+        self.table.setColumnWidth(8, 90)   # TP Target
+        self.table.setColumnWidth(9, 90)   # Close Price
+        self.table.setColumnWidth(10, 90)  # SL
+        self.table.setColumnWidth(11, 70)  # Trailing
+        self.table.setColumnWidth(12, 100) # Profit $
         # Profit % will stretch
 
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -200,6 +203,16 @@ class TPHitsViewer(QDialog):
                 # Order ID
                 self.table.setItem(i, 1, QTableWidgetItem(str(hit.get('Order_ID', ''))))
 
+                # Pos #
+                pos_num = hit.get('Position_Num', '')
+                pos_num_str = f"{pos_num}/3" if pos_num and pos_num != '' else '-'
+                self.table.setItem(i, 2, QTableWidgetItem(pos_num_str))
+
+                # Group (first 8 chars)
+                group_id = hit.get('Position_Group_ID', '')
+                group_str = group_id[:8] if group_id else '-'
+                self.table.setItem(i, 3, QTableWidgetItem(group_str))
+
                 # TP Level
                 tp_level = hit.get('TP_Level', '')
                 tp_item = QTableWidgetItem(tp_level)
@@ -212,25 +225,30 @@ class TPHitsViewer(QDialog):
                 elif tp_level == 'TP3':
                     tp_item.setBackground(QColor(180, 220, 180))  # Dark green
                     tp_counts['TP3'] += 1
-                self.table.setItem(i, 2, tp_item)
+                self.table.setItem(i, 4, tp_item)
 
                 # Type
-                self.table.setItem(i, 3, QTableWidgetItem(hit.get('Type', '')))
+                self.table.setItem(i, 5, QTableWidgetItem(hit.get('Type', '')))
 
                 # Amount
-                self.table.setItem(i, 4, QTableWidgetItem(hit.get('Amount', '')))
+                self.table.setItem(i, 6, QTableWidgetItem(hit.get('Amount', '')))
 
                 # Entry Price
-                self.table.setItem(i, 5, QTableWidgetItem(f"${float(hit.get('Entry_Price', 0)):.2f}"))
+                self.table.setItem(i, 7, QTableWidgetItem(f"${float(hit.get('Entry_Price', 0)):.2f}"))
 
                 # TP Target
-                self.table.setItem(i, 6, QTableWidgetItem(f"${float(hit.get('TP_Target', 0)):.2f}"))
+                self.table.setItem(i, 8, QTableWidgetItem(f"${float(hit.get('TP_Target', 0)):.2f}"))
 
                 # Current/Close Price
-                self.table.setItem(i, 7, QTableWidgetItem(f"${float(hit.get('Current_Price', 0)):.2f}"))
+                self.table.setItem(i, 9, QTableWidgetItem(f"${float(hit.get('Current_Price', 0)):.2f}"))
 
                 # SL
-                self.table.setItem(i, 8, QTableWidgetItem(f"${float(hit.get('SL', 0)):.2f}"))
+                self.table.setItem(i, 10, QTableWidgetItem(f"${float(hit.get('SL', 0)):.2f}"))
+
+                # Trailing
+                trailing = hit.get('Trailing_Active', '')
+                trailing_str = '✓' if trailing and str(trailing).lower() in ['true', '1', 'yes'] else '-'
+                self.table.setItem(i, 11, QTableWidgetItem(trailing_str))
 
                 # Profit $
                 profit = float(hit.get('Profit', 0))
@@ -239,7 +257,7 @@ class TPHitsViewer(QDialog):
                     profit_item.setForeground(Qt.darkGreen)
                 elif profit < 0:
                     profit_item.setForeground(Qt.red)
-                self.table.setItem(i, 9, profit_item)
+                self.table.setItem(i, 12, profit_item)
 
                 # Profit %
                 profit_pct = float(hit.get('Profit_Pct', 0))
@@ -248,7 +266,7 @@ class TPHitsViewer(QDialog):
                     profit_pct_item.setForeground(Qt.darkGreen)
                 elif profit_pct < 0:
                     profit_pct_item.setForeground(Qt.red)
-                self.table.setItem(i, 10, profit_pct_item)
+                self.table.setItem(i, 13, profit_pct_item)
 
                 total_profit += profit
 
