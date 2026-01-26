@@ -51,3 +51,4 @@ class TradeRecord:
     position_group_id: Optional[str] = None  # Groups 3 positions from same signal
     position_num: int = 0  # Position number (1, 2, or 3)
     trailing_stop_active: bool = False  # Whether trailing stop is currently active for this position
+    magic_number: Optional[int] = None  # MT5 Magic Number for position tracking

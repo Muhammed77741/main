@@ -222,6 +222,32 @@ class DatabaseManager:
         except Exception as e:
             print(f"⚠️  3-position migration warning: {e}")
 
+        # Migrate trades table - add magic_number column for Magic Number tracking
+        try:
+            cursor.execute("PRAGMA table_info(trades)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'magic_number' not in columns:
+                print("📊 Migrating trades table: adding magic_number column...")
+                cursor.execute("ALTER TABLE trades ADD COLUMN magic_number INTEGER")
+                print("✅ magic_number column added")
+
+        except Exception as e:
+            print(f"⚠️  Magic Number migration warning: {e}")
+
+        # Migrate position_groups table - add group_counter column
+        try:
+            cursor.execute("PRAGMA table_info(position_groups)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'group_counter' not in columns:
+                print("📊 Migrating position_groups table: adding group_counter column...")
+                cursor.execute("ALTER TABLE position_groups ADD COLUMN group_counter INTEGER")
+                print("✅ group_counter column added")
+
+        except Exception as e:
+            print(f"⚠️  group_counter migration warning: {e}")
+
         # Migrate bot_configs table - add Phase 2 position sizing columns
         try:
             cursor.execute("PRAGMA table_info(bot_configs)")

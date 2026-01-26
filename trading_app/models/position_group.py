@@ -31,5 +31,6 @@ class PositionGroup:
     trade_type: str  # 'BUY' or 'SELL'
     
     # Optional fields
+    group_counter: Optional[int] = None  # Counter for magic number generation (0-99)
     tp1_close_price: Optional[float] = None  # Price at which TP1 was closed
     status: str = 'ACTIVE'  # 'ACTIVE', 'CLOSED'
