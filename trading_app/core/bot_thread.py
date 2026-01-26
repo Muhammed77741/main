@@ -210,18 +210,17 @@ class BotThread(QThread):
             use_regime_based_sl=self.config.use_regime_based_sl,
             trend_sl=self.config.trend_sl,
             range_sl=self.config.range_sl,
-            max_hold_bars=self.config.max_hold_bars
+            max_hold_bars=self.config.max_hold_bars,
+            # Pass TP levels from config
+            trend_tp1=self.config.trend_tp1,
+            trend_tp2=self.config.trend_tp2,
+            trend_tp3=self.config.trend_tp3,
+            range_tp1=self.config.range_tp1,
+            range_tp2=self.config.range_tp2,
+            range_tp3=self.config.range_tp3
         )
 
-        # Set TP levels
-        self.bot.trend_tp1 = self.config.trend_tp1
-        self.bot.trend_tp2 = self.config.trend_tp2
-        self.bot.trend_tp3 = self.config.trend_tp3
-        self.bot.range_tp1 = self.config.range_tp1
-        self.bot.range_tp2 = self.config.range_tp2
-        self.bot.range_tp3 = self.config.range_tp3
-        
-        # Set database if available
+        # Set database if available (TP levels now passed in __init__)
         if self.db:
             self.bot.db = self.db
 

@@ -81,7 +81,9 @@ class LiveBotMT5FullAuto:
                  use_3_position_mode=False, total_position_size=None, min_order_size=None,
                  use_trailing_stops=True, trailing_stop_pct=0.5,
                  use_regime_based_sl=False, trend_sl=16, range_sl=12,
-                 max_hold_bars=100):
+                 max_hold_bars=100,
+                 trend_tp1=None, trend_tp2=None, trend_tp3=None,
+                 range_tp1=None, range_tp2=None, range_tp3=None):
         """
         Initialize bot
 
@@ -100,6 +102,8 @@ class LiveBotMT5FullAuto:
             trend_sl: TREND mode SL in points (default 16 for XAUUSD)
             range_sl: RANGE mode SL in points (default 12 for XAUUSD)
             max_hold_bars: Maximum bars to hold position before timeout (default 100, like backtest)
+            trend_tp1/2/3: TREND mode TP levels in points (optional, defaults: 30/55/90 for XAUUSD)
+            range_tp1/2/3: RANGE mode TP levels in points (optional, defaults: 20/35/50 for XAUUSD)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -132,15 +136,15 @@ class LiveBotMT5FullAuto:
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
         
-        # TREND MODE parameters (strong trend)
-        self.trend_tp1 = 30
-        self.trend_tp2 = 55
-        self.trend_tp3 = 90
+        # TREND MODE parameters (strong trend) - use provided values or defaults for XAUUSD
+        self.trend_tp1 = trend_tp1 if trend_tp1 is not None else 30
+        self.trend_tp2 = trend_tp2 if trend_tp2 is not None else 55
+        self.trend_tp3 = trend_tp3 if trend_tp3 is not None else 90
         
-        # RANGE MODE parameters (sideways)
-        self.range_tp1 = 20
-        self.range_tp2 = 35
-        self.range_tp3 = 50
+        # RANGE MODE parameters (sideways) - use provided values or defaults for XAUUSD
+        self.range_tp1 = range_tp1 if range_tp1 is not None else 20
+        self.range_tp2 = range_tp2 if range_tp2 is not None else 35
+        self.range_tp3 = range_tp3 if range_tp3 is not None else 50
         
         # Current market regime
         self.current_regime = 'RANGE'
@@ -805,8 +809,8 @@ class LiveBotMT5FullAuto:
                 # If not found in tracker, check database
                 if not pos1_closed_by_tp1 and self.use_database and self.db:
                     try:
-                        # Get all trades for this group
-                        all_trades = self.db.get_trades_by_bot(self.bot_id)
+                        # Get all trades for this bot (using correct method name)
+                        all_trades = self.db.get_trades(self.bot_id, limit=1000)
                         for trade in all_trades:
                             if (trade.position_group_id == group_id and 
                                 trade.position_num == 1 and
