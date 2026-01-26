@@ -466,14 +466,15 @@ class DatabaseManager:
                     bot_id, symbol, order_id, open_time, close_time, duration_hours,
                     trade_type, amount, entry_price, close_price,
                     stop_loss, take_profit, profit, profit_percent,
-                    status, market_regime, comment, position_group_id, position_num, trailing_stop_active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, market_regime, comment, position_group_id, position_num, trailing_stop_active, magic_number
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade.bot_id, trade.symbol, trade.order_id, trade.open_time, trade.close_time, trade.duration_hours,
                 trade.trade_type, trade.amount, trade.entry_price, trade.close_price,
                 trade.stop_loss, trade.take_profit, trade.profit, trade.profit_percent,
                 trade.status, trade.market_regime, trade.comment,
-                trade.position_group_id, trade.position_num, 1 if trade.trailing_stop_active else 0
+                trade.position_group_id, trade.position_num, 1 if trade.trailing_stop_active else 0,
+                trade.magic_number
             ))
 
             self.conn.commit()
@@ -516,7 +517,8 @@ class DatabaseManager:
                 comment=row['comment'],
                 position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
                 position_num=row['position_num'] if 'position_num' in columns else 0,
-                trailing_stop_active=bool(row['trailing_stop_active']) if 'trailing_stop_active' in columns else False
+                trailing_stop_active=bool(row['trailing_stop_active']) if 'trailing_stop_active' in columns else False,
+                magic_number=row['magic_number'] if 'magic_number' in columns else None
             ))
 
         return trades
@@ -554,7 +556,8 @@ class DatabaseManager:
                 comment=row['comment'],
                 position_group_id=row['position_group_id'] if 'position_group_id' in columns else None,
                 position_num=row['position_num'] if 'position_num' in columns else 0,
-                trailing_stop_active=bool(row['trailing_stop_active']) if 'trailing_stop_active' in columns else False
+                trailing_stop_active=bool(row['trailing_stop_active']) if 'trailing_stop_active' in columns else False,
+                magic_number=row['magic_number'] if 'magic_number' in columns else None
             ))
 
         return trades
@@ -838,8 +841,8 @@ class DatabaseManager:
         cursor.execute("""
             INSERT OR REPLACE INTO position_groups (
                 group_id, bot_id, tp1_hit, entry_price, max_price, min_price,
-                trade_type, tp1_close_price, status, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                trade_type, tp1_close_price, status, group_counter, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             group.group_id,
             group.bot_id,
@@ -850,6 +853,7 @@ class DatabaseManager:
             group.trade_type,
             group.tp1_close_price,
             group.status,
+            group.group_counter if hasattr(group, 'group_counter') else None,
             datetime.now()
         ))
         self.conn.commit()
@@ -868,6 +872,7 @@ class DatabaseManager:
         if not row:
             return None
         
+        columns = row.keys()
         return PositionGroup(
             group_id=row['group_id'],
             bot_id=row['bot_id'],
@@ -878,6 +883,7 @@ class DatabaseManager:
             trade_type=row['trade_type'],
             tp1_close_price=row['tp1_close_price'],
             status=row['status'],
+            group_counter=row['group_counter'] if 'group_counter' in columns else None,
             created_at=self._parse_datetime(row['created_at']),
             updated_at=self._parse_datetime(row['updated_at'])
         )
@@ -896,6 +902,7 @@ class DatabaseManager:
         
         groups = []
         for row in cursor.fetchall():
+            columns = row.keys()
             groups.append(PositionGroup(
                 group_id=row['group_id'],
                 bot_id=row['bot_id'],
@@ -906,6 +913,7 @@ class DatabaseManager:
                 trade_type=row['trade_type'],
                 tp1_close_price=row['tp1_close_price'],
                 status=row['status'],
+                group_counter=row['group_counter'] if 'group_counter' in columns else None,
                 created_at=self._parse_datetime(row['created_at']),
                 updated_at=self._parse_datetime(row['updated_at'])
             ))
