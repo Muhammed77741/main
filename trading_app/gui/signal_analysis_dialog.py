@@ -1,5 +1,5 @@
 """
-Signal Analysis Dialog - Backtest signal generation for BTC/ETH
+Signal Analysis Dialog - Backtest signal generation for trading bots
 Shows signals that would have been generated in a date range
 """
 import sys
@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QGroupBox, QHeaderView, QDateEdit, QComboBox,
-    QSpinBox, QDoubleSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox
+    QSpinBox, QDoubleSpinBox, QProgressBar, QTextEdit, QMessageBox, QCheckBox, QWidget
 )
 from PySide6.QtCore import Qt, QThread, Signal, QDate
 from models import BotConfig
@@ -32,24 +32,46 @@ except ImportError as e:
 CRYPTO_TREND_TP = {'tp1': 1.5, 'tp2': 2.75, 'tp3': 4.5}      # TREND mode
 CRYPTO_RANGE_TP = {'tp1': 1.0, 'tp2': 1.75, 'tp3': 2.5}      # RANGE mode
 
-# For XAUUSD (Gold) - in points
-XAUUSD_TREND_TP = {'tp1': 30, 'tp2': 55, 'tp3': 90}          # TREND mode
-XAUUSD_RANGE_TP = {'tp1': 20, 'tp2': 35, 'tp3': 50}          # RANGE mode
+# For MT5 pairs (XAUUSD, EURUSD, GBPUSD, USDJPY, etc.) - in points/pips
+MT5_TREND_TP = {'tp1': 30, 'tp2': 55, 'tp3': 90}          # TREND mode (default for all MT5)
+MT5_RANGE_TP = {'tp1': 20, 'tp2': 35, 'tp3': 50}          # RANGE mode (default for all MT5)
 
 # Live Bot SL Configuration - Matches live bot settings
 # For Crypto (BTC/ETH) - in percentage of price
 CRYPTO_TREND_SL = 0.8     # TREND mode: 0.8% stop loss
 CRYPTO_RANGE_SL = 0.6     # RANGE mode: 0.6% stop loss
 
-# For XAUUSD (Gold) - in points
-XAUUSD_TREND_SL = 16      # TREND mode: 16 points stop loss
-XAUUSD_RANGE_SL = 12      # RANGE mode: 12 points stop loss
+# For MT5 pairs - in points/pips
+MT5_TREND_SL = 16      # TREND mode: 16 points stop loss (default for all MT5)
+MT5_RANGE_SL = 12      # RANGE mode: 12 points stop loss (default for all MT5)
 
 # Regime Detection Constants
 REGIME_LOOKBACK = 100                    # Bars to analyze for regime detection
 REGIME_STRUCTURAL_WINDOW = 20            # Window for structural trend analysis
 REGIME_STRUCTURAL_THRESHOLD = 12         # Threshold for higher highs/lower lows
 REGIME_TREND_SIGNALS_REQUIRED = 3        # Signals needed to classify as TREND
+
+
+def is_mt5_symbol(symbol: str) -> bool:
+    """Check if symbol is MT5 (not Binance crypto with /USDT)"""
+    if not symbol:
+        return True  # Default to MT5
+    symbol_upper = symbol.upper()
+    # Binance crypto pairs have / separator (BTC/USDT, ETH/USDT)
+    if '/' in symbol_upper:
+        return False  # Binance
+    # MT5 pairs: XAUUSD, EURUSD, GBPUSD, USDJPY, BTCUSD, ETHUSD, etc.
+    return True
+
+
+def is_crypto_symbol(symbol: str) -> bool:
+    """Check if symbol is cryptocurrency (BTC, ETH, etc.)"""
+    if not symbol:
+        return False
+    symbol_upper = symbol.upper()
+    # Check for crypto keywords
+    crypto_keywords = ['BTC', 'ETH', 'XRP', 'LTC', 'ADA', 'DOT', 'DOGE', 'SOL', 'AVAX', 'MATIC']
+    return any(keyword in symbol_upper for keyword in crypto_keywords)
 
 
 class SignalAnalysisWorker(QThread):
@@ -266,8 +288,8 @@ class SignalAnalysisWorker(QThread):
             # Calculate TP levels using live bot's logic
             if self.use_multi_tp:
                 # Use live bot's regime-based TP levels (or custom overrides)
-                is_xauusd = 'XAUUSD' in self.symbol.upper() or 'XAU' in self.symbol.upper()
-                
+                is_crypto = is_crypto_symbol(self.symbol)
+
                 # Get TP configuration (custom or default)
                 if self.custom_tp_levels:
                     # Use custom TP levels from GUI
@@ -277,22 +299,14 @@ class SignalAnalysisWorker(QThread):
                         tp_config = self.custom_tp_levels['range']
                 else:
                     # Use default TP levels
-                    if is_xauusd:
-                        tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
-                    else:
+                    if is_crypto:
+                        # Crypto uses percentage (both Binance BTC/USDT and MT5 BTCUSD)
                         tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
-                
-                if is_xauusd:
-                    # XAUUSD uses points
-                    if signal_type == 1:  # BUY
-                        tp1 = entry_price + tp_config['tp1']
-                        tp2 = entry_price + tp_config['tp2']
-                        tp3 = entry_price + tp_config['tp3']
-                    else:  # SELL
-                        tp1 = entry_price - tp_config['tp1']
-                        tp2 = entry_price - tp_config['tp2']
-                        tp3 = entry_price - tp_config['tp3']
-                else:
+                    else:
+                        # Forex/Commodities use points (XAUUSD, EURUSD, GBPUSD, etc.)
+                        tp_config = MT5_TREND_TP if regime == 'TREND' else MT5_RANGE_TP
+
+                if is_crypto:
                     # Crypto uses percentage
                     if signal_type == 1:  # BUY
                         tp1 = entry_price * (1 + tp_config['tp1'] / 100)
@@ -302,6 +316,16 @@ class SignalAnalysisWorker(QThread):
                         tp1 = entry_price * (1 - tp_config['tp1'] / 100)
                         tp2 = entry_price * (1 - tp_config['tp2'] / 100)
                         tp3 = entry_price * (1 - tp_config['tp3'] / 100)
+                else:
+                    # Forex/Commodities use points
+                    if signal_type == 1:  # BUY
+                        tp1 = entry_price + tp_config['tp1']
+                        tp2 = entry_price + tp_config['tp2']
+                        tp3 = entry_price + tp_config['tp3']
+                    else:  # SELL
+                        tp1 = entry_price - tp_config['tp1']
+                        tp2 = entry_price - tp_config['tp2']
+                        tp3 = entry_price - tp_config['tp3']
                 
                 # Calculate SL using custom values or defaults
                 if self.custom_sl_levels:
@@ -311,8 +335,8 @@ class SignalAnalysisWorker(QThread):
                     else:
                         sl_value = self.custom_sl_levels['range']
                     
-                    if is_xauusd:
-                        # XAUUSD uses points
+                    if not is_crypto:
+                        # Forex/Commodities use points
                         if signal_type == 1:  # BUY
                             stop_loss = entry_price - sl_value
                         else:  # SELL
@@ -325,8 +349,8 @@ class SignalAnalysisWorker(QThread):
                             stop_loss = entry_price * (1 + sl_value / 100)
                 else:
                     # Use default SL levels (same as live bot)
-                    if is_xauusd:
-                        sl_value = XAUUSD_TREND_SL if regime == 'TREND' else XAUUSD_RANGE_SL
+                    if not is_crypto:
+                        sl_value = MT5_TREND_SL if regime == 'TREND' else MT5_RANGE_SL
                         if signal_type == 1:  # BUY
                             stop_loss = entry_price - sl_value
                         else:  # SELL
@@ -383,6 +407,7 @@ class SignalAnalysisWorker(QThread):
                     new_row['profit_pct'] = pos_result['profit_pct']
                     new_row['bars_held'] = pos_result['bars']
                     new_row['tp_levels_hit'] = pos_result['tp_level_hit']
+                    new_row['close_reason'] = pos_result.get('close_reason', '')
                     new_row['tp1_used'] = tp1
                     new_row['tp2_used'] = tp2
                     new_row['tp3_used'] = tp3
@@ -436,18 +461,21 @@ class SignalAnalysisWorker(QThread):
         """
         # Track TP1 hit for trailing activation
         tp1_hit = False
-        
+
+        # Store original SL for position 1 (does not use breakeven)
+        original_stop_loss = stop_loss
+
         # Initialize positions - use_trailing_stops controls whether pos 2 & 3 use trailing
         positions = [
             {'position_num': 1, 'target_tp': tp1, 'use_trailing': False, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
             {'position_num': 2, 'target_tp': tp2, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
             {'position_num': 3, 'target_tp': tp3, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
         ]
-        
+
         # Tracking for trailing stops (positions 2 and 3)
         max_price_since_tp1 = entry_price  # For BUY
         min_price_since_tp1 = entry_price  # For SELL
-        
+
         bars = 0
         for future_idx, future_candle in future_candles.iterrows():
             bars += 1
@@ -461,48 +489,26 @@ class SignalAnalysisWorker(QThread):
                 if not tp1_hit and future_candle['high'] >= tp1:
                     tp1_hit = True
                     max_price_since_tp1 = future_candle['high']
-                    # Move SL to breakeven if enabled
+                    # Move SL to breakeven if enabled (only for positions 2&3)
                     if self.use_breakeven:
                         stop_loss = entry_price
-                
+
                 # Update max price since TP1 for trailing calculation
                 if tp1_hit:
                     max_price_since_tp1 = max(max_price_since_tp1, future_candle['high'])
-                
+
                 # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
                 if tp1_hit:
                     trailing_stop = max_price_since_tp1 - (max_price_since_tp1 - entry_price) * trailing_pct
                 else:
                     trailing_stop = stop_loss
-                
+
                 # Check each position
                 for pos in positions:
                     if not pos['active']:
                         continue
-                    
-                    # Determine active stop for this position
-                    if pos['use_trailing'] and tp1_hit:
-                        active_stop = trailing_stop
-                    else:
-                        active_stop = stop_loss
-                    
-                    # Check SL/Trailing Stop hit
-                    if future_candle['low'] <= active_stop:
-                        pnl = ((active_stop - entry_price) / entry_price) * 100
-                        pos['profit_pct'] = pnl
-                        pos['bars'] = bars
-                        pos['active'] = False
-                        if pnl < 0:
-                            pos['outcome'] = 'Loss ❌'
-                            pos['tp_level_hit'] = 'SL'
-                            pos['close_reason'] = 'SL'
-                        else:
-                            pos['outcome'] = 'Win ✅'
-                            pos['tp_level_hit'] = 'Trailing'
-                            pos['close_reason'] = 'Trailing Stop'
-                        continue
-                    
-                    # Check TP hit
+
+                    # Check TP hit FIRST (priority over SL/trailing)
                     if future_candle['high'] >= pos['target_tp']:
                         pnl = ((pos['target_tp'] - entry_price) / entry_price) * 100
                         pos['profit_pct'] = pnl
@@ -520,40 +526,22 @@ class SignalAnalysisWorker(QThread):
                             pos['tp_level_hit'] = 'TP3'
                             pos['close_reason'] = 'TP3'
                         continue
-            
-            else:  # SELL signal
-                # Check if TP1 hit (for trailing activation)
-                if not tp1_hit and future_candle['low'] <= tp1:
-                    tp1_hit = True
-                    min_price_since_tp1 = future_candle['low']
-                    # Move SL to breakeven if enabled
-                    if self.use_breakeven:
-                        stop_loss = entry_price
-                
-                # Update min price since TP1 for trailing calculation
-                if tp1_hit:
-                    min_price_since_tp1 = min(min_price_since_tp1, future_candle['low'])
-                
-                # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
-                if tp1_hit:
-                    trailing_stop = min_price_since_tp1 + (entry_price - min_price_since_tp1) * trailing_pct
-                else:
-                    trailing_stop = stop_loss
-                
-                # Check each position
-                for pos in positions:
-                    if not pos['active']:
-                        continue
-                    
+
                     # Determine active stop for this position
-                    if pos['use_trailing'] and tp1_hit:
+                    # Position 1 uses original SL (no breakeven), positions 2&3 use breakeven/trailing
+                    if pos['position_num'] == 1:
+                        # Position 1: always use original SL
+                        active_stop = original_stop_loss
+                    elif pos['use_trailing'] and tp1_hit:
+                        # Positions 2&3: use trailing stop after TP1
                         active_stop = trailing_stop
                     else:
+                        # Positions 2&3: use breakeven SL (if TP1 hit) or original SL
                         active_stop = stop_loss
-                    
-                    # Check SL/Trailing Stop hit
-                    if future_candle['high'] >= active_stop:
-                        pnl = ((entry_price - active_stop) / entry_price) * 100
+
+                    # Check SL/Trailing Stop hit (only if TP not hit)
+                    if future_candle['low'] <= active_stop:
+                        pnl = ((active_stop - entry_price) / entry_price) * 100
                         pos['profit_pct'] = pnl
                         pos['bars'] = bars
                         pos['active'] = False
@@ -563,11 +551,41 @@ class SignalAnalysisWorker(QThread):
                             pos['close_reason'] = 'SL'
                         else:
                             pos['outcome'] = 'Win ✅'
-                            pos['tp_level_hit'] = 'Trailing'
+                            # Show TP level instead of generic "Trailing"
+                            if pos['position_num'] == 1:
+                                pos['tp_level_hit'] = 'TP1'
+                            elif pos['position_num'] == 2:
+                                pos['tp_level_hit'] = 'TP2'
+                            else:
+                                pos['tp_level_hit'] = 'TP3'
                             pos['close_reason'] = 'Trailing Stop'
                         continue
-                    
-                    # Check TP hit
+            
+            else:  # SELL signal
+                # Check if TP1 hit (for trailing activation)
+                if not tp1_hit and future_candle['low'] <= tp1:
+                    tp1_hit = True
+                    min_price_since_tp1 = future_candle['low']
+                    # Move SL to breakeven if enabled (only for positions 2&3)
+                    if self.use_breakeven:
+                        stop_loss = entry_price
+
+                # Update min price since TP1 for trailing calculation
+                if tp1_hit:
+                    min_price_since_tp1 = min(min_price_since_tp1, future_candle['low'])
+
+                # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
+                if tp1_hit:
+                    trailing_stop = min_price_since_tp1 + (entry_price - min_price_since_tp1) * trailing_pct
+                else:
+                    trailing_stop = stop_loss
+
+                # Check each position
+                for pos in positions:
+                    if not pos['active']:
+                        continue
+
+                    # Check TP hit FIRST (priority over SL/trailing)
                     if future_candle['low'] <= pos['target_tp']:
                         pnl = ((entry_price - pos['target_tp']) / entry_price) * 100
                         pos['profit_pct'] = pnl
@@ -584,6 +602,40 @@ class SignalAnalysisWorker(QThread):
                         else:
                             pos['tp_level_hit'] = 'TP3'
                             pos['close_reason'] = 'TP3'
+                        continue
+
+                    # Determine active stop for this position
+                    # Position 1 uses original SL (no breakeven), positions 2&3 use breakeven/trailing
+                    if pos['position_num'] == 1:
+                        # Position 1: always use original SL
+                        active_stop = original_stop_loss
+                    elif pos['use_trailing'] and tp1_hit:
+                        # Positions 2&3: use trailing stop after TP1
+                        active_stop = trailing_stop
+                    else:
+                        # Positions 2&3: use breakeven SL (if TP1 hit) or original SL
+                        active_stop = stop_loss
+
+                    # Check SL/Trailing Stop hit (only if TP not hit)
+                    if future_candle['high'] >= active_stop:
+                        pnl = ((entry_price - active_stop) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        if pnl < 0:
+                            pos['outcome'] = 'Loss ❌'
+                            pos['tp_level_hit'] = 'SL'
+                            pos['close_reason'] = 'SL'
+                        else:
+                            pos['outcome'] = 'Win ✅'
+                            # Show TP level instead of generic "Trailing"
+                            if pos['position_num'] == 1:
+                                pos['tp_level_hit'] = 'TP1'
+                            elif pos['position_num'] == 2:
+                                pos['tp_level_hit'] = 'TP2'
+                            else:
+                                pos['tp_level_hit'] = 'TP3'
+                            pos['close_reason'] = 'Trailing Stop'
                         continue
             
             # Limit check to 100 bars
@@ -1139,8 +1191,8 @@ class SignalAnalysisWorkerMT5(QThread):
             # Calculate TP levels using live bot's logic
             if self.use_multi_tp:
                 # Use live bot's regime-based TP levels (or custom overrides)
-                is_xauusd = 'XAUUSD' in self.symbol.upper() or 'XAU' in self.symbol.upper()
-                
+                is_crypto = is_crypto_symbol(self.symbol)
+
                 # Get TP configuration (custom or default)
                 if self.custom_tp_levels:
                     # Use custom TP levels from GUI
@@ -1150,22 +1202,14 @@ class SignalAnalysisWorkerMT5(QThread):
                         tp_config = self.custom_tp_levels['range']
                 else:
                     # Use default TP levels
-                    if is_xauusd:
-                        tp_config = XAUUSD_TREND_TP if regime == 'TREND' else XAUUSD_RANGE_TP
-                    else:
+                    if is_crypto:
+                        # Crypto uses percentage (both Binance BTC/USDT and MT5 BTCUSD)
                         tp_config = CRYPTO_TREND_TP if regime == 'TREND' else CRYPTO_RANGE_TP
-                
-                if is_xauusd:
-                    # XAUUSD uses points
-                    if signal_type == 1:  # BUY
-                        tp1 = entry_price + tp_config['tp1']
-                        tp2 = entry_price + tp_config['tp2']
-                        tp3 = entry_price + tp_config['tp3']
-                    else:  # SELL
-                        tp1 = entry_price - tp_config['tp1']
-                        tp2 = entry_price - tp_config['tp2']
-                        tp3 = entry_price - tp_config['tp3']
-                else:
+                    else:
+                        # Forex/Commodities use points (XAUUSD, EURUSD, GBPUSD, etc.)
+                        tp_config = MT5_TREND_TP if regime == 'TREND' else MT5_RANGE_TP
+
+                if is_crypto:
                     # Crypto uses percentage
                     if signal_type == 1:  # BUY
                         tp1 = entry_price * (1 + tp_config['tp1'] / 100)
@@ -1175,6 +1219,16 @@ class SignalAnalysisWorkerMT5(QThread):
                         tp1 = entry_price * (1 - tp_config['tp1'] / 100)
                         tp2 = entry_price * (1 - tp_config['tp2'] / 100)
                         tp3 = entry_price * (1 - tp_config['tp3'] / 100)
+                else:
+                    # Forex/Commodities use points
+                    if signal_type == 1:  # BUY
+                        tp1 = entry_price + tp_config['tp1']
+                        tp2 = entry_price + tp_config['tp2']
+                        tp3 = entry_price + tp_config['tp3']
+                    else:  # SELL
+                        tp1 = entry_price - tp_config['tp1']
+                        tp2 = entry_price - tp_config['tp2']
+                        tp3 = entry_price - tp_config['tp3']
                 
                 # Calculate SL using custom values or defaults
                 if self.custom_sl_levels:
@@ -1184,8 +1238,8 @@ class SignalAnalysisWorkerMT5(QThread):
                     else:
                         sl_value = self.custom_sl_levels['range']
                     
-                    if is_xauusd:
-                        # XAUUSD uses points
+                    if not is_crypto:
+                        # Forex/Commodities use points
                         if signal_type == 1:  # BUY
                             stop_loss = entry_price - sl_value
                         else:  # SELL
@@ -1198,8 +1252,8 @@ class SignalAnalysisWorkerMT5(QThread):
                             stop_loss = entry_price * (1 + sl_value / 100)
                 else:
                     # Use default SL levels (same as live bot)
-                    if is_xauusd:
-                        sl_value = XAUUSD_TREND_SL if regime == 'TREND' else XAUUSD_RANGE_SL
+                    if not is_crypto:
+                        sl_value = MT5_TREND_SL if regime == 'TREND' else MT5_RANGE_SL
                         if signal_type == 1:  # BUY
                             stop_loss = entry_price - sl_value
                         else:  # SELL
@@ -1256,6 +1310,7 @@ class SignalAnalysisWorkerMT5(QThread):
                     new_row['profit_pct'] = pos_result['profit_pct']
                     new_row['bars_held'] = pos_result['bars']
                     new_row['tp_levels_hit'] = pos_result['tp_level_hit']
+                    new_row['close_reason'] = pos_result.get('close_reason', '')
                     new_row['tp1_used'] = tp1
                     new_row['tp2_used'] = tp2
                     new_row['tp3_used'] = tp3
@@ -1371,18 +1426,21 @@ class SignalAnalysisWorkerMT5(QThread):
         """
         # Track TP1 hit for trailing activation
         tp1_hit = False
-        
+
+        # Store original SL for position 1 (does not use breakeven)
+        original_stop_loss = stop_loss
+
         # Initialize positions - use_trailing_stops controls whether pos 2 & 3 use trailing
         positions = [
             {'position_num': 1, 'target_tp': tp1, 'use_trailing': False, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
             {'position_num': 2, 'target_tp': tp2, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'},
             {'position_num': 3, 'target_tp': tp3, 'use_trailing': self.use_trailing_stops, 'active': True, 'outcome': 'Timeout', 'profit_pct': 0.0, 'bars': 0, 'tp_level_hit': 'None', 'close_reason': 'Timeout'}
         ]
-        
+
         # Tracking for trailing stops (positions 2 and 3)
         max_price_since_tp1 = entry_price  # For BUY
         min_price_since_tp1 = entry_price  # For SELL
-        
+
         bars = 0
         for future_idx, future_candle in future_candles.iterrows():
             bars += 1
@@ -1396,48 +1454,26 @@ class SignalAnalysisWorkerMT5(QThread):
                 if not tp1_hit and future_candle['high'] >= tp1:
                     tp1_hit = True
                     max_price_since_tp1 = future_candle['high']
-                    # Move SL to breakeven if enabled
+                    # Move SL to breakeven if enabled (only for positions 2&3)
                     if self.use_breakeven:
                         stop_loss = entry_price
-                
+
                 # Update max price since TP1 for trailing calculation
                 if tp1_hit:
                     max_price_since_tp1 = max(max_price_since_tp1, future_candle['high'])
-                
+
                 # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
                 if tp1_hit:
                     trailing_stop = max_price_since_tp1 - (max_price_since_tp1 - entry_price) * trailing_pct
                 else:
                     trailing_stop = stop_loss
-                
+
                 # Check each position
                 for pos in positions:
                     if not pos['active']:
                         continue
-                    
-                    # Determine active stop for this position
-                    if pos['use_trailing'] and tp1_hit:
-                        active_stop = trailing_stop
-                    else:
-                        active_stop = stop_loss
-                    
-                    # Check SL/Trailing Stop hit
-                    if future_candle['low'] <= active_stop:
-                        pnl = ((active_stop - entry_price) / entry_price) * 100
-                        pos['profit_pct'] = pnl
-                        pos['bars'] = bars
-                        pos['active'] = False
-                        if pnl < 0:
-                            pos['outcome'] = 'Loss ❌'
-                            pos['tp_level_hit'] = 'SL'
-                            pos['close_reason'] = 'SL'
-                        else:
-                            pos['outcome'] = 'Win ✅'
-                            pos['tp_level_hit'] = 'Trailing'
-                            pos['close_reason'] = 'Trailing Stop'
-                        continue
-                    
-                    # Check TP hit
+
+                    # Check TP hit FIRST (priority over SL/trailing)
                     if future_candle['high'] >= pos['target_tp']:
                         pnl = ((pos['target_tp'] - entry_price) / entry_price) * 100
                         pos['profit_pct'] = pnl
@@ -1455,40 +1491,22 @@ class SignalAnalysisWorkerMT5(QThread):
                             pos['tp_level_hit'] = 'TP3'
                             pos['close_reason'] = 'TP3'
                         continue
-            
-            else:  # SELL signal
-                # Check if TP1 hit (for trailing activation)
-                if not tp1_hit and future_candle['low'] <= tp1:
-                    tp1_hit = True
-                    min_price_since_tp1 = future_candle['low']
-                    # Move SL to breakeven if enabled
-                    if self.use_breakeven:
-                        stop_loss = entry_price
-                
-                # Update min price since TP1 for trailing calculation
-                if tp1_hit:
-                    min_price_since_tp1 = min(min_price_since_tp1, future_candle['low'])
-                
-                # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
-                if tp1_hit:
-                    trailing_stop = min_price_since_tp1 + (entry_price - min_price_since_tp1) * trailing_pct
-                else:
-                    trailing_stop = stop_loss
-                
-                # Check each position
-                for pos in positions:
-                    if not pos['active']:
-                        continue
-                    
+
                     # Determine active stop for this position
-                    if pos['use_trailing'] and tp1_hit:
+                    # Position 1 uses original SL (no breakeven), positions 2&3 use breakeven/trailing
+                    if pos['position_num'] == 1:
+                        # Position 1: always use original SL
+                        active_stop = original_stop_loss
+                    elif pos['use_trailing'] and tp1_hit:
+                        # Positions 2&3: use trailing stop after TP1
                         active_stop = trailing_stop
                     else:
+                        # Positions 2&3: use breakeven SL (if TP1 hit) or original SL
                         active_stop = stop_loss
-                    
-                    # Check SL/Trailing Stop hit
-                    if future_candle['high'] >= active_stop:
-                        pnl = ((entry_price - active_stop) / entry_price) * 100
+
+                    # Check SL/Trailing Stop hit (only if TP not hit)
+                    if future_candle['low'] <= active_stop:
+                        pnl = ((active_stop - entry_price) / entry_price) * 100
                         pos['profit_pct'] = pnl
                         pos['bars'] = bars
                         pos['active'] = False
@@ -1498,11 +1516,41 @@ class SignalAnalysisWorkerMT5(QThread):
                             pos['close_reason'] = 'SL'
                         else:
                             pos['outcome'] = 'Win ✅'
-                            pos['tp_level_hit'] = 'Trailing'
+                            # Show TP level instead of generic "Trailing"
+                            if pos['position_num'] == 1:
+                                pos['tp_level_hit'] = 'TP1'
+                            elif pos['position_num'] == 2:
+                                pos['tp_level_hit'] = 'TP2'
+                            else:
+                                pos['tp_level_hit'] = 'TP3'
                             pos['close_reason'] = 'Trailing Stop'
                         continue
-                    
-                    # Check TP hit
+            
+            else:  # SELL signal
+                # Check if TP1 hit (for trailing activation)
+                if not tp1_hit and future_candle['low'] <= tp1:
+                    tp1_hit = True
+                    min_price_since_tp1 = future_candle['low']
+                    # Move SL to breakeven if enabled (only for positions 2&3)
+                    if self.use_breakeven:
+                        stop_loss = entry_price
+
+                # Update min price since TP1 for trailing calculation
+                if tp1_hit:
+                    min_price_since_tp1 = min(min_price_since_tp1, future_candle['low'])
+
+                # Calculate trailing stop for positions 2 and 3 (after TP1 hit)
+                if tp1_hit:
+                    trailing_stop = min_price_since_tp1 + (entry_price - min_price_since_tp1) * trailing_pct
+                else:
+                    trailing_stop = stop_loss
+
+                # Check each position
+                for pos in positions:
+                    if not pos['active']:
+                        continue
+
+                    # Check TP hit FIRST (priority over SL/trailing)
                     if future_candle['low'] <= pos['target_tp']:
                         pnl = ((entry_price - pos['target_tp']) / entry_price) * 100
                         pos['profit_pct'] = pnl
@@ -1519,6 +1567,40 @@ class SignalAnalysisWorkerMT5(QThread):
                         else:
                             pos['tp_level_hit'] = 'TP3'
                             pos['close_reason'] = 'TP3'
+                        continue
+
+                    # Determine active stop for this position
+                    # Position 1 uses original SL (no breakeven), positions 2&3 use breakeven/trailing
+                    if pos['position_num'] == 1:
+                        # Position 1: always use original SL
+                        active_stop = original_stop_loss
+                    elif pos['use_trailing'] and tp1_hit:
+                        # Positions 2&3: use trailing stop after TP1
+                        active_stop = trailing_stop
+                    else:
+                        # Positions 2&3: use breakeven SL (if TP1 hit) or original SL
+                        active_stop = stop_loss
+
+                    # Check SL/Trailing Stop hit (only if TP not hit)
+                    if future_candle['high'] >= active_stop:
+                        pnl = ((entry_price - active_stop) / entry_price) * 100
+                        pos['profit_pct'] = pnl
+                        pos['bars'] = bars
+                        pos['active'] = False
+                        if pnl < 0:
+                            pos['outcome'] = 'Loss ❌'
+                            pos['tp_level_hit'] = 'SL'
+                            pos['close_reason'] = 'SL'
+                        else:
+                            pos['outcome'] = 'Win ✅'
+                            # Show TP level instead of generic "Trailing"
+                            if pos['position_num'] == 1:
+                                pos['tp_level_hit'] = 'TP1'
+                            elif pos['position_num'] == 2:
+                                pos['tp_level_hit'] = 'TP2'
+                            else:
+                                pos['tp_level_hit'] = 'TP3'
+                            pos['close_reason'] = 'Trailing Stop'
                         continue
             
             # Limit check to 100 bars
@@ -2021,46 +2103,41 @@ class SignalAnalysisDialog(QDialog):
         """Create parameters section - compact layout"""
         group = QGroupBox("Analysis Parameters")
         layout = QVBoxLayout(group)
-        layout.setSpacing(2)  # Minimal spacing
-        layout.setContentsMargins(5, 5, 5, 5)  # Compact margins
-        
-        # Compact single row: Symbol, Timeframe, Days, Date range
+        layout.setSpacing(2)
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        # Compact single row: Symbol, Timeframe, Days, Date range, Balance
         row1 = QHBoxLayout()
         row1.setSpacing(5)
 
         row1.addWidget(QLabel("Symbol:"))
         self.symbol_combo = QComboBox()
-        # Determine symbol based on bot name and symbol
-        bot_name_upper = self.config.name.upper()
-        symbol_upper = self.config.symbol.upper() if self.config.symbol else ''
 
-        is_btc = (
-            'BTC' in bot_name_upper or
-            'BITCOIN' in bot_name_upper or
-            'BTC' in symbol_upper
-        )
-        is_eth = (
-            'ETH' in bot_name_upper or
-            'ETHEREUM' in bot_name_upper or
-            'ETH' in symbol_upper
-        )
-        is_xauusd = (
-            'XAUUSD' in bot_name_upper or
-            'GOLD' in bot_name_upper or
-            'XAU' in bot_name_upper or
-            'XAUUSD' in symbol_upper or
-            'XAU' in symbol_upper
-        )
+        # Determine symbol based on exchange type
+        exchange = self.config.exchange.upper() if self.config.exchange else ''
 
-        if is_xauusd:
-            self.symbol_combo.addItems(['XAUUSD'])
-        elif is_btc and not is_eth:
-            self.symbol_combo.addItems(['BTC/USDT'])
-        elif is_eth and not is_btc:
-            self.symbol_combo.addItems(['ETH/USDT'])
+        if exchange == 'MT5':
+            # MT5 bot - show current symbol only (XAUUSD, EURUSD, GBPUSD, USDJPY, etc.)
+            current_symbol = self.config.symbol if self.config.symbol else 'XAUUSD'
+            self.symbol_combo.addItems([current_symbol])
+        elif exchange == 'BINANCE':
+            # Binance bot - show crypto pairs
+            symbol_upper = self.config.symbol.upper() if self.config.symbol else ''
+
+            is_btc = 'BTC' in symbol_upper
+            is_eth = 'ETH' in symbol_upper
+
+            if is_btc and not is_eth:
+                self.symbol_combo.addItems(['BTC/USDT'])
+            elif is_eth and not is_btc:
+                self.symbol_combo.addItems(['ETH/USDT'])
+            else:
+                # Default: add both
+                self.symbol_combo.addItems(['BTC/USDT', 'ETH/USDT'])
         else:
-            # Default: add both
-            self.symbol_combo.addItems(['BTC/USDT', 'ETH/USDT'])
+            # Unknown exchange - use current symbol
+            current_symbol = self.config.symbol if self.config.symbol else 'XAUUSD'
+            self.symbol_combo.addItems([current_symbol])
 
         # Connect symbol change to update TP/SL labels dynamically and load saved defaults
         self.symbol_combo.currentTextChanged.connect(self.on_symbol_changed)
@@ -2098,13 +2175,7 @@ class SignalAnalysisDialog(QDialog):
         self.end_date.setMaximumWidth(100)
         row1.addWidget(self.end_date)
 
-        row1.addStretch()
-        layout.addLayout(row1)
-        
-        # Starting balance row
-        row_balance = QHBoxLayout()
-        row_balance.setSpacing(5)
-        row_balance.addWidget(QLabel("Starting Balance:"))
+        row1.addWidget(QLabel("Balance:"))
         self.starting_balance_spin = QDoubleSpinBox()
         self.starting_balance_spin.setRange(100, 10000000)
         self.starting_balance_spin.setValue(10000)  # Default $10,000
@@ -2112,241 +2183,271 @@ class SignalAnalysisDialog(QDialog):
         self.starting_balance_spin.setDecimals(2)
         self.starting_balance_spin.setSingleStep(1000)
         self.starting_balance_spin.setToolTip("Starting balance for USD profit/loss calculations")
-        self.starting_balance_spin.setMaximumWidth(150)
-        row_balance.addWidget(self.starting_balance_spin)
-        row_balance.addStretch()
-        layout.addLayout(row_balance)
+        self.starting_balance_spin.setMaximumWidth(120)
+        row1.addWidget(self.starting_balance_spin)
+
+        row1.addStretch()
+        layout.addLayout(row1)
 
         # Backtest Parameters (collapsible group)
         self.backtest_params_group = QGroupBox("⚙️ Backtest Parameters (optional)")
         self.backtest_params_group.setCheckable(True)
         self.backtest_params_group.setChecked(False)  # Collapsed by default
-        backtest_layout = QVBoxLayout(self.backtest_params_group)
-        backtest_layout.setSpacing(2)  # Compact spacing
-        backtest_layout.setContentsMargins(5, 5, 5, 5)
 
-        # TP/SL parameters
-        row3 = QHBoxLayout()
-        row3.setSpacing(5)
-        
+        backtest_layout = QVBoxLayout(self.backtest_params_group)
+        backtest_layout.setSpacing(1)
+        backtest_layout.setContentsMargins(3, 3, 3, 3)
+
+        # Two columns layout for backtest params
+        backtest_cols = QHBoxLayout()
+        backtest_cols.setSpacing(10)
+
+        # Left column
+        left_col = QVBoxLayout()
+        left_col.setSpacing(3)
+
         # TP Multiplier
-        row3.addWidget(QLabel("TP Multiplier:"))
+        tp_row = QHBoxLayout()
+        tp_row.addWidget(QLabel("TP Multiplier:"))
         self.tp_multiplier_spin = QSpinBox()
         self.tp_multiplier_spin.setRange(10, 500)
         self.tp_multiplier_spin.setValue(162)  # Default 1.618
         self.tp_multiplier_spin.setSuffix("% (x1.62)")
         self.tp_multiplier_spin.setToolTip("Take Profit as % of risk. 162% = 1.618 R:R, 262% = 2.618 R:R")
-        row3.addWidget(self.tp_multiplier_spin)
-        
-        # SL Multiplier  
-        row3.addWidget(QLabel("  SL Multiplier:"))
+        self.tp_multiplier_spin.setMaximumWidth(120)
+        tp_row.addWidget(self.tp_multiplier_spin)
+        tp_row.addStretch()
+        left_col.addLayout(tp_row)
+
+        # SL Multiplier
+        sl_row = QHBoxLayout()
+        sl_row.addWidget(QLabel("SL Multiplier:"))
         self.sl_multiplier_spin = QSpinBox()
         self.sl_multiplier_spin.setRange(50, 200)
         self.sl_multiplier_spin.setValue(100)  # Default 100% = 1.0x
         self.sl_multiplier_spin.setSuffix("% (x1.0)")
         self.sl_multiplier_spin.setToolTip("Stop Loss multiplier. 100% = default, 150% = wider SL")
-        row3.addWidget(self.sl_multiplier_spin)
+        self.sl_multiplier_spin.setMaximumWidth(120)
+        sl_row.addWidget(self.sl_multiplier_spin)
+        sl_row.addStretch()
+        left_col.addLayout(sl_row)
 
-        row3.addStretch()
-        backtest_layout.addLayout(row3)
+        backtest_cols.addLayout(left_col)
+
+        # Right column
+        right_col = QVBoxLayout()
+        right_col.setSpacing(3)
 
         # Multi-TP mode
-        row5 = QHBoxLayout()
-        row5.setSpacing(5)
-
-        self.use_multi_tp_check = QCheckBox("Use Multiple TP Levels (Live Bot Mode)")
+        multi_tp_row = QHBoxLayout()
+        self.use_multi_tp_check = QCheckBox("Use Multiple TP Levels")
         self.use_multi_tp_check.setChecked(True)  # Enabled by default for 3-position mode
         self.use_multi_tp_check.setToolTip(
             "Enable regime-based TP levels matching live bot:\n\n"
             "Crypto (BTC/ETH):\n"
             "  TREND: TP1=1.5%, TP2=2.75%, TP3=4.5%\n"
             "  RANGE: TP1=1.0%, TP2=1.75%, TP3=2.5%\n\n"
-            "XAUUSD (Gold):\n"
+            "MT5 (XAUUSD, EURUSD, GBPUSD, etc.):\n"
             "  TREND: TP1=30p, TP2=55p, TP3=90p\n"
             "  RANGE: TP1=20p, TP2=35p, TP3=50p\n\n"
             "Partial closes: TP1=50%, TP2=30%, TP3=20%\n"
             "SL moves to breakeven after TP1\n"
             "Market regime auto-detected (TREND/RANGE)"
         )
-        row5.addWidget(self.use_multi_tp_check)
+        multi_tp_row.addWidget(self.use_multi_tp_check)
+        multi_tp_row.addStretch()
+        right_col.addLayout(multi_tp_row)
 
-        row5.addStretch()
-        backtest_layout.addLayout(row5)
+        # Trailing stops checkbox
+        trailing_enable_row = QHBoxLayout()
+        self.use_trailing_check = QCheckBox("Enable Trailing Stops")
+        self.use_trailing_check.setChecked(True)
+        self.use_trailing_check.setToolTip("Enable trailing stops for positions 2 and 3 after TP1 is hit")
+        trailing_enable_row.addWidget(self.use_trailing_check)
+        trailing_enable_row.addStretch()
+        right_col.addLayout(trailing_enable_row)
 
-        # Multi-TP customization section (collapsible)
+        backtest_cols.addLayout(right_col)
+        backtest_cols.addStretch()
+
+        backtest_layout.addLayout(backtest_cols)
+
+        # Multi-TP customization section (collapsible) - в 2 колонки
         self.multi_tp_custom_group = QGroupBox("📊 Custom TP Levels (optional)")
         self.multi_tp_custom_group.setCheckable(True)
         self.multi_tp_custom_group.setChecked(False)  # Collapsed by default
         multi_tp_layout = QVBoxLayout(self.multi_tp_custom_group)
-        multi_tp_layout.setSpacing(2)
-        multi_tp_layout.setContentsMargins(5, 5, 5, 5)
+        multi_tp_layout.setSpacing(1)
+        multi_tp_layout.setContentsMargins(3, 3, 3, 3)
 
         # Connect checkbox to show/hide customization
         self.use_multi_tp_check.stateChanged.connect(self.on_multi_tp_changed)
 
-        # TREND mode TP levels
-        trend_row = QHBoxLayout()
-        trend_row.setSpacing(3)
-        trend_row.addWidget(QLabel("<b>TREND Mode:</b>"))
-        trend_row.addWidget(QLabel("TP1:"))
-        self.trend_tp1_spin = QSpinBox()
-        self.trend_tp1_spin.setRange(1, 1000)
-        self.trend_tp1_spin.setValue(int(CRYPTO_TREND_TP['tp1'] * 100))  # Convert to basis points for crypto
-        self.trend_tp1_spin.setSuffix(" (Crypto: 1.5% / Gold: 30p)")
-        self.trend_tp1_spin.setToolTip("TP1 for TREND mode.\nCrypto: 150 = 1.5%\nXAUUSD: 30 = 30 points")
-        trend_row.addWidget(self.trend_tp1_spin)
-        
-        trend_row.addWidget(QLabel("  TP2:"))
-        self.trend_tp2_spin = QSpinBox()
-        self.trend_tp2_spin.setRange(1, 1000)
-        self.trend_tp2_spin.setValue(int(CRYPTO_TREND_TP['tp2'] * 100))
-        self.trend_tp2_spin.setSuffix(" (Crypto: 2.75% / Gold: 55p)")
-        self.trend_tp2_spin.setToolTip("TP2 for TREND mode.\nCrypto: 275 = 2.75%\nXAUUSD: 55 = 55 points")
-        trend_row.addWidget(self.trend_tp2_spin)
-        
-        trend_row.addWidget(QLabel("  TP3:"))
-        self.trend_tp3_spin = QSpinBox()
-        self.trend_tp3_spin.setRange(1, 1000)
-        self.trend_tp3_spin.setValue(int(CRYPTO_TREND_TP['tp3'] * 100))
-        self.trend_tp3_spin.setSuffix(" (Crypto: 4.5% / Gold: 90p)")
-        self.trend_tp3_spin.setToolTip("TP3 for TREND mode.\nCrypto: 450 = 4.5%\nXAUUSD: 90 = 90 points")
-        trend_row.addWidget(self.trend_tp3_spin)
-        
-        trend_row.addStretch()
-        multi_tp_layout.addLayout(trend_row)
-        
-        # RANGE mode TP levels
-        range_row = QHBoxLayout()
-        range_row.setSpacing(3)
-        range_row.addWidget(QLabel("<b>RANGE Mode:</b>"))
-        range_row.addWidget(QLabel("TP1:"))
-        self.range_tp1_spin = QSpinBox()
-        self.range_tp1_spin.setRange(1, 1000)
-        self.range_tp1_spin.setValue(int(CRYPTO_RANGE_TP['tp1'] * 100))
-        self.range_tp1_spin.setSuffix(" (Crypto: 1.0% / Gold: 20p)")
-        self.range_tp1_spin.setToolTip("TP1 for RANGE mode.\nCrypto: 100 = 1.0%\nXAUUSD: 20 = 20 points")
-        range_row.addWidget(self.range_tp1_spin)
-        
-        range_row.addWidget(QLabel("  TP2:"))
-        self.range_tp2_spin = QSpinBox()
-        self.range_tp2_spin.setRange(1, 1000)
-        self.range_tp2_spin.setValue(int(CRYPTO_RANGE_TP['tp2'] * 100))
-        self.range_tp2_spin.setSuffix(" (Crypto: 1.75% / Gold: 35p)")
-        self.range_tp2_spin.setToolTip("TP2 for RANGE mode.\nCrypto: 175 = 1.75%\nXAUUSD: 35 = 35 points")
-        range_row.addWidget(self.range_tp2_spin)
-        
-        range_row.addWidget(QLabel("  TP3:"))
-        self.range_tp3_spin = QSpinBox()
-        self.range_tp3_spin.setRange(1, 1000)
-        self.range_tp3_spin.setValue(int(CRYPTO_RANGE_TP['tp3'] * 100))
-        self.range_tp3_spin.setSuffix(" (Crypto: 2.5% / Gold: 50p)")
-        self.range_tp3_spin.setToolTip("TP3 for RANGE mode.\nCrypto: 250 = 2.5%\nXAUUSD: 50 = 50 points")
-        range_row.addWidget(self.range_tp3_spin)
-        
-        range_row.addStretch()
-        multi_tp_layout.addLayout(range_row)
-        
-        # TREND mode SL levels
+        # Two columns for TP/SL settings
+        tp_sl_cols = QHBoxLayout()
+        tp_sl_cols.setSpacing(8)
+
+        # Left column - TREND Mode
+        trend_col = QVBoxLayout()
+        trend_col.setSpacing(1)
+
+        # TREND TP
+        trend_label = QLabel("<b>TREND:</b>")
+        trend_col.addWidget(trend_label)
+
+        trend_tp_row = QHBoxLayout()
+        trend_tp_row.setSpacing(2)
+        trend_tp_row.addWidget(QLabel("TP1:"))
+        self.trend_tp1_spin = QDoubleSpinBox()
+        self.trend_tp1_spin.setRange(0.001, 10000)
+        self.trend_tp1_spin.setDecimals(3)
+        self.trend_tp1_spin.setSingleStep(0.1)
+        self.trend_tp1_spin.setValue(CRYPTO_TREND_TP['tp1'] * 100)
+        self.trend_tp1_spin.setMaximumWidth(70)
+        self.trend_tp1_spin.setToolTip("TP1 TREND\nCrypto: 150 = 1.5%\nGold: 30p")
+        trend_tp_row.addWidget(self.trend_tp1_spin)
+        trend_tp_row.addWidget(QLabel("TP2:"))
+        self.trend_tp2_spin = QDoubleSpinBox()
+        self.trend_tp2_spin.setRange(0.001, 10000)
+        self.trend_tp2_spin.setDecimals(3)
+        self.trend_tp2_spin.setSingleStep(0.1)
+        self.trend_tp2_spin.setValue(CRYPTO_TREND_TP['tp2'] * 100)
+        self.trend_tp2_spin.setMaximumWidth(70)
+        self.trend_tp2_spin.setToolTip("TP2 TREND\nCrypto: 275 = 2.75%\nGold: 55p")
+        trend_tp_row.addWidget(self.trend_tp2_spin)
+        trend_tp_row.addWidget(QLabel("TP3:"))
+        self.trend_tp3_spin = QDoubleSpinBox()
+        self.trend_tp3_spin.setRange(0.001, 10000)
+        self.trend_tp3_spin.setDecimals(3)
+        self.trend_tp3_spin.setSingleStep(0.1)
+        self.trend_tp3_spin.setValue(CRYPTO_TREND_TP['tp3'] * 100)
+        self.trend_tp3_spin.setMaximumWidth(70)
+        self.trend_tp3_spin.setToolTip("TP3 TREND\nCrypto: 450 = 4.5%\nGold: 90p")
+        trend_tp_row.addWidget(self.trend_tp3_spin)
+        trend_tp_row.addStretch()
+        trend_col.addLayout(trend_tp_row)
+
+        # TREND SL
         trend_sl_row = QHBoxLayout()
-        trend_sl_row.setSpacing(3)
-        trend_sl_row.addWidget(QLabel("<b>TREND Mode SL:</b>"))
-        self.trend_sl_spin = QSpinBox()
-        self.trend_sl_spin.setRange(1, 500)
-        self.trend_sl_spin.setValue(int(CRYPTO_TREND_SL * 100))  # Convert to basis points for crypto
-        self.trend_sl_spin.setSuffix(" (Crypto: 0.8% / Gold: 16p)")
-        self.trend_sl_spin.setToolTip("Stop Loss for TREND mode.\nCrypto: 80 = 0.8%\nXAUUSD: 16 = 16 points")
+        trend_sl_row.setSpacing(2)
+        trend_sl_row.addWidget(QLabel("SL:"))
+        self.trend_sl_spin = QDoubleSpinBox()
+        self.trend_sl_spin.setRange(0.001, 5000)
+        self.trend_sl_spin.setDecimals(3)
+        self.trend_sl_spin.setSingleStep(0.1)
+        self.trend_sl_spin.setValue(CRYPTO_TREND_SL * 100)
+        self.trend_sl_spin.setMaximumWidth(70)
+        self.trend_sl_spin.setToolTip("SL TREND\nCrypto: 80 = 0.8%\nGold: 16p")
         trend_sl_row.addWidget(self.trend_sl_spin)
         trend_sl_row.addStretch()
-        multi_tp_layout.addLayout(trend_sl_row)
-        
-        # RANGE mode SL levels
+        trend_col.addLayout(trend_sl_row)
+
+        tp_sl_cols.addLayout(trend_col)
+
+        # Right column - RANGE Mode
+        range_col = QVBoxLayout()
+        range_col.setSpacing(1)
+
+        # RANGE TP
+        range_label = QLabel("<b>RANGE:</b>")
+        range_col.addWidget(range_label)
+
+        range_tp_row = QHBoxLayout()
+        range_tp_row.setSpacing(2)
+        range_tp_row.addWidget(QLabel("TP1:"))
+        self.range_tp1_spin = QDoubleSpinBox()
+        self.range_tp1_spin.setRange(0.001, 10000)
+        self.range_tp1_spin.setDecimals(3)
+        self.range_tp1_spin.setSingleStep(0.1)
+        self.range_tp1_spin.setValue(CRYPTO_RANGE_TP['tp1'] * 100)
+        self.range_tp1_spin.setMaximumWidth(70)
+        self.range_tp1_spin.setToolTip("TP1 RANGE\nCrypto: 100 = 1.0%\nGold: 20p")
+        range_tp_row.addWidget(self.range_tp1_spin)
+        range_tp_row.addWidget(QLabel("TP2:"))
+        self.range_tp2_spin = QDoubleSpinBox()
+        self.range_tp2_spin.setRange(0.001, 10000)
+        self.range_tp2_spin.setDecimals(3)
+        self.range_tp2_spin.setSingleStep(0.1)
+        self.range_tp2_spin.setValue(CRYPTO_RANGE_TP['tp2'] * 100)
+        self.range_tp2_spin.setMaximumWidth(70)
+        self.range_tp2_spin.setToolTip("TP2 RANGE\nCrypto: 175 = 1.75%\nGold: 35p")
+        range_tp_row.addWidget(self.range_tp2_spin)
+        range_tp_row.addWidget(QLabel("TP3:"))
+        self.range_tp3_spin = QDoubleSpinBox()
+        self.range_tp3_spin.setRange(0.001, 10000)
+        self.range_tp3_spin.setDecimals(3)
+        self.range_tp3_spin.setSingleStep(0.1)
+        self.range_tp3_spin.setValue(CRYPTO_RANGE_TP['tp3'] * 100)
+        self.range_tp3_spin.setMaximumWidth(70)
+        self.range_tp3_spin.setToolTip("TP3 RANGE\nCrypto: 250 = 2.5%\nGold: 50p")
+        range_tp_row.addWidget(self.range_tp3_spin)
+        range_tp_row.addStretch()
+        range_col.addLayout(range_tp_row)
+
+        # RANGE SL
         range_sl_row = QHBoxLayout()
-        range_sl_row.setSpacing(3)
-        range_sl_row.addWidget(QLabel("<b>RANGE Mode SL:</b>"))
-        self.range_sl_spin = QSpinBox()
-        self.range_sl_spin.setRange(1, 500)
-        self.range_sl_spin.setValue(int(CRYPTO_RANGE_SL * 100))  # Convert to basis points for crypto
-        self.range_sl_spin.setSuffix(" (Crypto: 0.6% / Gold: 12p)")
-        self.range_sl_spin.setToolTip("Stop Loss for RANGE mode.\nCrypto: 60 = 0.6%\nXAUUSD: 12 = 12 points")
+        range_sl_row.setSpacing(2)
+        range_sl_row.addWidget(QLabel("SL:"))
+        self.range_sl_spin = QDoubleSpinBox()
+        self.range_sl_spin.setRange(0.001, 5000)
+        self.range_sl_spin.setDecimals(3)
+        self.range_sl_spin.setSingleStep(0.1)
+        self.range_sl_spin.setValue(CRYPTO_RANGE_SL * 100)
+        self.range_sl_spin.setMaximumWidth(70)
+        self.range_sl_spin.setToolTip("SL RANGE\nCrypto: 60 = 0.6%\nGold: 12p")
         range_sl_row.addWidget(self.range_sl_spin)
         range_sl_row.addStretch()
-        multi_tp_layout.addLayout(range_sl_row)
+        range_col.addLayout(range_sl_row)
 
-        # Trailing stop enable/disable checkbox
-        trailing_enable_row = QHBoxLayout()
-        trailing_enable_row.setSpacing(3)
-        self.use_trailing_check = QCheckBox("Enable Trailing Stops (Pos 2 & 3)")
-        self.use_trailing_check.setChecked(True)  # Enabled by default
-        self.use_trailing_check.setToolTip("Enable trailing stops for positions 2 and 3 after TP1 is hit")
-        trailing_enable_row.addWidget(self.use_trailing_check)
-        trailing_enable_row.addStretch()
-        multi_tp_layout.addLayout(trailing_enable_row)
-        
-        # Breakeven after TP1 checkbox
-        breakeven_row = QHBoxLayout()
-        breakeven_row.setSpacing(3)
-        self.use_breakeven_check = QCheckBox("Move SL to Breakeven after TP1")
-        self.use_breakeven_check.setChecked(True)  # Enabled by default to match current behavior
-        self.use_breakeven_check.setToolTip("When TP1 is hit, move stop loss to entry price (breakeven) to protect profits")
-        breakeven_row.addWidget(self.use_breakeven_check)
-        breakeven_row.addStretch()
-        multi_tp_layout.addLayout(breakeven_row)
+        tp_sl_cols.addLayout(range_col)
+        tp_sl_cols.addStretch()
+        multi_tp_layout.addLayout(tp_sl_cols)
 
-        # Trailing stop percentage (for 3-position mode)
-        trailing_row = QHBoxLayout()
-        trailing_row.setSpacing(3)
-        trailing_row.addWidget(QLabel("<b>Trailing Stop %:</b>"))
+        # Bottom row: Breakeven, Trailing %, Save button
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(5)
+
+        self.use_breakeven_check = QCheckBox("Breakeven after TP1")
+        self.use_breakeven_check.setChecked(True)
+        self.use_breakeven_check.setToolTip("Move SL to entry after TP1")
+        bottom_row.addWidget(self.use_breakeven_check)
+
+        bottom_row.addWidget(QLabel("Trail %:"))
         self.trailing_stop_spin = QSpinBox()
         self.trailing_stop_spin.setRange(10, 90)
-        self.trailing_stop_spin.setValue(50)  # Default 50%
+        self.trailing_stop_spin.setValue(50)
         self.trailing_stop_spin.setSuffix("%")
-        self.trailing_stop_spin.setToolTip("Trailing stop percentage for 3-position mode.\n50% = price can retrace 50% from max profit before closing.\nOnly applies when 3-position mode is enabled.")
-        trailing_row.addWidget(self.trailing_stop_spin)
-        trailing_row.addStretch()
-        multi_tp_layout.addLayout(trailing_row)
+        self.trailing_stop_spin.setMaximumWidth(60)
+        self.trailing_stop_spin.setToolTip("Trailing stop %")
+        bottom_row.addWidget(self.trailing_stop_spin)
 
-        # Help text for TP/SL values
-        help_label = QLabel(
-            "<i><small>For Crypto (BTC/ETH): Values are in basis points (100 = 1.0%)<br>"
-            "For XAUUSD (Gold): Values are in points directly</small></i>"
-        )
-        help_label.setStyleSheet("color: gray;")
-        multi_tp_layout.addWidget(help_label)
-        
-        # Save as Default button - very compact
-        save_button_row = QHBoxLayout()
-        save_button_row.addStretch()
-        self.save_tp_defaults_btn = QPushButton("💾")
-        self.save_tp_defaults_btn.setToolTip(
-            "Save current TP/SL values as defaults.\n"
-            "These values will be loaded automatically\n"
-            "when you open the Signal Analysis dialog."
-        )
+        bottom_row.addStretch()
+
+        self.save_tp_defaults_btn = QPushButton("💾 Save")
+        self.save_tp_defaults_btn.setToolTip("Save TP/SL defaults")
         self.save_tp_defaults_btn.clicked.connect(self.on_save_tp_defaults)
-        self.save_tp_defaults_btn.setMaximumWidth(35)
+        self.save_tp_defaults_btn.setMaximumWidth(70)
         self.save_tp_defaults_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
                 color: white;
                 border: none;
-                border-radius: 3px;
+                border-radius: 2px;
                 padding: 3px;
-                font-size: 14px;
+                font-size: 10px;
             }
             QPushButton:hover {
                 background-color: #45a049;
             }
         """)
-        save_button_row.addWidget(self.save_tp_defaults_btn)
-        save_button_row.addStretch()
-        multi_tp_layout.addLayout(save_button_row)
+        bottom_row.addWidget(self.save_tp_defaults_btn)
+
+        multi_tp_layout.addLayout(bottom_row)
 
         backtest_layout.addWidget(self.multi_tp_custom_group)
 
-        # Note about default strategy
-        note_label = QLabel(
-            "<i>Single-TP: TP/SL multipliers (Fibonacci-style) | Multi-TP: Regime-based TP (TREND/RANGE)</i>"
-        )
+        # Note - компактный
+        note_label = QLabel("<small><i>Single-TP: Fibonacci | Multi-TP: Regime-based (TREND/RANGE)</i></small>")
         note_label.setStyleSheet("color: gray;")
         backtest_layout.addWidget(note_label)
 
@@ -2372,74 +2473,74 @@ class SignalAnalysisDialog(QDialog):
     def update_tp_sl_labels(self):
         """Update TP/SL spin box labels based on selected symbol"""
         symbol = self.symbol_combo.currentText()
-        is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
-        
-        if is_xauusd:
-            # XAUUSD - show only points
+        is_crypto = is_crypto_symbol(symbol)
+
+        if not is_crypto:
+            # Forex/Commodities - show points/pips
             self.trend_tp1_spin.setSuffix(" p")
-            self.trend_tp1_spin.setToolTip("TP1 for TREND mode (XAUUSD): 30 points")
-            self.trend_tp1_spin.setValue(XAUUSD_TREND_TP['tp1'])
-            
+            self.trend_tp1_spin.setToolTip(f"TP1 for TREND mode ({symbol}): 30 points")
+            self.trend_tp1_spin.setValue(MT5_TREND_TP['tp1'])
+
             self.trend_tp2_spin.setSuffix(" p")
-            self.trend_tp2_spin.setToolTip("TP2 for TREND mode (XAUUSD): 55 points")
-            self.trend_tp2_spin.setValue(XAUUSD_TREND_TP['tp2'])
-            
+            self.trend_tp2_spin.setToolTip(f"TP2 for TREND mode ({symbol}): 55 points")
+            self.trend_tp2_spin.setValue(MT5_TREND_TP['tp2'])
+
             self.trend_tp3_spin.setSuffix(" p")
-            self.trend_tp3_spin.setToolTip("TP3 for TREND mode (XAUUSD): 90 points")
-            self.trend_tp3_spin.setValue(XAUUSD_TREND_TP['tp3'])
-            
+            self.trend_tp3_spin.setToolTip(f"TP3 for TREND mode ({symbol}): 90 points")
+            self.trend_tp3_spin.setValue(MT5_TREND_TP['tp3'])
+
             self.range_tp1_spin.setSuffix(" p")
-            self.range_tp1_spin.setToolTip("TP1 for RANGE mode (XAUUSD): 20 points")
-            self.range_tp1_spin.setValue(XAUUSD_RANGE_TP['tp1'])
-            
+            self.range_tp1_spin.setToolTip(f"TP1 for RANGE mode ({symbol}): 20 points")
+            self.range_tp1_spin.setValue(MT5_RANGE_TP['tp1'])
+
             self.range_tp2_spin.setSuffix(" p")
-            self.range_tp2_spin.setToolTip("TP2 for RANGE mode (XAUUSD): 35 points")
-            self.range_tp2_spin.setValue(XAUUSD_RANGE_TP['tp2'])
-            
+            self.range_tp2_spin.setToolTip(f"TP2 for RANGE mode ({symbol}): 35 points")
+            self.range_tp2_spin.setValue(MT5_RANGE_TP['tp2'])
+
             self.range_tp3_spin.setSuffix(" p")
-            self.range_tp3_spin.setToolTip("TP3 for RANGE mode (XAUUSD): 50 points")
-            self.range_tp3_spin.setValue(XAUUSD_RANGE_TP['tp3'])
-            
+            self.range_tp3_spin.setToolTip(f"TP3 for RANGE mode ({symbol}): 50 points")
+            self.range_tp3_spin.setValue(MT5_RANGE_TP['tp3'])
+
             self.trend_sl_spin.setSuffix(" p")
-            self.trend_sl_spin.setToolTip("Stop Loss for TREND mode (XAUUSD): 16 points")
-            self.trend_sl_spin.setValue(XAUUSD_TREND_SL)
-            
+            self.trend_sl_spin.setToolTip(f"Stop Loss for TREND mode ({symbol}): 16 points")
+            self.trend_sl_spin.setValue(MT5_TREND_SL)
+
             self.range_sl_spin.setSuffix(" p")
-            self.range_sl_spin.setToolTip("Stop Loss for RANGE mode (XAUUSD): 12 points")
-            self.range_sl_spin.setValue(XAUUSD_RANGE_SL)
+            self.range_sl_spin.setToolTip(f"Stop Loss for RANGE mode ({symbol}): 12 points")
+            self.range_sl_spin.setValue(MT5_RANGE_SL)
         else:
             # Crypto - show only percentages (basis points)
             self.trend_tp1_spin.setSuffix(" (1.5%)")
             self.trend_tp1_spin.setToolTip("TP1 for TREND mode (Crypto): 150 basis points = 1.5%")
-            self.trend_tp1_spin.setValue(int(CRYPTO_TREND_TP['tp1'] * 100))
+            self.trend_tp1_spin.setValue(CRYPTO_TREND_TP['tp1'] * 100)
             
             self.trend_tp2_spin.setSuffix(" (2.75%)")
             self.trend_tp2_spin.setToolTip("TP2 for TREND mode (Crypto): 275 basis points = 2.75%")
-            self.trend_tp2_spin.setValue(int(CRYPTO_TREND_TP['tp2'] * 100))
+            self.trend_tp2_spin.setValue(CRYPTO_TREND_TP['tp2'] * 100)
             
             self.trend_tp3_spin.setSuffix(" (4.5%)")
             self.trend_tp3_spin.setToolTip("TP3 for TREND mode (Crypto): 450 basis points = 4.5%")
-            self.trend_tp3_spin.setValue(int(CRYPTO_TREND_TP['tp3'] * 100))
+            self.trend_tp3_spin.setValue(CRYPTO_TREND_TP['tp3'] * 100)
             
             self.range_tp1_spin.setSuffix(" (1.0%)")
             self.range_tp1_spin.setToolTip("TP1 for RANGE mode (Crypto): 100 basis points = 1.0%")
-            self.range_tp1_spin.setValue(int(CRYPTO_RANGE_TP['tp1'] * 100))
+            self.range_tp1_spin.setValue(CRYPTO_RANGE_TP['tp1'] * 100)
             
             self.range_tp2_spin.setSuffix(" (1.75%)")
             self.range_tp2_spin.setToolTip("TP2 for RANGE mode (Crypto): 175 basis points = 1.75%")
-            self.range_tp2_spin.setValue(int(CRYPTO_RANGE_TP['tp2'] * 100))
+            self.range_tp2_spin.setValue(CRYPTO_RANGE_TP['tp2'] * 100)
             
             self.range_tp3_spin.setSuffix(" (2.5%)")
             self.range_tp3_spin.setToolTip("TP3 for RANGE mode (Crypto): 250 basis points = 2.5%")
-            self.range_tp3_spin.setValue(int(CRYPTO_RANGE_TP['tp3'] * 100))
+            self.range_tp3_spin.setValue(CRYPTO_RANGE_TP['tp3'] * 100)
             
             self.trend_sl_spin.setSuffix(" (0.8%)")
             self.trend_sl_spin.setToolTip("Stop Loss for TREND mode (Crypto): 80 basis points = 0.8%")
-            self.trend_sl_spin.setValue(int(CRYPTO_TREND_SL * 100))
+            self.trend_sl_spin.setValue(CRYPTO_TREND_SL * 100)
             
             self.range_sl_spin.setSuffix(" (0.6%)")
             self.range_sl_spin.setToolTip("Stop Loss for RANGE mode (Crypto): 60 basis points = 0.6%")
-            self.range_sl_spin.setValue(int(CRYPTO_RANGE_SL * 100))
+            self.range_sl_spin.setValue(CRYPTO_RANGE_SL * 100)
     
     def on_save_tp_defaults(self):
         """Save current TP/SL values as defaults"""
@@ -2449,15 +2550,15 @@ class SignalAnalysisDialog(QDialog):
             
             # Get current symbol to determine which format to save
             symbol = self.symbol_combo.currentText()
-            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+            is_mt5 = is_mt5_symbol(symbol)
 
-            # Normalize symbol name for filename (BTC/USDT -> BTC, ETH/USDT -> ETH, XAUUSD -> XAUUSD)
+            # Normalize symbol name for filename (BTC/USDT -> BTC, ETH/USDT -> ETH, MT5 pairs as-is)
             symbol_key = symbol.split('/')[0] if '/' in symbol else symbol
 
             # Collect values from spin boxes
             settings = {
                 'symbol': symbol,
-                'is_xauusd': is_xauusd,
+                'is_mt5': is_mt5,
                 'trend_tp1': self.trend_tp1_spin.value(),
                 'trend_tp2': self.trend_tp2_spin.value(),
                 'trend_tp3': self.trend_tp3_spin.value(),
@@ -2504,7 +2605,7 @@ class SignalAnalysisDialog(QDialog):
 
             # Get current symbol
             symbol = self.symbol_combo.currentText()
-            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
+            is_mt5 = is_mt5_symbol(symbol)
 
             # Normalize symbol name for filename
             symbol_key = symbol.split('/')[0] if '/' in symbol else symbol
@@ -2642,9 +2743,9 @@ class SignalAnalysisDialog(QDialog):
         custom_tp_levels = None
         custom_sl_levels = None
         if use_multi_tp and self.multi_tp_custom_group.isChecked():
-            # Determine if crypto or XAUUSD
-            is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
-            
+            # Determine if crypto or forex/commodities
+            is_crypto = is_crypto_symbol(symbol)
+
             # Get TP values from spin boxes
             trend_tp1 = self.trend_tp1_spin.value()
             trend_tp2 = self.trend_tp2_spin.value()
@@ -2652,14 +2753,14 @@ class SignalAnalysisDialog(QDialog):
             range_tp1 = self.range_tp1_spin.value()
             range_tp2 = self.range_tp2_spin.value()
             range_tp3 = self.range_tp3_spin.value()
-            
+
             # Get SL values from spin boxes
             trend_sl = self.trend_sl_spin.value()
             range_sl = self.range_sl_spin.value()
-            
+
             # Convert values based on symbol type
-            if is_xauusd:
-                # For XAUUSD, values are already in points
+            if not is_crypto:
+                # For Forex/Commodities, values are already in points
                 custom_tp_levels = {
                     'trend': {'tp1': trend_tp1, 'tp2': trend_tp2, 'tp3': trend_tp3},
                     'range': {'tp1': range_tp1, 'tp2': range_tp2, 'tp3': range_tp3}
@@ -2688,11 +2789,11 @@ class SignalAnalysisDialog(QDialog):
         self.progress_label.setText("Starting analysis...")
         self.analyze_btn.setEnabled(False)
         
-        # Create and start worker (use MT5 worker for XAUUSD, Binance worker for others)
-        is_xauusd = symbol.upper() in ['XAUUSD', 'XAU']
-        
-        if is_xauusd:
-            # Use MT5 worker for XAUUSD
+        # Create and start worker (use MT5 worker for MT5 pairs, Binance worker for crypto)
+        is_mt5 = is_mt5_symbol(symbol)
+
+        if is_mt5:
+            # Use MT5 worker for MT5 pairs (XAUUSD, EURUSD, GBPUSD, etc.)
             self.worker = SignalAnalysisWorkerMT5(
                 symbol, days, start, end,
                 tp_multiplier, sl_multiplier, use_trailing, trailing_pct, timeframe, use_multi_tp,
@@ -2740,7 +2841,11 @@ class SignalAnalysisDialog(QDialog):
         
         # Store results
         self.current_results = signals_df
-        
+
+        # Determine if this is crypto or forex/commodities
+        symbol = self.symbol_combo.currentText()
+        is_crypto = is_crypto_symbol(symbol)
+
         # Update summary
         total_signals = len(signals_df)
         buy_signals = len(signals_df[signals_df['signal'] == 1])
@@ -2776,27 +2881,44 @@ class SignalAnalysisDialog(QDialog):
             pnl_color = 'green' if total_profit_pct > 0 else 'red' if total_profit_pct < 0 else 'gray'
             
             # Compact summary - key metrics in horizontal layout
+            # For crypto show %, for forex/commodities show $ only
+            if is_crypto:
+                pnl_display = f"{total_profit_pct:+.2f}%"
+            else:
+                pnl_display = f"${total_profit_usd:+.2f}"
+
             summary_text = (
                 f"<b>Signals:</b> {total_signals} (📈{buy_signals} / 📉{sell_signals})  |  "
                 f"<b style='color: green;'>Wins:</b> {wins} ({win_rate:.1f}%)  |  "
                 f"<b style='color: red;'>Losses:</b> {losses}  |  "
                 f"<b>PF:</b> <span style='color: {'green' if profit_factor > 1 else 'red'};'>{profit_factor:.2f}</span><br>"
-                f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold;'>{total_profit_pct:+.2f}%</span> "
-                f"(<span style='color: {pnl_color}; font-weight: bold;'>${total_profit_usd:+.2f}</span>)  |  "
+                f"<b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold;'>{pnl_display}</span>  |  "
                 f"<b>Balance:</b> ${starting_balance:.2f} → ${starting_balance + total_profit_usd:.2f}<br>"
             )
-            
+
             # Second line with additional metrics
             if wins > 0 or losses > 0:
                 summary_text += f"<b>Avg:</b> "
                 if wins > 0:
-                    summary_text += f"<span style='color: green;'>Win +{avg_win:.2f}%</span>"
+                    if is_crypto:
+                        summary_text += f"<span style='color: green;'>Win +{avg_win:.2f}%</span>"
+                    else:
+                        avg_win_usd = signals_df[signals_df['outcome'].str.contains('Win', na=False)]['profit_usd'].mean()
+                        summary_text += f"<span style='color: green;'>Win +${avg_win_usd:.2f}</span>"
                 if wins > 0 and losses > 0:
                     summary_text += " / "
                 if losses > 0:
-                    summary_text += f"<span style='color: red;'>Loss {avg_loss:.2f}%</span>"
+                    if is_crypto:
+                        summary_text += f"<span style='color: red;'>Loss {avg_loss:.2f}%</span>"
+                    else:
+                        avg_loss_usd = signals_df[signals_df['outcome'].str.contains('Loss', na=False)]['profit_usd'].mean()
+                        summary_text += f"<span style='color: red;'>Loss ${avg_loss_usd:.2f}</span>"
                 if completed_trades > 0:
-                    summary_text += f"  |  <b>Exp:</b> {avg_pnl:+.2f}%"
+                    if is_crypto:
+                        summary_text += f"  |  <b>Exp:</b> {avg_pnl:+.2f}%"
+                    else:
+                        avg_pnl_usd = signals_df[signals_df['outcome'].str.contains('Win|Loss', na=False)]['profit_usd'].mean()
+                        summary_text += f"  |  <b>Exp:</b> ${avg_pnl_usd:+.2f}"
                 summary_text += "<br>"
             
             # Add multi-TP statistics if enabled (compact format)
@@ -3041,10 +3163,21 @@ class SignalAnalysisDialog(QDialog):
                 tp_level = row.get('tp_levels_hit', 'None')
                 if pd.isna(tp_level) or not tp_level:
                     tp_level = 'None'
-                tp_level_item = QTableWidgetItem(str(tp_level))
+
+                # Add "(Trailing)" suffix if closed by trailing stop
+                close_reason = row.get('close_reason', '')
+                display_text = str(tp_level)
+                if close_reason == 'Trailing Stop' and tp_level in ['TP2', 'TP3']:
+                    display_text = f"{tp_level} (Trailing)"
+
+                tp_level_item = QTableWidgetItem(display_text)
                 # Color code
                 if tp_level in ['TP1', 'TP2', 'TP3']:
-                    tp_level_item.setForeground(Qt.darkGreen)
+                    # Use blue for trailing stops, green for normal TP
+                    if close_reason == 'Trailing Stop':
+                        tp_level_item.setForeground(Qt.darkBlue)
+                    else:
+                        tp_level_item.setForeground(Qt.darkGreen)
                 elif tp_level == 'SL':
                     tp_level_item.setForeground(Qt.darkRed)
                 elif tp_level == 'Trailing':

@@ -589,6 +589,134 @@ class DatabaseManager:
         except Exception as e:
             print(f"⚠️  Warning: Unexpected error during trade update: {e}")
 
+    def clear_trade_history(self, bot_id: str = None, keep_open: bool = True):
+        """Clear trade history from database
+
+        Args:
+            bot_id: If specified, only clear trades for this bot. If None, clear all.
+            keep_open: If True, keep OPEN positions. If False, delete everything.
+
+        Returns:
+            Number of trades deleted
+        """
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed")
+            return 0
+
+        try:
+            cursor = self.conn.cursor()
+
+            if keep_open:
+                if bot_id:
+                    cursor.execute("""
+                        DELETE FROM trades
+                        WHERE bot_id = ? AND status != 'OPEN'
+                    """, (bot_id,))
+                else:
+                    cursor.execute("""
+                        DELETE FROM trades
+                        WHERE status != 'OPEN'
+                    """)
+            else:
+                if bot_id:
+                    cursor.execute("""
+                        DELETE FROM trades
+                        WHERE bot_id = ?
+                    """, (bot_id,))
+                else:
+                    cursor.execute("DELETE FROM trades")
+
+            rows_deleted = cursor.rowcount
+            self.conn.commit()
+
+            print(f"✅ Deleted {rows_deleted} trade record(s)")
+            return rows_deleted
+
+        except Exception as e:
+            print(f"❌ Error clearing trade history: {e}")
+            return 0
+
+    def clear_trade_events(self, bot_id: str = None):
+        """Clear trade events (TP hits, etc.) from database
+
+        Args:
+            bot_id: If specified, only clear events for this bot. If None, clear all.
+
+        Returns:
+            Number of events deleted
+        """
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed")
+            return 0
+
+        try:
+            cursor = self.conn.cursor()
+
+            if bot_id:
+                cursor.execute("""
+                    DELETE FROM trade_events
+                    WHERE bot_id = ?
+                """, (bot_id,))
+            else:
+                cursor.execute("DELETE FROM trade_events")
+
+            rows_deleted = cursor.rowcount
+            self.conn.commit()
+
+            print(f"✅ Deleted {rows_deleted} trade event(s)")
+            return rows_deleted
+
+        except Exception as e:
+            print(f"❌ Error clearing trade events: {e}")
+            return 0
+
+    def clear_position_groups(self, bot_id: str = None, keep_active: bool = True):
+        """Clear position groups from database
+
+        Args:
+            bot_id: If specified, only clear groups for this bot. If None, clear all.
+            keep_active: If True, keep ACTIVE groups. If False, delete everything.
+
+        Returns:
+            Number of groups deleted
+        """
+        if not self.conn:
+            print(f"⚠️  Warning: Database connection closed")
+            return 0
+
+        try:
+            cursor = self.conn.cursor()
+
+            if keep_active:
+                if bot_id:
+                    cursor.execute("""
+                        DELETE FROM position_groups
+                        WHERE bot_id = ? AND status != 'ACTIVE'
+                    """, (bot_id,))
+                else:
+                    cursor.execute("""
+                        DELETE FROM position_groups
+                        WHERE status != 'ACTIVE'
+                    """)
+            else:
+                if bot_id:
+                    cursor.execute("""
+                        DELETE FROM position_groups
+                        WHERE bot_id = ?
+                    """, (bot_id,))
+                else:
+                    cursor.execute("DELETE FROM position_groups")
+
+            rows_deleted = cursor.rowcount
+            self.conn.commit()
+
+            print(f"✅ Deleted {rows_deleted} position group(s)")
+            return rows_deleted
+
+        except Exception as e:
+            print(f"❌ Error clearing position groups: {e}")
+            return 0
+
     def log(self, level: str, message: str, bot_id: str = None):
         """Add a log entry"""
         # Check if connection is still valid

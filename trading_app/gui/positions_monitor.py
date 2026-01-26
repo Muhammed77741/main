@@ -59,6 +59,10 @@ class PositionFetcherThread(QThread):
                         current_price = ticker.get('last')
                     elif self.config.exchange == 'MT5':
                         import MetaTrader5 as mt5
+                        try:
+                            mt5.shutdown()
+                        except:
+                            pass
                         if mt5.initialize():
                             try:
                                 tick = mt5.symbol_info_tick(self.config.symbol)
@@ -110,7 +114,12 @@ class PositionFetcherThread(QThread):
             if self.config.exchange == 'MT5':
                 import MetaTrader5 as mt5
 
-                # Initialize MT5
+                # Initialize MT5 (shutdown first in case already connected)
+                try:
+                    mt5.shutdown()
+                except:
+                    pass
+
                 if not mt5.initialize():
                     print(f"⚠️  MT5 initialization failed: {mt5.last_error()}")
                     return positions
@@ -122,7 +131,26 @@ class PositionFetcherThread(QThread):
                         for pos in mt5_positions:
                             # Convert timestamp to datetime
                             created_time = datetime.fromtimestamp(pos.time) if pos.time else None
-                            
+
+                            # Enrich with position_num, position_group_id, and trailing_stop_active from database
+                            position_num = 0
+                            position_group_id = None
+                            trailing_stop_active = False
+
+                            if self.db_manager and pos.ticket:
+                                try:
+                                    db_trades = self.db_manager.get_open_trades(self.config.bot_id)
+                                    for trade in db_trades:
+                                        # Handle both regular and DRY- prefixed order_ids
+                                        trade_order_id = str(trade.order_id).replace('DRY-', '')
+                                        if trade_order_id == str(pos.ticket):
+                                            position_num = trade.position_num
+                                            position_group_id = trade.position_group_id
+                                            trailing_stop_active = trade.trailing_stop_active
+                                            break
+                                except Exception as e:
+                                    print(f"⚠️  Could not enrich position {pos.ticket} from DB: {e}")
+
                             positions.append({
                                 'id': pos.ticket,
                                 'side': 'buy' if pos.type == 0 else 'sell',
@@ -132,7 +160,10 @@ class PositionFetcherThread(QThread):
                                 'stopLoss': pos.sl,
                                 'takeProfit': pos.tp,
                                 'unrealizedPnl': pos.profit,
-                                'createdTime': created_time
+                                'createdTime': created_time,
+                                'position_num': position_num,
+                                'position_group_id': position_group_id,
+                                'trailing_stop_active': trailing_stop_active
                             })
                 finally:
                     # Always shutdown MT5 to avoid resource leaks
@@ -177,6 +208,20 @@ class PositionFetcherThread(QThread):
                 for i, pos in enumerate(binance_positions):
                     contracts = float(pos.get('contracts', 0))
                     if contracts > 0:
+                        # Enrich with position_num and position_group_id from database
+                        position_id = str(pos.get('id', ''))
+                        if self.db_manager and position_id:
+                            try:
+                                db_trades = self.db_manager.get_open_trades(self.config.bot_id)
+                                for trade in db_trades:
+                                    if str(trade.order_id) == position_id:
+                                        pos['position_num'] = trade.position_num
+                                        pos['position_group_id'] = trade.position_group_id
+                                        pos['trailing_stop_active'] = trade.trailing_stop_active
+                                        break
+                            except Exception as e:
+                                print(f"⚠️  Could not enrich position {position_id} from DB: {e}")
+
                         positions.append(pos)
 
         except Exception as e:
@@ -575,7 +620,20 @@ class PositionsMonitor(QDialog):
                                 continue
                             
                             price = tick.bid if order_type == mt5.ORDER_TYPE_SELL else tick.ask
-                            
+
+                            # Get appropriate filling mode for symbol
+                            symbol_info = mt5.symbol_info(self.config.symbol)
+                            if symbol_info:
+                                filling = symbol_info.filling_mode
+                                if filling & 1:  # FOK
+                                    filling_mode = mt5.ORDER_FILLING_FOK
+                                elif filling & 2:  # IOC
+                                    filling_mode = mt5.ORDER_FILLING_IOC
+                                else:  # RETURN
+                                    filling_mode = mt5.ORDER_FILLING_RETURN
+                            else:
+                                filling_mode = mt5.ORDER_FILLING_FOK  # Default
+
                             # Close request
                             request = {
                                 "action": mt5.TRADE_ACTION_DEAL,
@@ -588,7 +646,7 @@ class PositionsMonitor(QDialog):
                                 "magic": 234000,
                                 "comment": "Manual close from GUI",
                                 "type_time": mt5.ORDER_TIME_GTC,
-                                "type_filling": mt5.ORDER_FILLING_IOC,
+                                "type_filling": filling_mode,
                             }
                             
                             result = mt5.order_send(request)

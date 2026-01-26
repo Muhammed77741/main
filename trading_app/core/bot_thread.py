@@ -3,6 +3,7 @@ Bot Thread - runs trading bot in separate thread
 """
 import sys
 import os
+import io
 from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from typing import Optional
@@ -14,6 +15,101 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_bots'))
 
 from models import BotConfig, BotStatus, TradeRecord
+from core.mt5_manager import mt5_manager
+
+
+class StdoutRedirector(io.StringIO):
+    """Redirect stdout to GUI log"""
+
+    def __init__(self, log_signal, bot_id):
+        super().__init__()
+        self.log_signal = log_signal
+        self.bot_id = bot_id
+        self.buffer = ""
+
+    def write(self, text):
+        """Capture print output and emit to GUI - only important messages"""
+        if text and text.strip():
+            lines = text.split('\n')
+            for line in lines:
+                line_clean = line.strip()
+                if not line_clean:
+                    continue
+
+                # Filter: Only show important messages
+                # Show these:
+                important_keywords = [
+                    '🔍 Checking',  # Signal check iteration
+                    '❌ No valid signal',  # No signal found
+                    '❌',  # All error messages
+                    '🎯',  # Signal detected / TP hit
+                    '📈 OPENING',  # Opening positions
+                    '✅ Position opened',  # Position opened successfully
+                    '✅',  # All success messages
+                    '✅ Stop-loss updated',  # SL updated
+                    '⚠️',  # Warnings
+                    '🛑',  # Stop loss hit
+                    '📊 Trailing Stop Updated',  # Trailing update
+                    'SIGNAL DETECTED',
+                    'Position 1 closing',  # TP1 activation
+                    'Position 1 closed',  # TP1 activation
+                    'Activating trailing',
+                    'TP',
+                    'HIT',
+                    'CLOSED',
+                    'ERROR',
+                    'Failed',  # All failed messages
+                    'order failed',  # Order failures
+                    'retcode',  # MT5 error codes
+                    'Unsupported filling mode',  # Filling mode errors
+                    'Failed to connect',
+                    'Connected to',
+                    'Bot stopped',
+                    'Starting bot'
+                ]
+
+                # Skip verbose/debug messages
+                skip_patterns = [
+                    'Fetching',
+                    'Current bar',
+                    'OHLCV',
+                    'Calculating',
+                    'Open positions after',
+                    'Verifying positions',
+                    'Sleep',
+                    'Waiting for',
+                    'LIVE: Monitoring',
+                    'DRY RUN: Would',
+                    'Order ID:',
+                    'Size:',
+                    'Entry:',
+                    'Lot:',
+                    'TP:',
+                    'Risk:',
+                    'Regime:',
+                    'Total',
+                    'Position size',
+                    'Using',
+                    'Public API'
+                ]
+
+                # Check if line should be skipped
+                should_skip = any(pattern.lower() in line_clean.lower() for pattern in skip_patterns)
+                if should_skip:
+                    continue
+
+                # Check if line is important
+                is_important = any(keyword in line_clean for keyword in important_keywords)
+
+                # Show important messages
+                if is_important:
+                    self.log_signal.emit(line_clean)
+
+        return len(text)
+
+    def flush(self):
+        """Flush buffer (required by Python)"""
+        pass
 
 
 class BotThread(QThread):
@@ -37,7 +133,14 @@ class BotThread(QThread):
         self.running = True
         self._stop_requested = False
 
+        # Redirect stdout to capture all print() calls from bot
+        old_stdout = sys.stdout
+        stdout_redirector = StdoutRedirector(self.log_signal, self.config.bot_id)
+
         try:
+            # Start redirecting stdout
+            sys.stdout = stdout_redirector
+
             self.log_signal.emit(f"[{self.config.bot_id}] Starting bot...")
 
             # Initialize bot based on exchange
@@ -69,6 +172,9 @@ class BotThread(QThread):
             self.log_signal.emit(f"[{self.config.bot_id}] ERROR: {str(e)}")
 
         finally:
+            # Restore original stdout
+            sys.stdout = old_stdout
+
             self.running = False
             if self.bot:
                 try:
@@ -90,6 +196,7 @@ class BotThread(QThread):
             telegram_chat_id=self.config.telegram_chat_id if self.config.telegram_enabled else None,
             symbol=self.config.symbol,
             timeframe=self._get_mt5_timeframe(self.config.timeframe),
+            check_interval=self._get_timeframe_seconds(self.config.timeframe),  # Match timeframe
             risk_percent=self.config.risk_percent,
             max_positions=self.config.max_positions,
             dry_run=self.config.dry_run,
@@ -102,7 +209,8 @@ class BotThread(QThread):
             trailing_stop_pct=self.config.trailing_stop_pct,
             use_regime_based_sl=self.config.use_regime_based_sl,
             trend_sl=self.config.trend_sl,
-            range_sl=self.config.range_sl
+            range_sl=self.config.range_sl,
+            max_hold_bars=self.config.max_hold_bars
         )
 
         # Set TP levels
@@ -168,6 +276,9 @@ class BotThread(QThread):
             iteration += 1
 
             try:
+                # Log iteration check
+                self.log_signal.emit(f"🔍 Checking for signals... (iteration #{iteration})")
+
                 # Get market data and analyze
                 signal = self.bot.analyze_market()
 
@@ -177,14 +288,18 @@ class BotThread(QThread):
 
                 # Check if should trade
                 if signal and not self._stop_requested:
-                    # Open position
+                    # Signal found - opening position message will be shown by bot
                     success = self.bot.open_position(signal)
                     if success:
-                        self.log_signal.emit(f"[{self.config.bot_id}] Position opened")
-                        
+                        self.log_signal.emit(f"✅ Position opened successfully")
+
                         # Save DRY RUN trade to database
                         if self.config.dry_run and self.db:
                             self._save_dry_run_trade(signal)
+                else:
+                    # No signal found
+                    if not self._stop_requested:
+                        self.log_signal.emit(f"❌ No valid signal found")
 
                 # Wait until next candle close (with position monitoring every 5 seconds)
                 self._wait_for_next_candle_with_monitoring()
@@ -194,23 +309,45 @@ class BotThread(QThread):
                 time.sleep(60)  # Wait before retrying
 
     def _get_bot_status(self) -> BotStatus:
-        """Get current bot status"""
+        """Get current bot status (with caching to reduce MT5 API calls)"""
         try:
             # Get account info from bot
             if self.config.exchange == 'MT5':
                 import MetaTrader5 as mt5
-                account_info = mt5.account_info()
-                if account_info:
-                    balance = account_info.balance
-                    equity = account_info.equity
+
+                # Ensure MT5 connection before making API calls
+                if not mt5_manager.ensure_connection():
+                    # Return cached values or zeros if connection failed
+                    balance = getattr(self, '_cached_balance', 0)
+                    equity = getattr(self, '_cached_equity', 0)
                     pnl = equity - balance
                     pnl_pct = (pnl / balance * 100) if balance > 0 else 0
+                    open_positions = getattr(self, '_cached_positions_count', 0)
                 else:
-                    balance = equity = pnl = pnl_pct = 0
+                    # Cache account info for 60 seconds to reduce MT5 API calls
+                    current_time = time.time()
+                    if not hasattr(self, '_last_account_update') or (current_time - self._last_account_update) > 60:
+                        account_info = mt5.account_info()
+                        if account_info:
+                            self._cached_balance = account_info.balance
+                            self._cached_equity = account_info.equity
+                            self._last_account_update = current_time
+                        else:
+                            self._cached_balance = self._cached_equity = 0
+                            self._last_account_update = current_time
 
-                # Get open positions
-                positions = mt5.positions_get(symbol=self.config.symbol)
-                open_positions = len(positions) if positions else 0
+                    balance = getattr(self, '_cached_balance', 0)
+                    equity = getattr(self, '_cached_equity', 0)
+                    pnl = equity - balance
+                    pnl_pct = (pnl / balance * 100) if balance > 0 else 0
+
+                    # Get open positions (cache for 30 seconds)
+                    if not hasattr(self, '_last_positions_update') or (current_time - self._last_positions_update) > 30:
+                        positions = mt5.positions_get(symbol=self.config.symbol)
+                        self._cached_positions_count = len(positions) if positions else 0
+                        self._last_positions_update = current_time
+
+                    open_positions = getattr(self, '_cached_positions_count', 0)
 
             else:  # Binance
                 try:
@@ -277,50 +414,51 @@ class BotThread(QThread):
     def _calculate_seconds_until_next_candle_close(self) -> tuple:
         """
         Calculate seconds until next candle close with precise timing
-        
+
         Returns:
             tuple: (seconds_until_close, next_close_datetime)
         """
         # Get timeframe in seconds
         timeframe_seconds = self._get_timeframe_seconds(self.config.timeframe)
-        
-        # Try to get accurate internet time first, fall back to system time
-        try:
-            import ntplib
-            from datetime import timezone
-            ntp_client = ntplib.NTPClient()
-            response = ntp_client.request('pool.ntp.org', version=3, timeout=2)
-            now = datetime.fromtimestamp(response.tx_time)
-            # Log that we're using NTP time (only once per session)
-            if not hasattr(self, '_ntp_time_logged'):
-                self.log_signal.emit(f"[{self.config.bot_id}] Using NTP time for precise synchronization")
-                self._ntp_time_logged = True
-        except Exception:
-            # Fall back to system time if NTP fails
-            now = datetime.now()
-            if not hasattr(self, '_system_time_logged'):
+
+        # Use cached NTP time offset to avoid slow NTP requests on every check
+        # Only sync NTP time once per session, then use system time with offset
+        if not hasattr(self, '_ntp_offset'):
+            try:
+                import ntplib
+                from datetime import timezone
+                ntp_client = ntplib.NTPClient()
+                response = ntp_client.request('pool.ntp.org', version=3, timeout=2)
+                system_time = time.time()
+                ntp_time = response.tx_time
+                self._ntp_offset = ntp_time - system_time
+                self.log_signal.emit(f"[{self.config.bot_id}] NTP time synced (offset: {self._ntp_offset:.2f}s)")
+            except Exception:
+                # No NTP available, use system time directly
+                self._ntp_offset = 0
                 self.log_signal.emit(f"[{self.config.bot_id}] Using system time (NTP unavailable)")
-                self._system_time_logged = True
-        
+
+        # Use system time with cached NTP offset for fast lookups
+        now = datetime.fromtimestamp(time.time() + self._ntp_offset)
         current_timestamp = int(now.timestamp())
-        
+
         # Calculate seconds since the last candle close
         seconds_since_close = current_timestamp % timeframe_seconds
-        
+
         # Calculate seconds until next candle close
         seconds_until_close = timeframe_seconds - seconds_since_close
-        
-        # Start 3 seconds BEFORE the candle close to allow strategy processing time
+
+        # Start 5 seconds BEFORE the candle close to allow strategy processing time
         # This ensures signals are ready exactly when the candle closes
-        seconds_until_close -= 3
-        
+        seconds_until_close -= 5
+
         # Ensure we don't go negative
         if seconds_until_close < 0:
             seconds_until_close += timeframe_seconds
-        
+
         # Calculate next close datetime
-        next_close = datetime.fromtimestamp(current_timestamp + seconds_until_close + 3)  # +3 to show actual candle close time
-        
+        next_close = datetime.fromtimestamp(current_timestamp + seconds_until_close + 5)  # +5 to show actual candle close time
+
         return seconds_until_close, next_close
 
     def _wait_for_next_candle_close(self):
