@@ -853,7 +853,7 @@ class DatabaseManager:
             group.trade_type,
             group.tp1_close_price,
             group.status,
-            group.group_counter if hasattr(group, 'group_counter') else None,
+            getattr(group, 'group_counter', None),
             datetime.now()
         ))
         self.conn.commit()
