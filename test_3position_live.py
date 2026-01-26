@@ -246,6 +246,30 @@ if response.strip().upper() != 'YES':
 
 # Open 3 positions
 print("\n[6] Opening 3 positions...")
+
+# Verify MT5 connection before proceeding
+if not mt5.terminal_info():
+    print("\nERROR: MT5 terminal connection lost!")
+    print("Please check:")
+    print("  - MT5 terminal is running")
+    print("  - MT5 is logged in to your account")
+    print("  - AutoTrading is enabled (green button)")
+    db_conn.close()
+    mt5.shutdown()
+    sys.exit(1)
+
+terminal_info = mt5.terminal_info()
+print(f"MT5 Terminal: {terminal_info.name}")
+print(f"Connected: {terminal_info.connected}")
+print(f"Trade allowed: {terminal_info.trade_allowed}")
+
+if not terminal_info.trade_allowed:
+    print("\nWARNING: Trading is not allowed!")
+    print("Enable AutoTrading in MT5 terminal (green button in toolbar)")
+    db_conn.close()
+    mt5.shutdown()
+    sys.exit(1)
+
 positions_opened = []
 tp_levels = [
     (tp1, lot1, 'TP1', tp1_distance, 1),
@@ -275,12 +299,32 @@ for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling_mode,
     }
+    
+    # Debug: Show request details
+    print(f"  Request details:")
+    print(f"    Symbol: {request['symbol']}")
+    print(f"    Volume: {request['volume']}")
+    print(f"    Type: {'BUY' if request['type'] == mt5.ORDER_TYPE_BUY else 'SELL'}")
+    print(f"    Price: ${request['price']:.2f}")
+    print(f"    SL: ${request['sl']:.2f}")
+    print(f"    TP: ${request['tp']:.2f}")
+    print(f"    Magic: {request['magic']}")
+    print(f"    Filling: {filling_name}")
 
     # Send order
     result = mt5.order_send(request)
 
     if result is None:
         print(f"ERROR: {tp_name} order failed: No result from broker")
+        # Get last error from MT5
+        error_code, error_desc = mt5.last_error()
+        print(f"  MT5 Error Code: {error_code}")
+        print(f"  MT5 Error Description: {error_desc}")
+        print(f"  Check:")
+        print(f"    - MT5 terminal is running and connected")
+        print(f"    - Symbol {SYMBOL} is available and market is open")
+        print(f"    - AutoTrading is enabled in MT5")
+        print(f"    - Account has sufficient funds")
         continue
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
