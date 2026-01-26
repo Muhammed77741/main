@@ -295,7 +295,7 @@ for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
         "tp": tp_price,
         "deviation": 20,
         "magic": magic,  # ✅ Use unique magic number
-        "comment": f"V3_T_{tp_name}_P{pos_num}/3_G{group_id}_M{magic}",  # ✅ Include magic in comment
+        "comment": f"M{magic}",  # Shortened comment: magic number contains all info (BBBBPPGG)
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling_mode,
     }
@@ -361,7 +361,7 @@ for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
             tp_price,
             'OPEN',
             CURRENT_REGIME,
-            f"V3_{regime_code}_{tp_name}_P{pos_num}/3_G{group_id}_M{magic}",
+            f"M{magic}_P{pos_num}_{tp_name}",  # Shortened: magic + position info
             group_id,
             pos_num,
             1 if USE_TRAILING_STOPS and pos_num > 1 else 0,
@@ -478,7 +478,7 @@ if len(positions_opened) >= 1:
             "price": close_price,
             "deviation": 20,
             "magic": tp1_pos['magic'],  # ✅ Use same magic number
-            "comment": f"TP1_HIT_TEST_M{tp1_pos['magic']}",
+            "comment": f"CLOSE_M{tp1_pos['magic']}",  # Shortened comment
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_mode,
         }
