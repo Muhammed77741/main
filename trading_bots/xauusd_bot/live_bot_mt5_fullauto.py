@@ -33,6 +33,33 @@ if str(trading_app_path) not in sys.path:
 
 from core.mt5_manager import mt5_manager
 
+# ============================================================================
+# CRITICAL: Safety constants for multi-position SL modification protection
+# ============================================================================
+# These constants prevent race condition where trailing stops are applied
+# immediately after position opening, causing premature SL hits on positions 2 & 3
+#
+# Timeline:
+#   0-30s:  No SL modifications allowed (position confirmation period)
+#   30-60s: TP1 can close, but NO trailing activation yet
+#   60s+:   Trailing can activate (only if TP1 confirmed hit)
+#
+# Values chosen based on:
+#   - Broker confirmation time: typically 5-10 seconds
+#   - Network latency: 1-5 seconds
+#   - MT5 synchronization delay: 5-10 seconds
+#   - Safety margin: 2x typical delays
+# ============================================================================
+
+MIN_POSITION_AGE_FOR_TRAILING = 60  # seconds - minimum 1 minute after opening before trailing can activate
+MIN_POSITION_AGE_FOR_SL_MODIFY = 30  # seconds - minimum 30 seconds before any SL modification
+MIN_SL_MODIFY_INTERVAL = 10          # seconds - minimum time between consecutive SL modifications
+BROKER_CONFIRMATION_TIMEOUT = 10     # seconds - wait for broker confirmation after opening
+
+# SL Distance validation constants (percentages)
+MIN_SL_DISTANCE_FROM_ENTRY_PCT = 0.003   # 0.3% - minimum distance from entry price
+MIN_SL_DISTANCE_FROM_PRICE_PCT = 0.002   # 0.2% - minimum distance from current price
+
 
 class LiveBotMT5FullAuto:
     """
@@ -54,7 +81,9 @@ class LiveBotMT5FullAuto:
                  use_3_position_mode=False, total_position_size=None, min_order_size=None,
                  use_trailing_stops=True, trailing_stop_pct=0.5,
                  use_regime_based_sl=False, trend_sl=16, range_sl=12,
-                 max_hold_bars=100):
+                 max_hold_bars=100,
+                 trend_tp1=None, trend_tp2=None, trend_tp3=None,
+                 range_tp1=None, range_tp2=None, range_tp3=None):
         """
         Initialize bot
 
@@ -73,6 +102,8 @@ class LiveBotMT5FullAuto:
             trend_sl: TREND mode SL in points (default 16 for XAUUSD)
             range_sl: RANGE mode SL in points (default 12 for XAUUSD)
             max_hold_bars: Maximum bars to hold position before timeout (default 100, like backtest)
+            trend_tp1/2/3: TREND mode TP levels in points (optional, defaults: 30/55/90 for XAUUSD)
+            range_tp1/2/3: RANGE mode TP levels in points (optional, defaults: 20/35/50 for XAUUSD)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -105,15 +136,15 @@ class LiveBotMT5FullAuto:
         # Initialize strategy
         self.strategy = PatternRecognitionStrategy(fib_mode='standard')
         
-        # TREND MODE parameters (strong trend)
-        self.trend_tp1 = 30
-        self.trend_tp2 = 55
-        self.trend_tp3 = 90
+        # TREND MODE parameters (strong trend) - use provided values or defaults for XAUUSD
+        self.trend_tp1 = trend_tp1 if trend_tp1 is not None else 30
+        self.trend_tp2 = trend_tp2 if trend_tp2 is not None else 55
+        self.trend_tp3 = trend_tp3 if trend_tp3 is not None else 90
         
-        # RANGE MODE parameters (sideways)
-        self.range_tp1 = 20
-        self.range_tp2 = 35
-        self.range_tp3 = 50
+        # RANGE MODE parameters (sideways) - use provided values or defaults for XAUUSD
+        self.range_tp1 = range_tp1 if range_tp1 is not None else 20
+        self.range_tp2 = range_tp2 if range_tp2 is not None else 35
+        self.range_tp3 = range_tp3 if range_tp3 is not None else 50
         
         # Current market regime
         self.current_regime = 'RANGE'
@@ -198,9 +229,11 @@ class LiveBotMT5FullAuto:
                 writer.writerow([
                     'Ticket', 'Open_Time', 'Close_Time', 'Type', 'Volume',
                     'Entry_Price', 'SL', 'TP', 'Close_Price', 'Profit',
-                    'Pips', 'Market_Regime', 'Duration_Hours', 'Status', 'Comment'
+                    'Pips', 'Market_Regime', 'Duration_Hours', 'Status', 'Comment',
+                    'Position_Group_ID', 'Position_Num'  # Add 3-position mode fields
                 ])
             print(f"📝 Created trade log file: {self.trades_file}")
+
     
     def _initialize_tp_hits_log(self):
         """Initialize CSV file for TP hits logging"""
@@ -271,6 +304,7 @@ class LiveBotMT5FullAuto:
                              sl, tp, regime, comment='', position_group_id=None, position_num=0):
         """Log when position is opened"""
         open_time = datetime.now()
+        current_timestamp = time.time()
         
         self.positions_tracker[ticket] = {
             'ticket': ticket,
@@ -289,7 +323,11 @@ class LiveBotMT5FullAuto:
             'status': 'OPEN',
             'comment': comment,
             'position_group_id': position_group_id,
-            'position_num': position_num
+            'position_num': position_num,
+            # CRITICAL: Add timestamps for SL modification protection
+            'opened_at': current_timestamp,  # Unix timestamp for precise age calculation
+            'confirmed_at': None,            # Will be set after broker confirmation
+            'last_sl_modify_at': None        # Track last SL modification time
         }
         
         # Also save to database if enabled
@@ -414,7 +452,9 @@ class LiveBotMT5FullAuto:
                 trade_data['regime'],
                 trade_data['duration'],
                 trade_data['status'],
-                trade_data['comment']
+                trade_data['comment'],
+                trade_data.get('position_group_id', ''),  # Add group ID
+                trade_data.get('position_num', 0)         # Add position number
             ])
     
     def _get_trade_id_by_order(self, order_id):
@@ -572,6 +612,93 @@ class LiveBotMT5FullAuto:
         except Exception as e:
             print(f"⚠️  Error syncing positions with exchange: {e}")
 
+    def _restore_positions_from_database(self):
+        """Restore positions from database on bot startup
+        
+        This ensures position_group_id and position_num are preserved after bot restart
+        """
+        if not self.use_database or not self.db:
+            print("   Database not enabled - no positions to restore")
+            return
+        
+        try:
+            # Get all OPEN positions from database
+            db_trades = self.db.get_open_trades(self.bot_id)
+            
+            if not db_trades:
+                print("   No open positions in database")
+                return
+            
+            restored_count = 0
+            
+            for trade in db_trades:
+                # Extract ticket
+                try:
+                    if isinstance(trade.order_id, str) and trade.order_id.startswith('DRY-'):
+                        ticket = trade.order_id  # Keep as string for dry-run
+                    else:
+                        ticket = int(trade.order_id)
+                except (ValueError, TypeError):
+                    ticket = trade.order_id
+                
+                # Restore to in-memory tracker with all metadata
+                self.positions_tracker[ticket] = {
+                    'ticket': ticket,
+                    'open_time': trade.open_time,
+                    'close_time': None,
+                    'type': trade.trade_type,
+                    'volume': trade.amount,
+                    'entry_price': trade.entry_price,
+                    'sl': trade.stop_loss,
+                    'tp': trade.take_profit,
+                    'close_price': None,
+                    'profit': None,
+                    'pips': None,
+                    'regime': trade.market_regime,
+                    'duration': None,
+                    'status': trade.status,
+                    'comment': trade.comment or '',
+                    'position_group_id': trade.position_group_id,  # CRITICAL: Restore group_id
+                    'position_num': trade.position_num,             # CRITICAL: Restore position_num
+                    'opened_at': time.time() - 3600,  # Assume opened at least 1 hour ago (safe for age checks)
+                    'confirmed_at': time.time() - 3600,
+                    'last_sl_modify_at': None
+                }
+                
+                restored_count += 1
+            
+            print(f"   ✅ Restored {restored_count} position(s) from database")
+            
+            # Also restore position groups
+            if self.use_3_position_mode:
+                # Get all position groups for this bot
+                group_ids = set(pos.get('position_group_id') for pos in self.positions_tracker.values() 
+                               if pos.get('position_group_id'))
+                
+                for group_id in group_ids:
+                    try:
+                        db_group = self.db.get_position_group(group_id)
+                        if db_group:
+                            self.position_groups[group_id] = {
+                                'tp1_hit': db_group.tp1_hit,
+                                'sl_hit': False,  # If positions still open, SL wasn't hit
+                                'max_price': db_group.max_price,
+                                'min_price': db_group.min_price,
+                                'positions': [ticket for ticket, pos in self.positions_tracker.items() 
+                                            if pos.get('position_group_id') == group_id],
+                                'entry_price': db_group.entry_price,
+                                'trade_type': db_group.trade_type,
+                                'created_at': time.time() - 3600  # Safe for age checks
+                            }
+                            print(f"   ✅ Restored position group {group_id[:8]}")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not restore position group {group_id[:8]}: {e}")
+                        
+        except Exception as e:
+            print(f"   ⚠️  Error restoring positions from database: {e}")
+            import traceback
+            traceback.print_exc()
+
     def _update_3position_trailing(self, positions_to_check, current_price):
         """
         Update trailing stops for 3-position groups (Phase 2)
@@ -597,6 +724,10 @@ class LiveBotMT5FullAuto:
 
         # Process each group
         for group_id, group_positions in groups.items():
+            # CRITICAL: Skip groups where SL was hit (all positions closed)
+            if group_id in self.position_groups and self.position_groups[group_id].get('sl_hit', False):
+                continue  # Skip this group - SL already hit, no trailing needed
+            
             # Initialize group tracking if needed (CRITICAL FIX #4: Restore from DB)
             if group_id not in self.position_groups:
                 # Try to restore from database first
@@ -614,23 +745,28 @@ class LiveBotMT5FullAuto:
                     # Use restored data
                     self.position_groups[group_id] = {
                         'tp1_hit': restored_group.tp1_hit,
+                        'sl_hit': False,  # Always reset on restore (if positions still open, SL wasn't hit)
                         'max_price': restored_group.max_price,
                         'min_price': restored_group.min_price,
                         'positions': [p[0] for p in group_positions],
                         'entry_price': restored_group.entry_price,
-                        'trade_type': restored_group.trade_type
+                        'trade_type': restored_group.trade_type,
+                        'created_at': time.time()  # CRITICAL: Add timestamp
                     }
                 else:
                     # Create new group
                     entry_price = group_positions[0][1]['entry_price']
                     trade_type = group_positions[0][1]['type']
+                    current_timestamp = time.time()
                     self.position_groups[group_id] = {
                         'tp1_hit': False,
+                        'sl_hit': False,  # Track if SL was hit for this group
                         'max_price': entry_price,
                         'min_price': entry_price,
                         'positions': [p[0] for p in group_positions],
                         'entry_price': entry_price,
-                        'trade_type': trade_type
+                        'trade_type': trade_type,
+                        'created_at': current_timestamp  # CRITICAL: Add timestamp for age checks
                     }
                     
                     # Save to database
@@ -655,6 +791,37 @@ class LiveBotMT5FullAuto:
                             print(f"⚠️  Could not save position group to DB: {e}")
 
             group_info = self.position_groups[group_id]
+            
+            # ===== CRITICAL CHECK #1: Group age protection =====
+            # DO NOT modify SL for at least 60 seconds after group creation
+            group_age = time.time() - group_info.get('created_at', 0)
+            if group_age < MIN_POSITION_AGE_FOR_TRAILING:
+                # Silently skip - do not spam logs during cooldown period
+                continue
+            
+            # ===== CRITICAL CHECK #2: Individual position age protection =====
+            # Verify each position is old enough before allowing modifications
+            all_positions_ready = True
+            for ticket, pos_data in group_positions:
+                if ticket in self.positions_tracker:
+                    pos_opened_at = self.positions_tracker[ticket].get('opened_at', 0)
+                    if pos_opened_at > 0:
+                        pos_age = time.time() - pos_opened_at
+                        if pos_age < MIN_POSITION_AGE_FOR_SL_MODIFY:
+                            all_positions_ready = False
+                            break
+            
+            if not all_positions_ready:
+                # At least one position is too young - skip this group
+                continue
+            
+            # ===== ENHANCED LOGGING: Group state for debugging =====
+            if group_age < 120:  # Log for first 2 minutes only to avoid spam
+                print(f"\n🔍 Group {group_id[:8]} passed age checks (age: {group_age:.1f}s)")
+                print(f"   Entry: {group_info['entry_price']:.2f}, Type: {group_info['trade_type']}")
+                print(f"   TP1 hit: {group_info['tp1_hit']}")
+                print(f"   Max price: {group_info['max_price']:.2f}, Min price: {group_info['min_price']:.2f}")
+                print(f"   Positions in group: {len(group_positions)}")
 
             # Update max/min price (CRITICAL FIX #4: Save to DB)
             price_updated = False
@@ -715,11 +882,60 @@ class LiveBotMT5FullAuto:
                                 tp1_just_hit = True
                                 print(f"🎯 Group {group_id[:8]} TP1 reached at {current_price:.2f}! Activating trailing for Pos 2 & 3")
 
-            # If Position 1 not found in group (already closed), activate trailing
+            # If Position 1 not found in group (already closed), check WHY it closed
             if not pos1_found and not group_info['tp1_hit']:
-                group_info['tp1_hit'] = True
-                tp1_just_hit = True
-                print(f"🎯 Group {group_id[:8]} Position 1 closed! Activating trailing for Pos 2 & 3")
+                # CRITICAL: Don't activate trailing if position 1 closed by SL or error!
+                # Only activate if it was genuinely closed by TP1
+                
+                # Try to find position 1 in closed trades
+                pos1_closed_by_tp1 = False
+                
+                # Check in-memory tracker first
+                for ticket, pos_data in list(self.positions_tracker.items()):
+                    if (pos_data.get('position_group_id') == group_id and 
+                        pos_data.get('position_num') == 1 and
+                        pos_data.get('status') in ['TP1', 'TP1_PROCESSING']):
+                        pos1_closed_by_tp1 = True
+                        print(f"✅ Group {group_id[:8]} Position 1 confirmed closed by TP1 (from tracker)")
+                        break
+                
+                # If not found in tracker, check database
+                if not pos1_closed_by_tp1 and self.use_database and self.db:
+                    try:
+                        # Get all trades for this bot (using correct method name)
+                        all_trades = self.db.get_trades(self.bot_id, limit=1000)
+                        for trade in all_trades:
+                            if (trade.position_group_id == group_id and 
+                                trade.position_num == 1 and
+                                trade.status in ['TP1', 'TP1_PROCESSING', 'CLOSED']):
+                                # Check if close price was near TP1
+                                if trade.close_price:
+                                    # For BUY: close price should be >= TP1 (or very close)
+                                    # For SELL: close price should be <= TP1 (or very close)
+                                    tp1_price = trade.take_profit
+                                    if group_info['trade_type'] == 'BUY':
+                                        if trade.close_price >= tp1_price * 0.999:  # Within 0.1% of TP1
+                                            pos1_closed_by_tp1 = True
+                                            print(f"✅ Group {group_id[:8]} Position 1 confirmed closed by TP1 (from DB)")
+                                    else:  # SELL
+                                        if trade.close_price <= tp1_price * 1.001:  # Within 0.1% of TP1
+                                            pos1_closed_by_tp1 = True
+                                            print(f"✅ Group {group_id[:8]} Position 1 confirmed closed by TP1 (from DB)")
+                                break
+                    except Exception as e:
+                        print(f"⚠️  Could not check position 1 status in DB: {e}")
+                
+                # Only activate trailing if Position 1 was confirmed to close by TP1
+                if pos1_closed_by_tp1:
+                    group_info['tp1_hit'] = True
+                    tp1_just_hit = True
+                    print(f"🎯 Group {group_id[:8]} Position 1 closed by TP1! Activating trailing for Pos 2 & 3")
+                else:
+                    # Position 1 closed but NOT by TP1 - do NOT activate trailing
+                    print(f"⚠️  Group {group_id[:8]} Position 1 closed but NOT by TP1 - trailing NOT activated")
+                    print(f"   This usually means Position 1 was closed by SL or manually")
+                    print(f"   Positions 2 & 3 will keep their original SL")
+
             
             # Save tp1_hit to database
             if tp1_just_hit and self.use_database and self.db:
@@ -788,21 +1004,42 @@ class LiveBotMT5FullAuto:
 
                             # Only update if new SL is better (higher) than current
                             if new_sl > pos_data['sl']:
+                                # ===== CRITICAL VALIDATION #1: Check recent modification =====
+                                if ticket in self.positions_tracker:
+                                    last_modify = self.positions_tracker[ticket].get('last_sl_modify_at', 0)
+                                    if last_modify > 0:
+                                        time_since_last = time.time() - last_modify
+                                        if time_since_last < MIN_SL_MODIFY_INTERVAL:
+                                            print(f"   ⏳ Pos {pos_num} SL modified too recently ({time_since_last:.1f}s ago), skipping")
+                                            continue
+                                
+                                # ===== CRITICAL VALIDATION #2: Minimum distance from entry =====
+                                distance_from_entry = abs(new_sl - entry_price)
+                                min_distance_from_entry = entry_price * 0.003  # minimum 0.3% from entry
+                                if distance_from_entry < min_distance_from_entry:
+                                    print(f"   ⚠️  Pos {pos_num} new SL too close to entry: {distance_from_entry:.2f} < {min_distance_from_entry:.2f}, skipping")
+                                    continue
+                                
+                                # ===== CRITICAL VALIDATION #3: Minimum distance from current price =====
                                 # Check minimum distance from current price (stop level)
                                 symbol_info = mt5.symbol_info(self.symbol)
                                 if symbol_info:
                                     stop_level = symbol_info.trade_stops_level
                                     point = symbol_info.point
-                                    min_distance = stop_level * point
+                                    min_distance_broker = stop_level * point
+                                    min_distance_custom = current_price * 0.002  # minimum 0.2% from current price
+                                    min_distance = max(min_distance_broker, min_distance_custom)
 
                                     # For BUY: SL must be at least min_distance below current price
-                                    if new_sl > (current_price - min_distance):
+                                    distance_from_price = current_price - new_sl
+                                    if distance_from_price < min_distance:
                                         # SL too close to current price - skip this update
-                                        print(f"   ⚠️  SL too close to price (${current_price:.2f}), skipping update")
+                                        print(f"   ⚠️  Pos {pos_num} SL too close to price: {distance_from_price:.2f} < {min_distance:.2f}, skipping")
                                         continue
 
                                 old_sl = pos_data['sl']
-                                print(f"   📊 Pos {pos_num} trailing SL updated: {old_sl:.2f} → {new_sl:.2f}")
+                                print(f"   📊 Pos {pos_num} trailing SL: {old_sl:.2f} → {new_sl:.2f} (entry: {entry_price:.2f}, max: {group_info['max_price']:.2f})")
+
 
                                 # Update SL on MT5 broker (CRITICAL FIX #3)
                                 sl_updated_on_broker = False
@@ -834,6 +1071,7 @@ class LiveBotMT5FullAuto:
                                     # Update in tracker
                                     if ticket in self.positions_tracker:
                                         self.positions_tracker[ticket]['sl'] = new_sl
+                                        self.positions_tracker[ticket]['last_sl_modify_at'] = time.time()  # CRITICAL: Record modification time (BUY)
                                     
                                     # Update in database
                                     if self.use_database and self.db:
@@ -868,21 +1106,42 @@ class LiveBotMT5FullAuto:
 
                             # Only update if new SL is better (lower) than current
                             if new_sl < pos_data['sl']:
+                                # ===== CRITICAL VALIDATION #1: Check recent modification =====
+                                if ticket in self.positions_tracker:
+                                    last_modify = self.positions_tracker[ticket].get('last_sl_modify_at', 0)
+                                    if last_modify > 0:
+                                        time_since_last = time.time() - last_modify
+                                        if time_since_last < MIN_SL_MODIFY_INTERVAL:
+                                            print(f"   ⏳ Pos {pos_num} SL modified too recently ({time_since_last:.1f}s ago), skipping")
+                                            continue
+                                
+                                # ===== CRITICAL VALIDATION #2: Minimum distance from entry =====
+                                distance_from_entry = abs(new_sl - entry_price)
+                                min_distance_from_entry = entry_price * 0.003  # minimum 0.3% from entry
+                                if distance_from_entry < min_distance_from_entry:
+                                    print(f"   ⚠️  Pos {pos_num} new SL too close to entry: {distance_from_entry:.2f} < {min_distance_from_entry:.2f}, skipping")
+                                    continue
+                                
+                                # ===== CRITICAL VALIDATION #3: Minimum distance from current price =====
                                 # Check minimum distance from current price (stop level)
                                 symbol_info = mt5.symbol_info(self.symbol)
                                 if symbol_info:
                                     stop_level = symbol_info.trade_stops_level
                                     point = symbol_info.point
-                                    min_distance = stop_level * point
+                                    min_distance_broker = stop_level * point
+                                    min_distance_custom = current_price * 0.002  # minimum 0.2% from current price
+                                    min_distance = max(min_distance_broker, min_distance_custom)
 
                                     # For SELL: SL must be at least min_distance above current price
-                                    if new_sl < (current_price + min_distance):
+                                    distance_from_price = new_sl - current_price
+                                    if distance_from_price < min_distance:
                                         # SL too close to current price - skip this update
-                                        print(f"   ⚠️  SL too close to price (${current_price:.2f}), skipping update")
+                                        print(f"   ⚠️  Pos {pos_num} SL too close to price: {distance_from_price:.2f} < {min_distance:.2f}, skipping")
                                         continue
 
                                 old_sl = pos_data['sl']
-                                print(f"   📊 Pos {pos_num} trailing SL updated: {old_sl:.2f} → {new_sl:.2f}")
+                                print(f"   📊 Pos {pos_num} trailing SL: {old_sl:.2f} → {new_sl:.2f} (entry: {entry_price:.2f}, min: {group_info['min_price']:.2f})")
+
 
                                 # Update SL on MT5 broker (CRITICAL FIX #3)
                                 sl_updated_on_broker = False
@@ -914,6 +1173,7 @@ class LiveBotMT5FullAuto:
                                     # Update in tracker
                                     if ticket in self.positions_tracker:
                                         self.positions_tracker[ticket]['sl'] = new_sl
+                                        self.positions_tracker[ticket]['last_sl_modify_at'] = time.time()  # CRITICAL: Record modification time (SELL)
                                     
                                     # Update in database
                                     if self.use_database and self.db:
@@ -1370,6 +1630,82 @@ class LiveBotMT5FullAuto:
                     print(f"✅ Position #{ticket} closed successfully")
                     print(f"   Profit: ${profit:.2f}, Pips: {pips:.1f}")
                     print(f"   Reason: {hit_type}, Price: ${current_price:.2f}")
+                    
+                    # CRITICAL: If SL is hit in a 3-position group, close ALL positions in the group
+                    if sl_hit and self.use_3_position_mode and tracked_pos.get('position_group_id'):
+                        group_id = tracked_pos.get('position_group_id')
+                        pos_num = tracked_pos.get('position_num', 'Unknown')
+                        
+                        print(f"\n⚠️  SL HIT for Position {pos_num} in group {group_id[:8]}")
+                        print(f"   Closing ALL remaining positions in this group...")
+                        
+                        # Mark group as SL_HIT to prevent further trailing
+                        if group_id in self.position_groups:
+                            self.position_groups[group_id]['sl_hit'] = True
+                        
+                        # Find and close all other positions in the same group
+                        for other_ticket, other_pos in list(self.positions_tracker.items()):
+                            if (other_pos.get('position_group_id') == group_id and 
+                                other_ticket != ticket and
+                                other_pos.get('status') == 'OPEN'):
+                                
+                                other_pos_num = other_pos.get('position_num', 'Unknown')
+                                print(f"   🔄 Closing Position {other_pos_num} (#{other_ticket}) from same group...")
+                                
+                                # Get current price for this position
+                                try:
+                                    tick = mt5.symbol_info_tick(self.symbol)
+                                    if tick:
+                                        group_close_price = tick.bid if other_pos['type'] == 'BUY' else tick.ask
+                                    else:
+                                        group_close_price = current_price
+                                except:
+                                    group_close_price = current_price
+                                
+                                # Close on MT5
+                                if not self.dry_run:
+                                    try:
+                                        order_type = mt5.ORDER_TYPE_SELL if other_pos['type'] == 'BUY' else mt5.ORDER_TYPE_BUY
+                                        request = {
+                                            "action": mt5.TRADE_ACTION_DEAL,
+                                            "symbol": self.symbol,
+                                            "volume": other_pos['volume'],
+                                            "type": order_type,
+                                            "position": other_ticket,
+                                            "price": group_close_price,
+                                            "deviation": 20,
+                                            "magic": 234000,
+                                            "comment": f"Group_SL_Close",
+                                            "type_time": mt5.ORDER_TIME_GTC,
+                                            "type_filling": self._get_filling_mode(),
+                                        }
+                                        result = mt5.order_send(request)
+                                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                            print(f"      ✅ Position {other_pos_num} closed")
+                                        else:
+                                            print(f"      ❌ Failed to close Position {other_pos_num}")
+                                    except Exception as e:
+                                        print(f"      ❌ Error closing Position {other_pos_num}: {e}")
+                                else:
+                                    print(f"      🧪 DRY RUN: Would close Position {other_pos_num}")
+                                
+                                # Calculate profit for this position
+                                if other_pos['type'] == 'BUY':
+                                    other_pips = (group_close_price - other_pos['entry_price']) * 10
+                                else:
+                                    other_pips = (other_pos['entry_price'] - group_close_price) * 10
+                                point_value = 100.0
+                                other_profit = other_pips / 10 * other_pos['volume'] * point_value
+                                
+                                # Log as closed
+                                self._log_position_closed(
+                                    ticket=other_ticket,
+                                    close_price=group_close_price,
+                                    profit=other_profit,
+                                    status='CLOSED'
+                                )
+                        
+                        print(f"   ✅ Group {group_id[:8]} fully closed due to SL hit\n")
 
                     # Log SL/TP event to database
                     if self.use_database and self.db and sl_hit:
@@ -2603,7 +2939,11 @@ class LiveBotMT5FullAuto:
         self.watchdog.start()
         print()
         
-        print("🎯 Step 5/5: Final configuration...")
+        print("🎯 Step 5/5: Restoring positions from database...")
+        self._restore_positions_from_database()
+        
+        # Show final configuration
+        print(f"\n📋 Configuration:")
         print(f"   Symbol: {self.symbol}")
         print(f"   Timeframe: H1")
         print(f"   Strategy: V3 Adaptive (TREND/RANGE detection)")
