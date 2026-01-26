@@ -681,6 +681,7 @@ class LiveBotMT5FullAuto:
                         if db_group:
                             self.position_groups[group_id] = {
                                 'tp1_hit': db_group.tp1_hit,
+                                'sl_hit': False,  # If positions still open, SL wasn't hit
                                 'max_price': db_group.max_price,
                                 'min_price': db_group.min_price,
                                 'positions': [ticket for ticket, pos in self.positions_tracker.items() 
@@ -723,6 +724,10 @@ class LiveBotMT5FullAuto:
 
         # Process each group
         for group_id, group_positions in groups.items():
+            # CRITICAL: Skip groups where SL was hit (all positions closed)
+            if group_id in self.position_groups and self.position_groups[group_id].get('sl_hit', False):
+                continue  # Skip this group - SL already hit, no trailing needed
+            
             # Initialize group tracking if needed (CRITICAL FIX #4: Restore from DB)
             if group_id not in self.position_groups:
                 # Try to restore from database first
@@ -740,6 +745,7 @@ class LiveBotMT5FullAuto:
                     # Use restored data
                     self.position_groups[group_id] = {
                         'tp1_hit': restored_group.tp1_hit,
+                        'sl_hit': False,  # Always reset on restore (if positions still open, SL wasn't hit)
                         'max_price': restored_group.max_price,
                         'min_price': restored_group.min_price,
                         'positions': [p[0] for p in group_positions],
@@ -754,6 +760,7 @@ class LiveBotMT5FullAuto:
                     current_timestamp = time.time()
                     self.position_groups[group_id] = {
                         'tp1_hit': False,
+                        'sl_hit': False,  # Track if SL was hit for this group
                         'max_price': entry_price,
                         'min_price': entry_price,
                         'positions': [p[0] for p in group_positions],
@@ -1623,6 +1630,82 @@ class LiveBotMT5FullAuto:
                     print(f"✅ Position #{ticket} closed successfully")
                     print(f"   Profit: ${profit:.2f}, Pips: {pips:.1f}")
                     print(f"   Reason: {hit_type}, Price: ${current_price:.2f}")
+                    
+                    # CRITICAL: If SL is hit in a 3-position group, close ALL positions in the group
+                    if sl_hit and self.use_3_position_mode and tracked_pos.get('position_group_id'):
+                        group_id = tracked_pos.get('position_group_id')
+                        pos_num = tracked_pos.get('position_num', 'Unknown')
+                        
+                        print(f"\n⚠️  SL HIT for Position {pos_num} in group {group_id[:8]}")
+                        print(f"   Closing ALL remaining positions in this group...")
+                        
+                        # Mark group as SL_HIT to prevent further trailing
+                        if group_id in self.position_groups:
+                            self.position_groups[group_id]['sl_hit'] = True
+                        
+                        # Find and close all other positions in the same group
+                        for other_ticket, other_pos in list(self.positions_tracker.items()):
+                            if (other_pos.get('position_group_id') == group_id and 
+                                other_ticket != ticket and
+                                other_pos.get('status') == 'OPEN'):
+                                
+                                other_pos_num = other_pos.get('position_num', 'Unknown')
+                                print(f"   🔄 Closing Position {other_pos_num} (#{other_ticket}) from same group...")
+                                
+                                # Get current price for this position
+                                try:
+                                    tick = mt5.symbol_info_tick(self.symbol)
+                                    if tick:
+                                        group_close_price = tick.bid if other_pos['type'] == 'BUY' else tick.ask
+                                    else:
+                                        group_close_price = current_price
+                                except:
+                                    group_close_price = current_price
+                                
+                                # Close on MT5
+                                if not self.dry_run:
+                                    try:
+                                        order_type = mt5.ORDER_TYPE_SELL if other_pos['type'] == 'BUY' else mt5.ORDER_TYPE_BUY
+                                        request = {
+                                            "action": mt5.TRADE_ACTION_DEAL,
+                                            "symbol": self.symbol,
+                                            "volume": other_pos['volume'],
+                                            "type": order_type,
+                                            "position": other_ticket,
+                                            "price": group_close_price,
+                                            "deviation": 20,
+                                            "magic": 234000,
+                                            "comment": f"Group_SL_Close",
+                                            "type_time": mt5.ORDER_TIME_GTC,
+                                            "type_filling": self._get_filling_mode(),
+                                        }
+                                        result = mt5.order_send(request)
+                                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                            print(f"      ✅ Position {other_pos_num} closed")
+                                        else:
+                                            print(f"      ❌ Failed to close Position {other_pos_num}")
+                                    except Exception as e:
+                                        print(f"      ❌ Error closing Position {other_pos_num}: {e}")
+                                else:
+                                    print(f"      🧪 DRY RUN: Would close Position {other_pos_num}")
+                                
+                                # Calculate profit for this position
+                                if other_pos['type'] == 'BUY':
+                                    other_pips = (group_close_price - other_pos['entry_price']) * 10
+                                else:
+                                    other_pips = (other_pos['entry_price'] - group_close_price) * 10
+                                point_value = 100.0
+                                other_profit = other_pips / 10 * other_pos['volume'] * point_value
+                                
+                                # Log as closed
+                                self._log_position_closed(
+                                    ticket=other_ticket,
+                                    close_price=group_close_price,
+                                    profit=other_profit,
+                                    status='CLOSED'
+                                )
+                        
+                        print(f"   ✅ Group {group_id[:8]} fully closed due to SL hit\n")
 
                     # Log SL/TP event to database
                     if self.use_database and self.db and sl_hit:
