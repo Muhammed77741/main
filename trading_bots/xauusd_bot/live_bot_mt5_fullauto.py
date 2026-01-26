@@ -2714,7 +2714,7 @@ class LiveBotMT5FullAuto:
                     sl=signal['sl'],
                     tp=tp_price,
                     regime=regime,
-                    comment=f"V3_{regime_code}_P{pos_num}/3",
+                    comment=f"M{magic}_P{pos_num}_{tp_name}",  # Short DB comment
                     position_group_id=group_id,
                     position_num=pos_num,
                     magic_number=magic
@@ -2781,7 +2781,7 @@ class LiveBotMT5FullAuto:
                 "tp": tp_price,
                 "deviation": 20,
                 "magic": magic,
-                "comment": f"V3_{regime_code}_{tp_name}_M{magic}",
+                "comment": f"M{magic}",  # Short comment: magic contains all info (BBBBPPGG)
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self._get_filling_mode(),
             }
@@ -2817,7 +2817,7 @@ class LiveBotMT5FullAuto:
                 sl=signal['sl'],
                 tp=tp_price,
                 regime=regime,
-                comment=f"V3_{regime_code}_P{pos_num}/3",
+                comment=f"M{magic}_P{pos_num}_{tp_name}",  # Short DB comment
                 position_group_id=group_id,
                 position_num=pos_num,
                 magic_number=magic
