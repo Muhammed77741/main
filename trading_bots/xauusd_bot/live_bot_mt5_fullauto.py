@@ -612,6 +612,92 @@ class LiveBotMT5FullAuto:
         except Exception as e:
             print(f"⚠️  Error syncing positions with exchange: {e}")
 
+    def _restore_positions_from_database(self):
+        """Restore positions from database on bot startup
+        
+        This ensures position_group_id and position_num are preserved after bot restart
+        """
+        if not self.use_database or not self.db:
+            print("   Database not enabled - no positions to restore")
+            return
+        
+        try:
+            # Get all OPEN positions from database
+            db_trades = self.db.get_open_trades(self.bot_id)
+            
+            if not db_trades:
+                print("   No open positions in database")
+                return
+            
+            restored_count = 0
+            
+            for trade in db_trades:
+                # Extract ticket
+                try:
+                    if isinstance(trade.order_id, str) and trade.order_id.startswith('DRY-'):
+                        ticket = trade.order_id  # Keep as string for dry-run
+                    else:
+                        ticket = int(trade.order_id)
+                except (ValueError, TypeError):
+                    ticket = trade.order_id
+                
+                # Restore to in-memory tracker with all metadata
+                self.positions_tracker[ticket] = {
+                    'ticket': ticket,
+                    'open_time': trade.open_time,
+                    'close_time': None,
+                    'type': trade.trade_type,
+                    'volume': trade.amount,
+                    'entry_price': trade.entry_price,
+                    'sl': trade.stop_loss,
+                    'tp': trade.take_profit,
+                    'close_price': None,
+                    'profit': None,
+                    'pips': None,
+                    'regime': trade.market_regime,
+                    'duration': None,
+                    'status': trade.status,
+                    'comment': trade.comment or '',
+                    'position_group_id': trade.position_group_id,  # CRITICAL: Restore group_id
+                    'position_num': trade.position_num,             # CRITICAL: Restore position_num
+                    'opened_at': time.time() - 3600,  # Assume opened at least 1 hour ago (safe for age checks)
+                    'confirmed_at': time.time() - 3600,
+                    'last_sl_modify_at': None
+                }
+                
+                restored_count += 1
+            
+            print(f"   ✅ Restored {restored_count} position(s) from database")
+            
+            # Also restore position groups
+            if self.use_3_position_mode:
+                # Get all position groups for this bot
+                group_ids = set(pos.get('position_group_id') for pos in self.positions_tracker.values() 
+                               if pos.get('position_group_id'))
+                
+                for group_id in group_ids:
+                    try:
+                        db_group = self.db.get_position_group(group_id)
+                        if db_group:
+                            self.position_groups[group_id] = {
+                                'tp1_hit': db_group.tp1_hit,
+                                'max_price': db_group.max_price,
+                                'min_price': db_group.min_price,
+                                'positions': [ticket for ticket, pos in self.positions_tracker.items() 
+                                            if pos.get('position_group_id') == group_id],
+                                'entry_price': db_group.entry_price,
+                                'trade_type': db_group.trade_type,
+                                'created_at': time.time() - 3600  # Safe for age checks
+                            }
+                            print(f"   ✅ Restored position group {group_id[:8]}")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not restore position group {group_id[:8]}: {e}")
+                        
+        except Exception as e:
+            print(f"   ⚠️  Error restoring positions from database: {e}")
+            import traceback
+            traceback.print_exc()
+
     def _update_3position_trailing(self, positions_to_check, current_price):
         """
         Update trailing stops for 3-position groups (Phase 2)
@@ -2770,7 +2856,11 @@ class LiveBotMT5FullAuto:
         self.watchdog.start()
         print()
         
-        print("🎯 Step 5/5: Final configuration...")
+        print("🎯 Step 5/5: Restoring positions from database...")
+        self._restore_positions_from_database()
+        
+        # Show final configuration
+        print(f"\n📋 Configuration:")
         print(f"   Symbol: {self.symbol}")
         print(f"   Timeframe: H1")
         print(f"   Strategy: V3 Adaptive (TREND/RANGE detection)")
