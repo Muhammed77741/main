@@ -158,6 +158,7 @@ class LiveBotMT5FullAuto:
 
         # Phase 2: 3-Position Mode tracking
         self.position_groups = {}  # {group_id: {'tp1_hit': bool, 'max_price': float, 'min_price': float, 'positions': [...]}}
+        self.group_counter = 0  # Counter for position groups (0-99) used in magic number generation
 
         # Resilience features (CRITICAL: Network stability)
         self.running = True  # Flag for graceful shutdown
@@ -247,6 +248,66 @@ class LiveBotMT5FullAuto:
                     'Profit', 'Profit_Pct'
                 ])
             print(f"📝 Created TP hits log file: {self.tp_hits_file}")
+    
+    def _generate_magic(self, position_num: int, group_counter: int) -> int:
+        """
+        Generate unique magic number for position tracking
+        
+        Format: BBBBPPGG (8 digits)
+        - BBBB: bot_id hash (4 digits)  
+        - PP: position_num (01, 02, 03)
+        - GG: group_counter (00-99)
+        
+        Args:
+            position_num: Position number in group (1, 2, or 3)
+            group_counter: Group counter (0-99)
+            
+        Returns:
+            int: Unique magic number
+        """
+        # Hash bot_id to 4 digits
+        bot_hash = abs(hash(self.bot_id)) % 10000
+        
+        # Combine into 8-digit number
+        magic = int(f"{bot_hash:04d}{position_num:02d}{group_counter:02d}")
+        
+        return magic
+    
+    def _get_position_by_magic(self, position_num: int, group_counter: int):
+        """Get specific position by magic number
+        
+        Args:
+            position_num: Position number in group (1, 2, or 3)
+            group_counter: Group counter (0-99)
+            
+        Returns:
+            MT5 position object or None
+        """
+        magic = self._generate_magic(position_num, group_counter)
+        positions = mt5.positions_get(magic=magic)
+        
+        if positions and len(positions) > 0:
+            return positions[0]
+        return None
+    
+    def _get_group_positions_by_magic(self, group_counter: int) -> dict:
+        """
+        Get all 3 positions of a group by magic number
+        
+        Args:
+            group_counter: Group counter (0-99)
+            
+        Returns:
+            dict: {position_num: mt5_position, ...}
+        """
+        group_positions = {}
+        
+        for pos_num in [1, 2, 3]:
+            pos = self._get_position_by_magic(pos_num, group_counter)
+            if pos:
+                group_positions[pos_num] = pos
+        
+        return group_positions
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals for graceful exit"""
