@@ -692,6 +692,14 @@ class LiveBotMT5FullAuto:
             if not all_positions_ready:
                 # At least one position is too young - skip this group
                 continue
+            
+            # ===== ENHANCED LOGGING: Group state for debugging =====
+            if group_age < 120:  # Log for first 2 minutes only to avoid spam
+                print(f"\n🔍 Group {group_id[:8]} passed age checks (age: {group_age:.1f}s)")
+                print(f"   Entry: {group_info['entry_price']:.2f}, Type: {group_info['trade_type']}")
+                print(f"   TP1 hit: {group_info['tp1_hit']}")
+                print(f"   Max price: {group_info['max_price']:.2f}, Min price: {group_info['min_price']:.2f}")
+                print(f"   Positions in group: {len(group_positions)}")
 
             # Update max/min price (CRITICAL FIX #4: Save to DB)
             price_updated = False
