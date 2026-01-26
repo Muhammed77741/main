@@ -33,6 +33,12 @@ if str(trading_app_path) not in sys.path:
 
 from core.mt5_manager import mt5_manager
 
+# CRITICAL: Safety constants for multi-position SL modification
+MIN_POSITION_AGE_FOR_TRAILING = 60  # seconds - minimum 1 minute after opening before trailing can activate
+MIN_POSITION_AGE_FOR_SL_MODIFY = 30  # seconds - minimum 30 seconds before any SL modification
+BROKER_CONFIRMATION_TIMEOUT = 10     # seconds - wait for broker confirmation after opening
+MIN_SL_MODIFY_INTERVAL = 10          # seconds - minimum time between consecutive SL modifications
+
 
 class LiveBotMT5FullAuto:
     """
@@ -271,6 +277,7 @@ class LiveBotMT5FullAuto:
                              sl, tp, regime, comment='', position_group_id=None, position_num=0):
         """Log when position is opened"""
         open_time = datetime.now()
+        current_timestamp = time.time()
         
         self.positions_tracker[ticket] = {
             'ticket': ticket,
@@ -289,7 +296,11 @@ class LiveBotMT5FullAuto:
             'status': 'OPEN',
             'comment': comment,
             'position_group_id': position_group_id,
-            'position_num': position_num
+            'position_num': position_num,
+            # CRITICAL: Add timestamps for SL modification protection
+            'opened_at': current_timestamp,  # Unix timestamp for precise age calculation
+            'confirmed_at': None,            # Will be set after broker confirmation
+            'last_sl_modify_at': None        # Track last SL modification time
         }
         
         # Also save to database if enabled
@@ -618,19 +629,22 @@ class LiveBotMT5FullAuto:
                         'min_price': restored_group.min_price,
                         'positions': [p[0] for p in group_positions],
                         'entry_price': restored_group.entry_price,
-                        'trade_type': restored_group.trade_type
+                        'trade_type': restored_group.trade_type,
+                        'created_at': time.time()  # CRITICAL: Add timestamp
                     }
                 else:
                     # Create new group
                     entry_price = group_positions[0][1]['entry_price']
                     trade_type = group_positions[0][1]['type']
+                    current_timestamp = time.time()
                     self.position_groups[group_id] = {
                         'tp1_hit': False,
                         'max_price': entry_price,
                         'min_price': entry_price,
                         'positions': [p[0] for p in group_positions],
                         'entry_price': entry_price,
-                        'trade_type': trade_type
+                        'trade_type': trade_type,
+                        'created_at': current_timestamp  # CRITICAL: Add timestamp for age checks
                     }
                     
                     # Save to database
@@ -655,6 +669,29 @@ class LiveBotMT5FullAuto:
                             print(f"⚠️  Could not save position group to DB: {e}")
 
             group_info = self.position_groups[group_id]
+            
+            # ===== CRITICAL CHECK #1: Group age protection =====
+            # DO NOT modify SL for at least 60 seconds after group creation
+            group_age = time.time() - group_info.get('created_at', 0)
+            if group_age < MIN_POSITION_AGE_FOR_TRAILING:
+                # Silently skip - do not spam logs during cooldown period
+                continue
+            
+            # ===== CRITICAL CHECK #2: Individual position age protection =====
+            # Verify each position is old enough before allowing modifications
+            all_positions_ready = True
+            for ticket, pos_data in group_positions:
+                if ticket in self.positions_tracker:
+                    pos_opened_at = self.positions_tracker[ticket].get('opened_at', 0)
+                    if pos_opened_at > 0:
+                        pos_age = time.time() - pos_opened_at
+                        if pos_age < MIN_POSITION_AGE_FOR_SL_MODIFY:
+                            all_positions_ready = False
+                            break
+            
+            if not all_positions_ready:
+                # At least one position is too young - skip this group
+                continue
 
             # Update max/min price (CRITICAL FIX #4: Save to DB)
             price_updated = False
@@ -788,21 +825,42 @@ class LiveBotMT5FullAuto:
 
                             # Only update if new SL is better (higher) than current
                             if new_sl > pos_data['sl']:
+                                # ===== CRITICAL VALIDATION #1: Check recent modification =====
+                                if ticket in self.positions_tracker:
+                                    last_modify = self.positions_tracker[ticket].get('last_sl_modify_at', 0)
+                                    if last_modify > 0:
+                                        time_since_last = time.time() - last_modify
+                                        if time_since_last < MIN_SL_MODIFY_INTERVAL:
+                                            print(f"   ⏳ Pos {pos_num} SL modified too recently ({time_since_last:.1f}s ago), skipping")
+                                            continue
+                                
+                                # ===== CRITICAL VALIDATION #2: Minimum distance from entry =====
+                                distance_from_entry = abs(new_sl - entry_price)
+                                min_distance_from_entry = entry_price * 0.003  # minimum 0.3% from entry
+                                if distance_from_entry < min_distance_from_entry:
+                                    print(f"   ⚠️  Pos {pos_num} new SL too close to entry: {distance_from_entry:.2f} < {min_distance_from_entry:.2f}, skipping")
+                                    continue
+                                
+                                # ===== CRITICAL VALIDATION #3: Minimum distance from current price =====
                                 # Check minimum distance from current price (stop level)
                                 symbol_info = mt5.symbol_info(self.symbol)
                                 if symbol_info:
                                     stop_level = symbol_info.trade_stops_level
                                     point = symbol_info.point
-                                    min_distance = stop_level * point
+                                    min_distance_broker = stop_level * point
+                                    min_distance_custom = current_price * 0.002  # minimum 0.2% from current price
+                                    min_distance = max(min_distance_broker, min_distance_custom)
 
                                     # For BUY: SL must be at least min_distance below current price
-                                    if new_sl > (current_price - min_distance):
+                                    distance_from_price = current_price - new_sl
+                                    if distance_from_price < min_distance:
                                         # SL too close to current price - skip this update
-                                        print(f"   ⚠️  SL too close to price (${current_price:.2f}), skipping update")
+                                        print(f"   ⚠️  Pos {pos_num} SL too close to price: {distance_from_price:.2f} < {min_distance:.2f}, skipping")
                                         continue
 
                                 old_sl = pos_data['sl']
-                                print(f"   📊 Pos {pos_num} trailing SL updated: {old_sl:.2f} → {new_sl:.2f}")
+                                print(f"   📊 Pos {pos_num} trailing SL: {old_sl:.2f} → {new_sl:.2f} (entry: {entry_price:.2f}, max: {group_info['max_price']:.2f})")
+
 
                                 # Update SL on MT5 broker (CRITICAL FIX #3)
                                 sl_updated_on_broker = False
@@ -834,6 +892,7 @@ class LiveBotMT5FullAuto:
                                     # Update in tracker
                                     if ticket in self.positions_tracker:
                                         self.positions_tracker[ticket]['sl'] = new_sl
+                                        self.positions_tracker[ticket]['last_sl_modify_at'] = time.time()  # CRITICAL: Record modification time (BUY)
                                     
                                     # Update in database
                                     if self.use_database and self.db:
@@ -868,21 +927,42 @@ class LiveBotMT5FullAuto:
 
                             # Only update if new SL is better (lower) than current
                             if new_sl < pos_data['sl']:
+                                # ===== CRITICAL VALIDATION #1: Check recent modification =====
+                                if ticket in self.positions_tracker:
+                                    last_modify = self.positions_tracker[ticket].get('last_sl_modify_at', 0)
+                                    if last_modify > 0:
+                                        time_since_last = time.time() - last_modify
+                                        if time_since_last < MIN_SL_MODIFY_INTERVAL:
+                                            print(f"   ⏳ Pos {pos_num} SL modified too recently ({time_since_last:.1f}s ago), skipping")
+                                            continue
+                                
+                                # ===== CRITICAL VALIDATION #2: Minimum distance from entry =====
+                                distance_from_entry = abs(new_sl - entry_price)
+                                min_distance_from_entry = entry_price * 0.003  # minimum 0.3% from entry
+                                if distance_from_entry < min_distance_from_entry:
+                                    print(f"   ⚠️  Pos {pos_num} new SL too close to entry: {distance_from_entry:.2f} < {min_distance_from_entry:.2f}, skipping")
+                                    continue
+                                
+                                # ===== CRITICAL VALIDATION #3: Minimum distance from current price =====
                                 # Check minimum distance from current price (stop level)
                                 symbol_info = mt5.symbol_info(self.symbol)
                                 if symbol_info:
                                     stop_level = symbol_info.trade_stops_level
                                     point = symbol_info.point
-                                    min_distance = stop_level * point
+                                    min_distance_broker = stop_level * point
+                                    min_distance_custom = current_price * 0.002  # minimum 0.2% from current price
+                                    min_distance = max(min_distance_broker, min_distance_custom)
 
                                     # For SELL: SL must be at least min_distance above current price
-                                    if new_sl < (current_price + min_distance):
+                                    distance_from_price = new_sl - current_price
+                                    if distance_from_price < min_distance:
                                         # SL too close to current price - skip this update
-                                        print(f"   ⚠️  SL too close to price (${current_price:.2f}), skipping update")
+                                        print(f"   ⚠️  Pos {pos_num} SL too close to price: {distance_from_price:.2f} < {min_distance:.2f}, skipping")
                                         continue
 
                                 old_sl = pos_data['sl']
-                                print(f"   📊 Pos {pos_num} trailing SL updated: {old_sl:.2f} → {new_sl:.2f}")
+                                print(f"   📊 Pos {pos_num} trailing SL: {old_sl:.2f} → {new_sl:.2f} (entry: {entry_price:.2f}, min: {group_info['min_price']:.2f})")
+
 
                                 # Update SL on MT5 broker (CRITICAL FIX #3)
                                 sl_updated_on_broker = False
@@ -914,6 +994,7 @@ class LiveBotMT5FullAuto:
                                     # Update in tracker
                                     if ticket in self.positions_tracker:
                                         self.positions_tracker[ticket]['sl'] = new_sl
+                                        self.positions_tracker[ticket]['last_sl_modify_at'] = time.time()  # CRITICAL: Record modification time (SELL)
                                     
                                     # Update in database
                                     if self.use_database and self.db:
