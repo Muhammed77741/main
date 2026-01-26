@@ -208,20 +208,20 @@ class SettingsDialog(QDialog):
         trend_layout.addRow(trend_label)
 
         self.trend_tp1_spin = QDoubleSpinBox()
-        self.trend_tp1_spin.setRange(0.1, 1000.0)
-        self.trend_tp1_spin.setSingleStep(0.5)
+        self.trend_tp1_spin.setRange(0.1, 10000.0)
+        self.trend_tp1_spin.setSingleStep(10.0)
         self.trend_tp1_spin.setDecimals(2)
         trend_layout.addRow("TP1:", self.trend_tp1_spin)
 
         self.trend_tp2_spin = QDoubleSpinBox()
-        self.trend_tp2_spin.setRange(0.1, 1000.0)
-        self.trend_tp2_spin.setSingleStep(0.5)
+        self.trend_tp2_spin.setRange(0.1, 10000.0)
+        self.trend_tp2_spin.setSingleStep(10.0)
         self.trend_tp2_spin.setDecimals(2)
         trend_layout.addRow("TP2:", self.trend_tp2_spin)
 
         self.trend_tp3_spin = QDoubleSpinBox()
-        self.trend_tp3_spin.setRange(0.1, 1000.0)
-        self.trend_tp3_spin.setSingleStep(0.5)
+        self.trend_tp3_spin.setRange(0.1, 10000.0)
+        self.trend_tp3_spin.setSingleStep(10.0)
         self.trend_tp3_spin.setDecimals(2)
         trend_layout.addRow("TP3:", self.trend_tp3_spin)
 
@@ -231,20 +231,20 @@ class SettingsDialog(QDialog):
         range_layout.addRow(range_label)
 
         self.range_tp1_spin = QDoubleSpinBox()
-        self.range_tp1_spin.setRange(0.1, 1000.0)
-        self.range_tp1_spin.setSingleStep(0.5)
+        self.range_tp1_spin.setRange(0.1, 10000.0)
+        self.range_tp1_spin.setSingleStep(10.0)
         self.range_tp1_spin.setDecimals(2)
         range_layout.addRow("TP1:", self.range_tp1_spin)
 
         self.range_tp2_spin = QDoubleSpinBox()
-        self.range_tp2_spin.setRange(0.1, 1000.0)
-        self.range_tp2_spin.setSingleStep(0.5)
+        self.range_tp2_spin.setRange(0.1, 10000.0)
+        self.range_tp2_spin.setSingleStep(10.0)
         self.range_tp2_spin.setDecimals(2)
         range_layout.addRow("TP2:", self.range_tp2_spin)
 
         self.range_tp3_spin = QDoubleSpinBox()
-        self.range_tp3_spin.setRange(0.1, 1000.0)
-        self.range_tp3_spin.setSingleStep(0.5)
+        self.range_tp3_spin.setRange(0.1, 10000.0)
+        self.range_tp3_spin.setSingleStep(10.0)
         self.range_tp3_spin.setDecimals(2)
         range_layout.addRow("TP3:", self.range_tp3_spin)
 
@@ -267,15 +267,15 @@ class SettingsDialog(QDialog):
 
         sl_values_layout.addWidget(QLabel("TREND SL:"))
         self.trend_sl_spin = QDoubleSpinBox()
-        self.trend_sl_spin.setRange(0.1, 1000.0)
-        self.trend_sl_spin.setSingleStep(0.5)
+        self.trend_sl_spin.setRange(0.1, 10000.0)
+        self.trend_sl_spin.setSingleStep(10.0)
         self.trend_sl_spin.setDecimals(2)
         sl_values_layout.addWidget(self.trend_sl_spin)
 
         sl_values_layout.addWidget(QLabel("RANGE SL:"))
         self.range_sl_spin = QDoubleSpinBox()
-        self.range_sl_spin.setRange(0.1, 1000.0)
-        self.range_sl_spin.setSingleStep(0.5)
+        self.range_sl_spin.setRange(0.1, 10000.0)
+        self.range_sl_spin.setSingleStep(10.0)
         self.range_sl_spin.setDecimals(2)
         sl_values_layout.addWidget(self.range_sl_spin)
 
