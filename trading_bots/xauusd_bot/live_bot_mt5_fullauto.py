@@ -33,11 +33,32 @@ if str(trading_app_path) not in sys.path:
 
 from core.mt5_manager import mt5_manager
 
-# CRITICAL: Safety constants for multi-position SL modification
+# ============================================================================
+# CRITICAL: Safety constants for multi-position SL modification protection
+# ============================================================================
+# These constants prevent race condition where trailing stops are applied
+# immediately after position opening, causing premature SL hits on positions 2 & 3
+#
+# Timeline:
+#   0-30s:  No SL modifications allowed (position confirmation period)
+#   30-60s: TP1 can close, but NO trailing activation yet
+#   60s+:   Trailing can activate (only if TP1 confirmed hit)
+#
+# Values chosen based on:
+#   - Broker confirmation time: typically 5-10 seconds
+#   - Network latency: 1-5 seconds
+#   - MT5 synchronization delay: 5-10 seconds
+#   - Safety margin: 2x typical delays
+# ============================================================================
+
 MIN_POSITION_AGE_FOR_TRAILING = 60  # seconds - minimum 1 minute after opening before trailing can activate
 MIN_POSITION_AGE_FOR_SL_MODIFY = 30  # seconds - minimum 30 seconds before any SL modification
-BROKER_CONFIRMATION_TIMEOUT = 10     # seconds - wait for broker confirmation after opening
 MIN_SL_MODIFY_INTERVAL = 10          # seconds - minimum time between consecutive SL modifications
+BROKER_CONFIRMATION_TIMEOUT = 10     # seconds - wait for broker confirmation after opening
+
+# SL Distance validation constants (percentages)
+MIN_SL_DISTANCE_FROM_ENTRY_PCT = 0.003   # 0.3% - minimum distance from entry price
+MIN_SL_DISTANCE_FROM_PRICE_PCT = 0.002   # 0.2% - minimum distance from current price
 
 
 class LiveBotMT5FullAuto:
@@ -204,9 +225,11 @@ class LiveBotMT5FullAuto:
                 writer.writerow([
                     'Ticket', 'Open_Time', 'Close_Time', 'Type', 'Volume',
                     'Entry_Price', 'SL', 'TP', 'Close_Price', 'Profit',
-                    'Pips', 'Market_Regime', 'Duration_Hours', 'Status', 'Comment'
+                    'Pips', 'Market_Regime', 'Duration_Hours', 'Status', 'Comment',
+                    'Position_Group_ID', 'Position_Num'  # Add 3-position mode fields
                 ])
             print(f"📝 Created trade log file: {self.trades_file}")
+
     
     def _initialize_tp_hits_log(self):
         """Initialize CSV file for TP hits logging"""
@@ -425,7 +448,9 @@ class LiveBotMT5FullAuto:
                 trade_data['regime'],
                 trade_data['duration'],
                 trade_data['status'],
-                trade_data['comment']
+                trade_data['comment'],
+                trade_data.get('position_group_id', ''),  # Add group ID
+                trade_data.get('position_num', 0)         # Add position number
             ])
     
     def _get_trade_id_by_order(self, order_id):
@@ -760,11 +785,60 @@ class LiveBotMT5FullAuto:
                                 tp1_just_hit = True
                                 print(f"🎯 Group {group_id[:8]} TP1 reached at {current_price:.2f}! Activating trailing for Pos 2 & 3")
 
-            # If Position 1 not found in group (already closed), activate trailing
+            # If Position 1 not found in group (already closed), check WHY it closed
             if not pos1_found and not group_info['tp1_hit']:
-                group_info['tp1_hit'] = True
-                tp1_just_hit = True
-                print(f"🎯 Group {group_id[:8]} Position 1 closed! Activating trailing for Pos 2 & 3")
+                # CRITICAL: Don't activate trailing if position 1 closed by SL or error!
+                # Only activate if it was genuinely closed by TP1
+                
+                # Try to find position 1 in closed trades
+                pos1_closed_by_tp1 = False
+                
+                # Check in-memory tracker first
+                for ticket, pos_data in list(self.positions_tracker.items()):
+                    if (pos_data.get('position_group_id') == group_id and 
+                        pos_data.get('position_num') == 1 and
+                        pos_data.get('status') in ['TP1', 'TP1_PROCESSING']):
+                        pos1_closed_by_tp1 = True
+                        print(f"✅ Group {group_id[:8]} Position 1 confirmed closed by TP1 (from tracker)")
+                        break
+                
+                # If not found in tracker, check database
+                if not pos1_closed_by_tp1 and self.use_database and self.db:
+                    try:
+                        # Get all trades for this group
+                        all_trades = self.db.get_trades_by_bot(self.bot_id)
+                        for trade in all_trades:
+                            if (trade.position_group_id == group_id and 
+                                trade.position_num == 1 and
+                                trade.status in ['TP1', 'TP1_PROCESSING', 'CLOSED']):
+                                # Check if close price was near TP1
+                                if trade.close_price:
+                                    # For BUY: close price should be >= TP1 (or very close)
+                                    # For SELL: close price should be <= TP1 (or very close)
+                                    tp1_price = trade.take_profit
+                                    if group_info['trade_type'] == 'BUY':
+                                        if trade.close_price >= tp1_price * 0.999:  # Within 0.1% of TP1
+                                            pos1_closed_by_tp1 = True
+                                            print(f"✅ Group {group_id[:8]} Position 1 confirmed closed by TP1 (from DB)")
+                                    else:  # SELL
+                                        if trade.close_price <= tp1_price * 1.001:  # Within 0.1% of TP1
+                                            pos1_closed_by_tp1 = True
+                                            print(f"✅ Group {group_id[:8]} Position 1 confirmed closed by TP1 (from DB)")
+                                break
+                    except Exception as e:
+                        print(f"⚠️  Could not check position 1 status in DB: {e}")
+                
+                # Only activate trailing if Position 1 was confirmed to close by TP1
+                if pos1_closed_by_tp1:
+                    group_info['tp1_hit'] = True
+                    tp1_just_hit = True
+                    print(f"🎯 Group {group_id[:8]} Position 1 closed by TP1! Activating trailing for Pos 2 & 3")
+                else:
+                    # Position 1 closed but NOT by TP1 - do NOT activate trailing
+                    print(f"⚠️  Group {group_id[:8]} Position 1 closed but NOT by TP1 - trailing NOT activated")
+                    print(f"   This usually means Position 1 was closed by SL or manually")
+                    print(f"   Positions 2 & 3 will keep their original SL")
+
             
             # Save tp1_hit to database
             if tp1_just_hit and self.use_database and self.db:
