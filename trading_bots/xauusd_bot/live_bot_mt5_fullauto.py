@@ -452,8 +452,14 @@ class LiveBotMT5FullAuto:
             pips = (pos['entry_price'] - close_price) * 10
         pos['pips'] = round(pips, 1)
         
-        # Calculate profit percentage (approximate)
-        profit_pct = (pips / pos['entry_price']) * 100 if pos['entry_price'] > 0 else 0
+        # Calculate profit percentage - fixed formula
+        if pos['entry_price'] > 0:
+            if pos['type'] == 'BUY':
+                profit_pct = ((close_price - pos['entry_price']) / pos['entry_price']) * 100
+            else:
+                profit_pct = ((pos['entry_price'] - close_price) / pos['entry_price']) * 100
+        else:
+            profit_pct = 0.0
         
         # Write to CSV
         self._write_trade_to_csv(pos)
@@ -671,11 +677,11 @@ class LiveBotMT5FullAuto:
                     if tick:
                         close_price = tick.bid if trade.trade_type == 'BUY' else tick.ask
                         
-                        # Calculate profit
+                        # Calculate profit for XAUUSD (1 lot = 100 oz, point value = $100)
                         if trade.trade_type == 'BUY':
-                            profit = (close_price - trade.entry_price) * trade.amount
+                            profit = (close_price - trade.entry_price) * trade.amount * 100
                         else:
-                            profit = (trade.entry_price - close_price) * trade.amount
+                            profit = (trade.entry_price - close_price) * trade.amount * 100
                     else:
                         close_price = trade.entry_price
                         profit = 0.0
