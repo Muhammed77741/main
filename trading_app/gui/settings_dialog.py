@@ -204,18 +204,21 @@ class SettingsDialog(QDialog):
         self.trend_tp1_spin.setRange(0.1, 10000.0)
         self.trend_tp1_spin.setSingleStep(10.0)
         self.trend_tp1_spin.setDecimals(2)
+        # Suffix will be set dynamically based on exchange type
         trend_layout.addRow("TP1:", self.trend_tp1_spin)
 
         self.trend_tp2_spin = QDoubleSpinBox()
         self.trend_tp2_spin.setRange(0.1, 10000.0)
         self.trend_tp2_spin.setSingleStep(10.0)
         self.trend_tp2_spin.setDecimals(2)
+        # Suffix will be set dynamically based on exchange type
         trend_layout.addRow("TP2:", self.trend_tp2_spin)
 
         self.trend_tp3_spin = QDoubleSpinBox()
         self.trend_tp3_spin.setRange(0.1, 10000.0)
         self.trend_tp3_spin.setSingleStep(10.0)
         self.trend_tp3_spin.setDecimals(2)
+        # Suffix will be set dynamically based on exchange type
         trend_layout.addRow("TP3:", self.trend_tp3_spin)
 
         # RANGE mode TP (right column)
@@ -227,18 +230,21 @@ class SettingsDialog(QDialog):
         self.range_tp1_spin.setRange(0.1, 10000.0)
         self.range_tp1_spin.setSingleStep(10.0)
         self.range_tp1_spin.setDecimals(2)
+        # Suffix will be set dynamically based on exchange type
         range_layout.addRow("TP1:", self.range_tp1_spin)
 
         self.range_tp2_spin = QDoubleSpinBox()
         self.range_tp2_spin.setRange(0.1, 10000.0)
         self.range_tp2_spin.setSingleStep(10.0)
         self.range_tp2_spin.setDecimals(2)
+        # Suffix will be set dynamically based on exchange type
         range_layout.addRow("TP2:", self.range_tp2_spin)
 
         self.range_tp3_spin = QDoubleSpinBox()
         self.range_tp3_spin.setRange(0.1, 10000.0)
         self.range_tp3_spin.setSingleStep(10.0)
         self.range_tp3_spin.setDecimals(2)
+        # Suffix will be set dynamically based on exchange type
         range_layout.addRow("TP3:", self.range_tp3_spin)
 
         # Add both columns to horizontal layout
@@ -263,6 +269,7 @@ class SettingsDialog(QDialog):
         self.trend_sl_spin.setRange(0.1, 10000.0)
         self.trend_sl_spin.setSingleStep(10.0)
         self.trend_sl_spin.setDecimals(2)
+        # Suffix will be set dynamically based on exchange type
         sl_values_layout.addWidget(self.trend_sl_spin)
 
         sl_values_layout.addWidget(QLabel("RANGE SL:"))
@@ -270,15 +277,27 @@ class SettingsDialog(QDialog):
         self.range_sl_spin.setRange(0.1, 10000.0)
         self.range_sl_spin.setSingleStep(10.0)
         self.range_sl_spin.setDecimals(2)
+        # Suffix will be set dynamically based on exchange type
         sl_values_layout.addWidget(self.range_sl_spin)
 
         sl_layout.addRow("", sl_values_layout)
         layout.addLayout(sl_layout)
 
-        # Unit label
-        unit = "%" if self.original_config.exchange == 'Binance' else "points"
+        # Unit label and set suffixes
+        unit = "%" if self.original_config.exchange == 'Binance' else "pips"
         unit_label = QLabel(f"<i>Unit: {unit} (TP and SL)</i>")
         layout.addWidget(unit_label)
+        
+        # Set suffix for all TP/SL spin boxes based on exchange type
+        suffix = "%" if self.original_config.exchange == 'Binance' else " pips"
+        self.trend_tp1_spin.setSuffix(suffix)
+        self.trend_tp2_spin.setSuffix(suffix)
+        self.trend_tp3_spin.setSuffix(suffix)
+        self.range_tp1_spin.setSuffix(suffix)
+        self.range_tp2_spin.setSuffix(suffix)
+        self.range_tp3_spin.setSuffix(suffix)
+        self.trend_sl_spin.setSuffix(suffix)
+        self.range_sl_spin.setSuffix(suffix)
 
         return group
 

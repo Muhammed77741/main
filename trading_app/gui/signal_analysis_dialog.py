@@ -2302,27 +2302,27 @@ class SignalAnalysisDialog(QDialog):
         self.trend_tp1_spin.setRange(0.001, 10000)
         self.trend_tp1_spin.setDecimals(3)
         self.trend_tp1_spin.setSingleStep(0.1)
-        self.trend_tp1_spin.setValue(CRYPTO_TREND_TP['tp1'] * 100)
+        self.trend_tp1_spin.setValue(CRYPTO_TREND_TP['tp1'])  # Default to crypto format, will be updated by update_tp_sl_labels()
         self.trend_tp1_spin.setMaximumWidth(70)
-        self.trend_tp1_spin.setToolTip("TP1 TREND\nCrypto: 150 = 1.5%\nGold: 30p")
+        self.trend_tp1_spin.setToolTip("TP1 for TREND mode")
         trend_tp_row.addWidget(self.trend_tp1_spin)
         trend_tp_row.addWidget(QLabel("TP2:"))
         self.trend_tp2_spin = QDoubleSpinBox()
         self.trend_tp2_spin.setRange(0.001, 10000)
         self.trend_tp2_spin.setDecimals(3)
         self.trend_tp2_spin.setSingleStep(0.1)
-        self.trend_tp2_spin.setValue(CRYPTO_TREND_TP['tp2'] * 100)
+        self.trend_tp2_spin.setValue(CRYPTO_TREND_TP['tp2'])  # Default to crypto format, will be updated by update_tp_sl_labels()
         self.trend_tp2_spin.setMaximumWidth(70)
-        self.trend_tp2_spin.setToolTip("TP2 TREND\nCrypto: 275 = 2.75%\nGold: 55p")
+        self.trend_tp2_spin.setToolTip("TP2 for TREND mode")
         trend_tp_row.addWidget(self.trend_tp2_spin)
         trend_tp_row.addWidget(QLabel("TP3:"))
         self.trend_tp3_spin = QDoubleSpinBox()
         self.trend_tp3_spin.setRange(0.001, 10000)
         self.trend_tp3_spin.setDecimals(3)
         self.trend_tp3_spin.setSingleStep(0.1)
-        self.trend_tp3_spin.setValue(CRYPTO_TREND_TP['tp3'] * 100)
+        self.trend_tp3_spin.setValue(CRYPTO_TREND_TP['tp3'])  # Default to crypto format, will be updated by update_tp_sl_labels()
         self.trend_tp3_spin.setMaximumWidth(70)
-        self.trend_tp3_spin.setToolTip("TP3 TREND\nCrypto: 450 = 4.5%\nGold: 90p")
+        self.trend_tp3_spin.setToolTip("TP3 for TREND mode")
         trend_tp_row.addWidget(self.trend_tp3_spin)
         trend_tp_row.addStretch()
         trend_col.addLayout(trend_tp_row)
@@ -2335,9 +2335,9 @@ class SignalAnalysisDialog(QDialog):
         self.trend_sl_spin.setRange(0.001, 10000)
         self.trend_sl_spin.setDecimals(3)
         self.trend_sl_spin.setSingleStep(0.1)
-        self.trend_sl_spin.setValue(CRYPTO_TREND_SL * 100)
+        self.trend_sl_spin.setValue(CRYPTO_TREND_SL)  # Default to crypto format, will be updated by update_tp_sl_labels()
         self.trend_sl_spin.setMaximumWidth(70)
-        self.trend_sl_spin.setToolTip("SL TREND\nCrypto: 80 = 0.8%\nGold: 16p")
+        self.trend_sl_spin.setToolTip("Stop Loss for TREND mode")
         trend_sl_row.addWidget(self.trend_sl_spin)
         trend_sl_row.addStretch()
         trend_col.addLayout(trend_sl_row)
@@ -2359,27 +2359,27 @@ class SignalAnalysisDialog(QDialog):
         self.range_tp1_spin.setRange(0.001, 10000)
         self.range_tp1_spin.setDecimals(3)
         self.range_tp1_spin.setSingleStep(0.1)
-        self.range_tp1_spin.setValue(CRYPTO_RANGE_TP['tp1'] * 100)
+        self.range_tp1_spin.setValue(CRYPTO_RANGE_TP['tp1'])  # Default to crypto format, will be updated by update_tp_sl_labels()
         self.range_tp1_spin.setMaximumWidth(70)
-        self.range_tp1_spin.setToolTip("TP1 RANGE\nCrypto: 100 = 1.0%\nGold: 20p")
+        self.range_tp1_spin.setToolTip("TP1 for RANGE mode")
         range_tp_row.addWidget(self.range_tp1_spin)
         range_tp_row.addWidget(QLabel("TP2:"))
         self.range_tp2_spin = QDoubleSpinBox()
         self.range_tp2_spin.setRange(0.001, 10000)
         self.range_tp2_spin.setDecimals(3)
         self.range_tp2_spin.setSingleStep(0.1)
-        self.range_tp2_spin.setValue(CRYPTO_RANGE_TP['tp2'] * 100)
+        self.range_tp2_spin.setValue(CRYPTO_RANGE_TP['tp2'])  # Default to crypto format, will be updated by update_tp_sl_labels()
         self.range_tp2_spin.setMaximumWidth(70)
-        self.range_tp2_spin.setToolTip("TP2 RANGE\nCrypto: 175 = 1.75%\nGold: 35p")
+        self.range_tp2_spin.setToolTip("TP2 for RANGE mode")
         range_tp_row.addWidget(self.range_tp2_spin)
         range_tp_row.addWidget(QLabel("TP3:"))
         self.range_tp3_spin = QDoubleSpinBox()
         self.range_tp3_spin.setRange(0.001, 10000)
         self.range_tp3_spin.setDecimals(3)
         self.range_tp3_spin.setSingleStep(0.1)
-        self.range_tp3_spin.setValue(CRYPTO_RANGE_TP['tp3'] * 100)
+        self.range_tp3_spin.setValue(CRYPTO_RANGE_TP['tp3'])  # Default to crypto format, will be updated by update_tp_sl_labels()
         self.range_tp3_spin.setMaximumWidth(70)
-        self.range_tp3_spin.setToolTip("TP3 RANGE\nCrypto: 250 = 2.5%\nGold: 50p")
+        self.range_tp3_spin.setToolTip("TP3 for RANGE mode")
         range_tp_row.addWidget(self.range_tp3_spin)
         range_tp_row.addStretch()
         range_col.addLayout(range_tp_row)
@@ -2392,9 +2392,9 @@ class SignalAnalysisDialog(QDialog):
         self.range_sl_spin.setRange(0.001, 10000)
         self.range_sl_spin.setDecimals(3)
         self.range_sl_spin.setSingleStep(0.1)
-        self.range_sl_spin.setValue(CRYPTO_RANGE_SL * 100)
+        self.range_sl_spin.setValue(CRYPTO_RANGE_SL)  # Default to crypto format, will be updated by update_tp_sl_labels()
         self.range_sl_spin.setMaximumWidth(70)
-        self.range_sl_spin.setToolTip("SL RANGE\nCrypto: 60 = 0.6%\nGold: 12p")
+        self.range_sl_spin.setToolTip("Stop Loss for RANGE mode")
         range_sl_row.addWidget(self.range_sl_spin)
         range_sl_row.addStretch()
         range_col.addLayout(range_sl_row)
@@ -2476,71 +2476,71 @@ class SignalAnalysisDialog(QDialog):
         is_crypto = is_crypto_symbol(symbol)
 
         if not is_crypto:
-            # Forex/Commodities - show points/pips
-            self.trend_tp1_spin.setSuffix(" p")
-            self.trend_tp1_spin.setToolTip(f"TP1 for TREND mode ({symbol}): 30 points")
+            # Forex/Commodities - show pips/points
+            self.trend_tp1_spin.setSuffix(" pips")
+            self.trend_tp1_spin.setToolTip(f"TP1 for TREND mode ({symbol}): default 30 pips")
             self.trend_tp1_spin.setValue(MT5_TREND_TP['tp1'])
 
-            self.trend_tp2_spin.setSuffix(" p")
-            self.trend_tp2_spin.setToolTip(f"TP2 for TREND mode ({symbol}): 55 points")
+            self.trend_tp2_spin.setSuffix(" pips")
+            self.trend_tp2_spin.setToolTip(f"TP2 for TREND mode ({symbol}): default 55 pips")
             self.trend_tp2_spin.setValue(MT5_TREND_TP['tp2'])
 
-            self.trend_tp3_spin.setSuffix(" p")
-            self.trend_tp3_spin.setToolTip(f"TP3 for TREND mode ({symbol}): 90 points")
+            self.trend_tp3_spin.setSuffix(" pips")
+            self.trend_tp3_spin.setToolTip(f"TP3 for TREND mode ({symbol}): default 90 pips")
             self.trend_tp3_spin.setValue(MT5_TREND_TP['tp3'])
 
-            self.range_tp1_spin.setSuffix(" p")
-            self.range_tp1_spin.setToolTip(f"TP1 for RANGE mode ({symbol}): 20 points")
+            self.range_tp1_spin.setSuffix(" pips")
+            self.range_tp1_spin.setToolTip(f"TP1 for RANGE mode ({symbol}): default 20 pips")
             self.range_tp1_spin.setValue(MT5_RANGE_TP['tp1'])
 
-            self.range_tp2_spin.setSuffix(" p")
-            self.range_tp2_spin.setToolTip(f"TP2 for RANGE mode ({symbol}): 35 points")
+            self.range_tp2_spin.setSuffix(" pips")
+            self.range_tp2_spin.setToolTip(f"TP2 for RANGE mode ({symbol}): default 35 pips")
             self.range_tp2_spin.setValue(MT5_RANGE_TP['tp2'])
 
-            self.range_tp3_spin.setSuffix(" p")
-            self.range_tp3_spin.setToolTip(f"TP3 for RANGE mode ({symbol}): 50 points")
+            self.range_tp3_spin.setSuffix(" pips")
+            self.range_tp3_spin.setToolTip(f"TP3 for RANGE mode ({symbol}): default 50 pips")
             self.range_tp3_spin.setValue(MT5_RANGE_TP['tp3'])
 
-            self.trend_sl_spin.setSuffix(" p")
-            self.trend_sl_spin.setToolTip(f"Stop Loss for TREND mode ({symbol}): 16 points")
+            self.trend_sl_spin.setSuffix(" pips")
+            self.trend_sl_spin.setToolTip(f"Stop Loss for TREND mode ({symbol}): default 16 pips")
             self.trend_sl_spin.setValue(MT5_TREND_SL)
 
-            self.range_sl_spin.setSuffix(" p")
-            self.range_sl_spin.setToolTip(f"Stop Loss for RANGE mode ({symbol}): 12 points")
+            self.range_sl_spin.setSuffix(" pips")
+            self.range_sl_spin.setToolTip(f"Stop Loss for RANGE mode ({symbol}): default 12 pips")
             self.range_sl_spin.setValue(MT5_RANGE_SL)
         else:
-            # Crypto - show only percentages (basis points)
-            self.trend_tp1_spin.setSuffix(" (1.5%)")
-            self.trend_tp1_spin.setToolTip("TP1 for TREND mode (Crypto): 150 basis points = 1.5%")
-            self.trend_tp1_spin.setValue(CRYPTO_TREND_TP['tp1'] * 100)
+            # Crypto - show percentages
+            self.trend_tp1_spin.setSuffix("%")
+            self.trend_tp1_spin.setToolTip("TP1 for TREND mode (Crypto): default 1.5%")
+            self.trend_tp1_spin.setValue(CRYPTO_TREND_TP['tp1'])
             
-            self.trend_tp2_spin.setSuffix(" (2.75%)")
-            self.trend_tp2_spin.setToolTip("TP2 for TREND mode (Crypto): 275 basis points = 2.75%")
-            self.trend_tp2_spin.setValue(CRYPTO_TREND_TP['tp2'] * 100)
+            self.trend_tp2_spin.setSuffix("%")
+            self.trend_tp2_spin.setToolTip("TP2 for TREND mode (Crypto): default 2.75%")
+            self.trend_tp2_spin.setValue(CRYPTO_TREND_TP['tp2'])
             
-            self.trend_tp3_spin.setSuffix(" (4.5%)")
-            self.trend_tp3_spin.setToolTip("TP3 for TREND mode (Crypto): 450 basis points = 4.5%")
-            self.trend_tp3_spin.setValue(CRYPTO_TREND_TP['tp3'] * 100)
+            self.trend_tp3_spin.setSuffix("%")
+            self.trend_tp3_spin.setToolTip("TP3 for TREND mode (Crypto): default 4.5%")
+            self.trend_tp3_spin.setValue(CRYPTO_TREND_TP['tp3'])
             
-            self.range_tp1_spin.setSuffix(" (1.0%)")
-            self.range_tp1_spin.setToolTip("TP1 for RANGE mode (Crypto): 100 basis points = 1.0%")
-            self.range_tp1_spin.setValue(CRYPTO_RANGE_TP['tp1'] * 100)
+            self.range_tp1_spin.setSuffix("%")
+            self.range_tp1_spin.setToolTip("TP1 for RANGE mode (Crypto): default 1.0%")
+            self.range_tp1_spin.setValue(CRYPTO_RANGE_TP['tp1'])
             
-            self.range_tp2_spin.setSuffix(" (1.75%)")
-            self.range_tp2_spin.setToolTip("TP2 for RANGE mode (Crypto): 175 basis points = 1.75%")
-            self.range_tp2_spin.setValue(CRYPTO_RANGE_TP['tp2'] * 100)
+            self.range_tp2_spin.setSuffix("%")
+            self.range_tp2_spin.setToolTip("TP2 for RANGE mode (Crypto): default 1.75%")
+            self.range_tp2_spin.setValue(CRYPTO_RANGE_TP['tp2'])
             
-            self.range_tp3_spin.setSuffix(" (2.5%)")
-            self.range_tp3_spin.setToolTip("TP3 for RANGE mode (Crypto): 250 basis points = 2.5%")
-            self.range_tp3_spin.setValue(CRYPTO_RANGE_TP['tp3'] * 100)
+            self.range_tp3_spin.setSuffix("%")
+            self.range_tp3_spin.setToolTip("TP3 for RANGE mode (Crypto): default 2.5%")
+            self.range_tp3_spin.setValue(CRYPTO_RANGE_TP['tp3'])
             
-            self.trend_sl_spin.setSuffix(" (0.8%)")
-            self.trend_sl_spin.setToolTip("Stop Loss for TREND mode (Crypto): 80 basis points = 0.8%")
-            self.trend_sl_spin.setValue(CRYPTO_TREND_SL * 100)
+            self.trend_sl_spin.setSuffix("%")
+            self.trend_sl_spin.setToolTip("Stop Loss for TREND mode (Crypto): default 0.8%")
+            self.trend_sl_spin.setValue(CRYPTO_TREND_SL)
             
-            self.range_sl_spin.setSuffix(" (0.6%)")
-            self.range_sl_spin.setToolTip("Stop Loss for RANGE mode (Crypto): 60 basis points = 0.6%")
-            self.range_sl_spin.setValue(CRYPTO_RANGE_SL * 100)
+            self.range_sl_spin.setSuffix("%")
+            self.range_sl_spin.setToolTip("Stop Loss for RANGE mode (Crypto): default 0.6%")
+            self.range_sl_spin.setValue(CRYPTO_RANGE_SL)
     
     def on_save_tp_defaults(self):
         """Save current TP/SL values as defaults"""
@@ -2606,6 +2606,7 @@ class SignalAnalysisDialog(QDialog):
             # Get current symbol
             symbol = self.symbol_combo.currentText()
             is_mt5 = is_mt5_symbol(symbol)
+            is_crypto = is_crypto_symbol(symbol)
 
             # Normalize symbol name for filename
             symbol_key = symbol.split('/')[0] if '/' in symbol else symbol
@@ -2614,10 +2615,34 @@ class SignalAnalysisDialog(QDialog):
             config_file = os.path.join(config_dir, f"signal_analysis_tp_defaults_{symbol_key}.json")
 
             if not os.path.exists(config_file):
+                # No saved defaults, but we should still update labels for current symbol
+                self.update_tp_sl_labels()
                 return  # No saved defaults for this symbol, use built-in defaults
 
             with open(config_file, 'r') as f:
                 settings = json.load(f)
+
+            # Update labels first to set proper suffix
+            self.update_tp_sl_labels()
+
+            # Migrate old format to new format for crypto symbols
+            # Old format: 150 (basis points), New format: 1.5 (percentage)
+            if is_crypto:
+                # Check if values need migration (old format had values > 10)
+                if settings.get('trend_tp1', 0) > 10:
+                    # Convert old basis points to percentage
+                    settings['trend_tp1'] = settings.get('trend_tp1', 150) / 100.0
+                    settings['trend_tp2'] = settings.get('trend_tp2', 275) / 100.0
+                    settings['trend_tp3'] = settings.get('trend_tp3', 450) / 100.0
+                    settings['range_tp1'] = settings.get('range_tp1', 100) / 100.0
+                    settings['range_tp2'] = settings.get('range_tp2', 175) / 100.0
+                    settings['range_tp3'] = settings.get('range_tp3', 250) / 100.0
+                    settings['trend_sl'] = settings.get('trend_sl', 80) / 100.0
+                    settings['range_sl'] = settings.get('range_sl', 60) / 100.0
+                    
+                    # Save migrated values
+                    with open(config_file, 'w') as f:
+                        json.dump(settings, f, indent=2)
 
             # Apply saved settings for this symbol
             self.trend_tp1_spin.setValue(settings.get('trend_tp1', self.trend_tp1_spin.value()))
@@ -2631,8 +2656,8 @@ class SignalAnalysisDialog(QDialog):
             self.trailing_stop_spin.setValue(settings.get('trailing_stop_pct', 50))
 
         except Exception as e:
-            # Silently fail - just use defaults
-            pass
+            # Silently fail - just use defaults and update labels
+            self.update_tp_sl_labels()
         
     def create_summary_section(self):
         """Create summary section - compact layout"""
@@ -2760,7 +2785,7 @@ class SignalAnalysisDialog(QDialog):
 
             # Convert values based on symbol type
             if not is_crypto:
-                # For Forex/Commodities, values are already in points
+                # For Forex/Commodities, values are already in pips
                 custom_tp_levels = {
                     'trend': {'tp1': trend_tp1, 'tp2': trend_tp2, 'tp3': trend_tp3},
                     'range': {'tp1': range_tp1, 'tp2': range_tp2, 'tp3': range_tp3}
@@ -2770,14 +2795,14 @@ class SignalAnalysisDialog(QDialog):
                     'range': range_sl
                 }
             else:
-                # For crypto, convert from basis points to percentage
+                # For crypto, values are already in percentage (e.g., 1.5 = 1.5%)
                 custom_tp_levels = {
-                    'trend': {'tp1': trend_tp1 / 100.0, 'tp2': trend_tp2 / 100.0, 'tp3': trend_tp3 / 100.0},
-                    'range': {'tp1': range_tp1 / 100.0, 'tp2': range_tp2 / 100.0, 'tp3': range_tp3 / 100.0}
+                    'trend': {'tp1': trend_tp1, 'tp2': trend_tp2, 'tp3': trend_tp3},
+                    'range': {'tp1': range_tp1, 'tp2': range_tp2, 'tp3': range_tp3}
                 }
                 custom_sl_levels = {
-                    'trend': trend_sl / 100.0,
-                    'range': range_sl / 100.0
+                    'trend': trend_sl,
+                    'range': range_sl
                 }
         
         # Clear previous results
