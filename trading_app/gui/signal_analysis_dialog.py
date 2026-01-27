@@ -156,10 +156,23 @@ class SignalAnalysisWorker(QThread):
             # Run strategy
             df_signals = strategy.run_strategy(df)
             
-            # Find signals
+            # Find signals - FILTER OUT SIGNALS FROM INCOMPLETE CANDLES
+            # Only include signals from closed candles (not the last bar which may be incomplete)
+            # Match live bot behavior: signals must be from previous completed candles
             signals_df = df_signals[df_signals['signal'] != 0].copy()
             
-            self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals...")
+            # CRITICAL FIX: Remove signal from last candle (current/incomplete)
+            # In backtesting, we should only trade on signals that would have been available
+            # at the time of decision (i.e., from completed candles only)
+            if len(signals_df) > 0:
+                # Get the last timestamp in the full dataset
+                last_timestamp = df_signals.index[-1]
+                
+                # Filter out any signals from the last (potentially incomplete) candle
+                # This matches the live bot behavior where we only trade on closed candles
+                signals_df = signals_df[signals_df.index < last_timestamp].copy()
+            
+            self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals (from closed candles only)...")
             
             # Calculate outcomes for each signal
             signals_df = self._calculate_signal_outcomes(signals_df, df_signals)
@@ -1118,10 +1131,23 @@ class SignalAnalysisWorkerMT5(QThread):
                 # Run strategy
                 df_signals = strategy.run_strategy(df)
                 
-                # Find signals
+                # Find signals - FILTER OUT SIGNALS FROM INCOMPLETE CANDLES
+                # Only include signals from closed candles (not the last bar which may be incomplete)
+                # Match live bot behavior: signals must be from previous completed candles
                 signals_df = df_signals[df_signals['signal'] != 0].copy()
                 
-                self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals...")
+                # CRITICAL FIX: Remove signal from last candle (current/incomplete)
+                # In backtesting, we should only trade on signals that would have been available
+                # at the time of decision (i.e., from completed candles only)
+                if len(signals_df) > 0:
+                    # Get the last timestamp in the full dataset
+                    last_timestamp = df_signals.index[-1]
+                    
+                    # Filter out any signals from the last (potentially incomplete) candle
+                    # This matches the live bot behavior where we only trade on closed candles
+                    signals_df = signals_df[signals_df.index < last_timestamp].copy()
+                
+                self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals (from closed candles only)...")
                 
                 # Calculate outcomes for each signal (reuse the same logic)
                 signals_df = self._calculate_signal_outcomes(signals_df, df_signals)

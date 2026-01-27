@@ -160,6 +160,9 @@ class LiveBotMT5FullAuto:
         self.position_groups = {}  # {group_id: {'tp1_hit': bool, 'max_price': float, 'min_price': float, 'positions': [...]}}
         self.group_counter = 0  # Counter for position groups (0-99) used in magic number generation
         self.logged_closed_groups = set()  # Track groups where we've already logged "Position 1 closed but NOT by TP1" to prevent spam
+        
+        # Signal tracking to prevent duplicate opening
+        self.opened_signal_ids = set()  # Track signal IDs that have been opened to prevent duplicates
 
         # Resilience features (CRITICAL: Network stability)
         self.running = True  # Flag for graceful shutdown
@@ -2418,17 +2421,41 @@ class LiveBotMT5FullAuto:
             if len(signals) == 0:
                 return None
                 
-            # ONLY CHECK THE MOST RECENT CLOSED CANDLE (not historical signals)
-            # This ensures we only trade on fresh signals, not old ones
+            # CRITICAL FIX: Signal must be from CLOSED candle only, NOT current incomplete bar
+            # For H1 timeframe: if current time is 14:30, current bar is 14:00-15:00 (incomplete)
+            # We should only trade signals from previous completed bar (13:00-14:00)
             last_signal = signals.iloc[-1]
             last_signal_time = signals.index[-1]
             current_time = df.index[-1]
 
-            # Signal must be from the LAST COMPLETED CANDLE ONLY
-            # If signal is older than 1.5 hours, it's from a previous candle - ignore it
+            # Signal must NOT be from the current bar (df.index[-1])
+            # It must be from a previous completed candle
+            # For H1: signal should be at least 0.5 hours old (30+ minutes into next bar)
+            # This ensures we're not trading on incomplete candle data
             time_diff_hours = (current_time - last_signal_time).total_seconds() / 3600
 
-            if time_diff_hours > 1.5:  # More than 1.5 hours old = not from last closed candle
+            # FIXED: Signal must be from PREVIOUS candle, not current
+            # For H1: diff should be close to 1.0 hour (between 0.5 and 1.5 hours)
+            # - If diff < 0.5: signal is from current incomplete bar -> REJECT
+            # - If diff > 1.5: signal is too old (2+ candles ago) -> REJECT
+            if time_diff_hours < 0.5:  # Signal from current incomplete candle
+                return None
+            if time_diff_hours > 1.5:  # Signal too old (2+ candles ago)
+                return None
+            
+            # Get entry price for signal ID generation
+            entry = last_signal['entry_price']
+            
+            # Generate unique signal ID to prevent duplicate opening
+            # Signal ID is based on: timestamp (rounded to hour), direction, and entry price
+            signal_timestamp_str = last_signal_time.strftime('%Y%m%d%H')  # Round to hour
+            signal_direction = int(last_signal['signal'])
+            signal_entry = round(entry, 2)
+            signal_id = f"{signal_timestamp_str}_{signal_direction}_{signal_entry}"
+            
+            # Check if we've already opened this signal
+            if signal_id in self.opened_signal_ids:
+                # Already opened this signal - skip to prevent duplicate
                 return None
 
             # Adjust TP based on market regime
@@ -2441,8 +2468,7 @@ class LiveBotMT5FullAuto:
                 tp2_distance = self.range_tp2
                 tp3_distance = self.range_tp3
 
-            # Calculate all 3 TP levels
-            entry = last_signal['entry_price']
+            # Calculate all 3 TP levels (entry already defined above)
 
             # Calculate SL based on settings
             if self.use_regime_based_sl:
@@ -2503,6 +2529,7 @@ class LiveBotMT5FullAuto:
             print(f"\n   ✅ SIGNAL FOUND!")
             print(f"      {direction} | {self.current_regime} | Entry: ${entry:.2f}")
             print(f"      SL: ${sl:.2f} | TP1/2/3: ${tp1:.2f}/${tp2:.2f}/${tp3:.2f}")
+            print(f"      Signal ID: {signal_id}")
 
             return {
                 'direction': last_signal['signal'],
@@ -2515,7 +2542,8 @@ class LiveBotMT5FullAuto:
                 'tp2_distance': tp2_distance,
                 'tp3_distance': tp3_distance,
                 'time': last_signal_time,
-                'regime': self.current_regime
+                'regime': self.current_regime,
+                'signal_id': signal_id  # Add signal ID for duplicate tracking
             }
             
         except Exception as e:
@@ -2626,6 +2654,11 @@ class LiveBotMT5FullAuto:
                 regime=regime,
                 comment=f"V3_{regime_code}"
             )
+            
+            # Track signal ID to prevent duplicate opening
+            if 'signal_id' in signal:
+                self.opened_signal_ids.add(signal['signal_id'])
+                print(f"   📝 Signal ID tracked: {signal['signal_id']}")
 
             print(f"   ✅ Simulated position logged: DRY-{simulated_ticket}")
             print(f"\n🧪 DRY RUN: Simulated position created and tracked")
@@ -2683,6 +2716,11 @@ class LiveBotMT5FullAuto:
             regime=regime,
             comment=f"V3_{regime_code}"
         )
+        
+        # Track signal ID to prevent duplicate opening
+        if 'signal_id' in signal:
+            self.opened_signal_ids.add(signal['signal_id'])
+            print(f"   📝 Signal ID tracked: {signal['signal_id']}")
 
         # Send Telegram notification
         if self.telegram_bot:
@@ -2836,6 +2874,11 @@ class LiveBotMT5FullAuto:
                         print(f"✅ Position group saved to database (dry-run): {group_id[:8]} (counter={current_group_counter})")
                 except Exception as e:
                     print(f"⚠️  Could not save position group to DB: {e}")
+            
+            # Track signal ID to prevent duplicate opening
+            if 'signal_id' in signal:
+                self.opened_signal_ids.add(signal['signal_id'])
+                print(f"   📝 Signal ID tracked: {signal['signal_id']}")
 
             print(f"\n🧪 DRY RUN: 3 simulated positions created and tracked")
             return True
@@ -2986,8 +3029,37 @@ class LiveBotMT5FullAuto:
                 message += f"  {tp_name}: ${tp_price:.2f} (#{ticket})\n"
             message += f"\nTotal risk: {self.risk_percent}%"
             self.send_telegram(message)
+        
+        # Track signal ID to prevent duplicate opening
+        if 'signal_id' in signal:
+            self.opened_signal_ids.add(signal['signal_id'])
+            print(f"   📝 Signal ID tracked: {signal['signal_id']}")
             
         return True
+    
+    def _cleanup_old_signal_ids(self):
+        """Clean up signal IDs older than 7 days to prevent memory growth
+        
+        Signal IDs are in format: YYYYMMDDHH_direction_entry
+        We can parse the timestamp and remove old ones
+        """
+        if not self.opened_signal_ids:
+            return
+        
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.now() - timedelta(days=7)
+        cutoff_str = cutoff_date.strftime('%Y%m%d')
+        
+        # Filter out old signal IDs
+        old_count = len(self.opened_signal_ids)
+        self.opened_signal_ids = {
+            sig_id for sig_id in self.opened_signal_ids
+            if sig_id.split('_')[0] >= cutoff_str  # Keep only recent signals
+        }
+        new_count = len(self.opened_signal_ids)
+        
+        if old_count != new_count:
+            print(f"   🧹 Cleaned up {old_count - new_count} old signal IDs (keeping {new_count})")
     
     def generate_report(self):
         """Generate trading report from CSV log"""
@@ -3218,6 +3290,10 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 
                 # Check for closed positions and log them
                 self._check_closed_positions()
+                
+                # Cleanup old signal IDs periodically (every 24 hours based on iteration counter)
+                if iteration % 24 == 0:
+                    self._cleanup_old_signal_ids()
                 
                 print(f"📊 Open positions: {len(open_positions)}/{self.max_positions}")
                 
