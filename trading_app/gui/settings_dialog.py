@@ -367,7 +367,9 @@ class SettingsDialog(QDialog):
         self.config['timeframe'] = self.timeframe_combo.currentText()
         self.config['risk_percent'] = self.risk_spin.value()
         self.config['max_positions'] = self.max_pos_spin.value()
+        
         # DRY_RUN is always False (disabled) and cannot be changed by user
+        # WARNING: This means real trades will be placed!
         self.config['dry_run'] = False
 
         self.config['trend_tp1'] = self.trend_tp1_spin.value()
