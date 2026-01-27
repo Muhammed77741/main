@@ -60,6 +60,20 @@ BROKER_CONFIRMATION_TIMEOUT = 10     # seconds - wait for broker confirmation af
 MIN_SL_DISTANCE_FROM_ENTRY_PCT = 0.003   # 0.3% - minimum distance from entry price
 MIN_SL_DISTANCE_FROM_PRICE_PCT = 0.002   # 0.2% - minimum distance from current price
 
+# ============================================================================
+# Signal freshness validation constants (for H1 timeframe)
+# ============================================================================
+# These constants ensure we only trade signals from previous CLOSED candles,
+# not from the current incomplete candle or very old signals
+#
+# For H1 timeframe:
+#   - Current incomplete bar: 0-0.5 hours old -> REJECT
+#   - Previous closed bar: 0.5-1.5 hours old -> ACCEPT
+#   - Older bars: > 1.5 hours old -> REJECT
+# ============================================================================
+SIGNAL_MIN_AGE_HOURS = 0.5   # Minimum age to ensure signal is from closed candle
+SIGNAL_MAX_AGE_HOURS = 1.5   # Maximum age to ensure signal is fresh (not too old)
+
 
 class LiveBotMT5FullAuto:
     """
@@ -2435,12 +2449,12 @@ class LiveBotMT5FullAuto:
             time_diff_hours = (current_time - last_signal_time).total_seconds() / 3600
 
             # FIXED: Signal must be from PREVIOUS candle, not current
-            # For H1: diff should be close to 1.0 hour (between 0.5 and 1.5 hours)
-            # - If diff < 0.5: signal is from current incomplete bar -> REJECT
-            # - If diff > 1.5: signal is too old (2+ candles ago) -> REJECT
-            if time_diff_hours < 0.5:  # Signal from current incomplete candle
+            # Use configured thresholds for signal freshness validation
+            # - If diff < MIN: signal is from current incomplete bar -> REJECT
+            # - If diff > MAX: signal is too old (2+ candles ago) -> REJECT
+            if time_diff_hours < SIGNAL_MIN_AGE_HOURS:  # Signal from current incomplete candle
                 return None
-            if time_diff_hours > 1.5:  # Signal too old (2+ candles ago)
+            if time_diff_hours > SIGNAL_MAX_AGE_HOURS:  # Signal too old (2+ candles ago)
                 return None
             
             # Get entry price for signal ID generation
@@ -3050,12 +3064,27 @@ class LiveBotMT5FullAuto:
         cutoff_date = datetime.now() - timedelta(days=7)
         cutoff_str = cutoff_date.strftime('%Y%m%d')
         
-        # Filter out old signal IDs
+        # Filter out old signal IDs with validation
         old_count = len(self.opened_signal_ids)
-        self.opened_signal_ids = {
-            sig_id for sig_id in self.opened_signal_ids
-            if sig_id.split('_')[0] >= cutoff_str  # Keep only recent signals
-        }
+        cleaned_ids = set()
+        
+        for sig_id in self.opened_signal_ids:
+            try:
+                # Validate format: YYYYMMDDHH_direction_entry
+                parts = sig_id.split('_')
+                if len(parts) >= 3:
+                    timestamp_str = parts[0]
+                    # Keep only recent signals (timestamp >= cutoff)
+                    if timestamp_str >= cutoff_str:
+                        cleaned_ids.add(sig_id)
+                else:
+                    # Invalid format - keep it to avoid data loss
+                    cleaned_ids.add(sig_id)
+            except Exception:
+                # Error parsing - keep it to avoid data loss
+                cleaned_ids.add(sig_id)
+        
+        self.opened_signal_ids = cleaned_ids
         new_count = len(self.opened_signal_ids)
         
         if old_count != new_count:
