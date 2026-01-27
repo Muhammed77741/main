@@ -64,14 +64,11 @@ def is_mt5_symbol(symbol: str) -> bool:
     return True
 
 
-def is_crypto_symbol(symbol: str) -> bool:
-    """Check if symbol is cryptocurrency (BTC, ETH, etc.)"""
-    if not symbol:
-        return False
-    symbol_upper = symbol.upper()
-    # Check for crypto keywords
-    crypto_keywords = ['BTC', 'ETH', 'XRP', 'LTC', 'ADA', 'DOT', 'DOGE', 'SOL', 'AVAX', 'MATIC']
-    return any(keyword in symbol_upper for keyword in crypto_keywords)
+# Import shared crypto detection function
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from format_utils import is_crypto_symbol, MIGRATION_THRESHOLD
 
 
 class SignalAnalysisWorker(QThread):
@@ -2628,8 +2625,8 @@ class SignalAnalysisDialog(QDialog):
             # Migrate old format to new format for crypto symbols
             # Old format: 150 (basis points), New format: 1.5 (percentage)
             if is_crypto:
-                # Check if values need migration (old format had values > 10)
-                if settings.get('trend_tp1', 0) > 10:
+                # Check if values need migration (old format had values > MIGRATION_THRESHOLD)
+                if settings.get('trend_tp1', 0) > MIGRATION_THRESHOLD:
                     # Convert old basis points to percentage
                     settings['trend_tp1'] = settings.get('trend_tp1', 150) / 100.0
                     settings['trend_tp2'] = settings.get('trend_tp2', 275) / 100.0

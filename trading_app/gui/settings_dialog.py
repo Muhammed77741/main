@@ -8,16 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from models import BotConfig
-
-
-def is_crypto_symbol(symbol: str) -> bool:
-    """Check if symbol is cryptocurrency (BTC, ETH, SOL, etc.)"""
-    if not symbol:
-        return False
-    symbol_upper = symbol.upper()
-    # Check for crypto keywords
-    crypto_keywords = ['BTC', 'ETH', 'XRP', 'LTC', 'ADA', 'DOT', 'DOGE', 'SOL', 'AVAX', 'MATIC']
-    return any(keyword in symbol_upper for keyword in crypto_keywords)
+from .format_utils import is_crypto_symbol
 
 
 class SettingsDialog(QDialog):

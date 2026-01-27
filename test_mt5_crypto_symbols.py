@@ -124,32 +124,40 @@ print(f"  TP3: {xauusd_config.trend_tp3} pips (displayed with pips suffix)")
 print(f"  SL: {xauusd_config.trend_sl} pips (displayed with pips suffix)")
 
 # Test 5: Verify is_crypto_symbol function
-print("\n[Test 5] Verify is_crypto_symbol() function:")
+print("\n[Test 5] Verify is_crypto_symbol() and format_utils:")
 print("-" * 80)
 
-# Import the function from settings_dialog
-with open('trading_app/gui/settings_dialog.py', 'r') as f:
-    content = f.read()
+# Import the function from format_utils
+try:
+    with open('trading_app/gui/format_utils.py', 'r') as f:
+        utils_content = f.read()
+    
+    with open('trading_app/gui/settings_dialog.py', 'r') as f:
+        settings_content = f.read()
 
-# Check if function exists
-if 'def is_crypto_symbol' in content:
-    print("✓ PASS: is_crypto_symbol() function found in settings_dialog.py")
-else:
-    print("❌ FAIL: is_crypto_symbol() function not found")
-    sys.exit(1)
+    # Check if function exists in format_utils
+    if 'def is_crypto_symbol' in utils_content:
+        print("✓ PASS: is_crypto_symbol() function found in format_utils.py")
+    else:
+        print("❌ FAIL: is_crypto_symbol() function not found")
+        sys.exit(1)
 
-# Check if SOL is in crypto keywords
-if "'SOL'" in content or '"SOL"' in content:
-    print("✓ PASS: SOL keyword found in crypto detection")
-else:
-    print("❌ FAIL: SOL keyword not found")
-    sys.exit(1)
+    # Check if SOL is in crypto keywords
+    if "'SOL'" in utils_content or '"SOL"' in utils_content:
+        print("✓ PASS: SOL keyword found in crypto detection")
+    else:
+        print("❌ FAIL: SOL keyword not found")
+        sys.exit(1)
 
-# Check if suffix is set based on symbol, not exchange
-if 'is_crypto = is_crypto_symbol(self.original_config.symbol)' in content:
-    print("✓ PASS: Suffix determined by symbol type (not exchange)")
-else:
-    print("❌ FAIL: Suffix still determined by exchange")
+    # Check if suffix is set based on symbol, not exchange
+    if 'is_crypto = is_crypto_symbol(self.original_config.symbol)' in settings_content:
+        print("✓ PASS: Suffix determined by symbol type (not exchange)")
+    else:
+        print("❌ FAIL: Suffix still determined by exchange")
+        sys.exit(1)
+        
+except Exception as e:
+    print(f"❌ FAIL: Error reading files: {e}")
     sys.exit(1)
 
 print("\n" + "=" * 80)

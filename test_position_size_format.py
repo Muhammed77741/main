@@ -21,39 +21,51 @@ print("\n[Test 1] Live Trading GUI (settings_dialog.py):")
 print("-" * 80)
 
 try:
+    # Check settings_dialog.py imports from format_utils
     with open('trading_app/gui/settings_dialog.py', 'r') as f:
-        content = f.read()
+        settings_content = f.read()
     
-    # Check that is_crypto_symbol function exists
-    if 'def is_crypto_symbol(symbol: str)' in content:
-        print("✓ PASS: is_crypto_symbol() function found")
+    # Check format_utils.py has the shared function
+    with open('trading_app/gui/format_utils.py', 'r') as f:
+        utils_content = f.read()
+    
+    # Check that is_crypto_symbol function exists in format_utils
+    if 'def is_crypto_symbol(symbol: str)' in utils_content:
+        print("✓ PASS: is_crypto_symbol() function found in format_utils.py")
     else:
         print("❌ FAIL: is_crypto_symbol() function not found")
         sys.exit(1)
     
+    # Check that settings_dialog imports it
+    if 'from .format_utils import is_crypto_symbol' in settings_content or 'from format_utils import is_crypto_symbol' in settings_content:
+        print("✓ PASS: settings_dialog imports is_crypto_symbol from format_utils")
+    else:
+        print("❌ FAIL: settings_dialog doesn't import is_crypto_symbol")
+        sys.exit(1)
+    
     # Check that suffix is set based on symbol type (not exchange)
-    if 'is_crypto = is_crypto_symbol(self.original_config.symbol)' in content:
+    if 'is_crypto = is_crypto_symbol(self.original_config.symbol)' in settings_content:
         print("✓ PASS: Suffix determined by symbol type (not exchange)")
     else:
         print("❌ FAIL: Suffix not determined by symbol type")
         sys.exit(1)
     
     # Check that suffixes are applied to all TP/SL spin boxes
-    if 'self.trend_tp1_spin.setSuffix(suffix)' in content:
+    if 'self.trend_tp1_spin.setSuffix(suffix)' in settings_content:
         print("✓ PASS: TP/SL suffixes are applied")
     else:
         print("❌ FAIL: TP/SL suffixes not applied")
         sys.exit(1)
     
     # Check unit label updated
-    if 'unit = "%" if is_crypto else "pips"' in content:
+    if 'unit = "%" if is_crypto else "pips"' in settings_content:
         print("✓ PASS: Unit label uses symbol-based detection")
     else:
         print("❌ FAIL: Unit label not updated")
         sys.exit(1)
 
 except Exception as e:
-    print(f"❌ FAIL: Error reading settings_dialog.py: {e}")
+    print(f"❌ FAIL: Error reading files: {e}")
     sys.exit(1)
 
 # Test 2: Check signal_analysis_dialog.py
@@ -93,8 +105,8 @@ try:
         sys.exit(1)
     
     # Check migration logic for old saved settings
-    if "if settings.get('trend_tp1', 0) > 10:" in content:
-        print("✓ PASS: Migration logic for old saved settings found")
+    if "if settings.get('trend_tp1', 0) > MIGRATION_THRESHOLD:" in content:
+        print("✓ PASS: Migration logic with MIGRATION_THRESHOLD found")
     else:
         print("❌ FAIL: Migration logic not found")
         sys.exit(1)
