@@ -485,7 +485,10 @@ class LiveBotMT5FullAuto:
                     profit_percent=profit_pct,
                     status=status,
                     market_regime=pos['regime'],
-                    comment=pos['comment']
+                    comment=pos['comment'],
+                    position_group_id=pos.get('position_group_id'),  # CRITICAL: Preserve group info
+                    position_num=pos.get('position_num', 0),  # CRITICAL: Preserve position number
+                    magic_number=pos.get('magic_number')  # CRITICAL: Preserve magic number
                 )
                 self.db.update_trade(trade)
                 print(f"📊 Position updated in database: Ticket={ticket}, OrderID={order_id_str}, Status={status}")
