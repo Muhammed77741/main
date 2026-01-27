@@ -1998,6 +1998,12 @@ class LiveBotBinanceFullAuto:
         print(f"📈 OPENING 3-POSITION {direction_str} GROUP")
         print(f"{'='*60}")
         print(f"   Group ID: {group_id}")
+        
+        # Check max positions (need room for 3 positions)
+        open_positions = self.get_open_positions()
+        if len(open_positions) + 3 > self.max_positions:
+            print(f"⚠️  Not enough room for 3 positions on {self.symbol} (need 3, have {self.max_positions - len(open_positions)} slots, {len(open_positions)} positions open)")
+            return False
 
         # Calculate total position size
         if self.total_position_size:
@@ -2440,7 +2446,7 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                         direction_str = 'LONG' if signal['direction'] == 1 else 'SHORT'
                         print(f"⚠️  Already have {direction_str} position - skipping")
                     elif len(open_positions) >= self.max_positions:
-                        print(f"⚠️  Max positions reached ({self.max_positions}) - skipping")
+                        print(f"⚠️  Max positions reached for {self.symbol} ({self.max_positions}) - skipping")
                     else:
                         # Open position
                         print(f"📈 Attempting to open position...")

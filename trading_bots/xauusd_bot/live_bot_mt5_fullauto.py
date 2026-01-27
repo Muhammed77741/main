@@ -452,8 +452,14 @@ class LiveBotMT5FullAuto:
             pips = (pos['entry_price'] - close_price) * 10
         pos['pips'] = round(pips, 1)
         
-        # Calculate profit percentage (approximate)
-        profit_pct = (pips / pos['entry_price']) * 100 if pos['entry_price'] > 0 else 0
+        # Calculate profit percentage - fixed formula
+        if pos['entry_price'] > 0:
+            if pos['type'] == 'BUY':
+                profit_pct = ((close_price - pos['entry_price']) / pos['entry_price']) * 100
+            else:
+                profit_pct = ((pos['entry_price'] - close_price) / pos['entry_price']) * 100
+        else:
+            profit_pct = 0.0
         
         # Write to CSV
         self._write_trade_to_csv(pos)
@@ -671,11 +677,11 @@ class LiveBotMT5FullAuto:
                     if tick:
                         close_price = tick.bid if trade.trade_type == 'BUY' else tick.ask
                         
-                        # Calculate profit
+                        # Calculate profit for XAUUSD (1 lot = 100 oz, point value = $100)
                         if trade.trade_type == 'BUY':
-                            profit = (close_price - trade.entry_price) * trade.amount
+                            profit = (close_price - trade.entry_price) * trade.amount * 100
                         else:
-                            profit = (trade.entry_price - close_price) * trade.amount
+                            profit = (trade.entry_price - close_price) * trade.amount * 100
                     else:
                         close_price = trade.entry_price
                         profit = 0.0
@@ -2714,7 +2720,7 @@ class LiveBotMT5FullAuto:
         # Check max positions (need room for 3 positions)
         open_positions = self.get_open_positions()
         if len(open_positions) + 3 > self.max_positions:
-            print(f"⚠️  Not enough room for 3 positions (need {3}, have {self.max_positions - len(open_positions)} slots)")
+            print(f"⚠️  Not enough room for 3 positions on {self.symbol} (need 3, have {self.max_positions - len(open_positions)} slots, {len(open_positions)} positions open)")
             return False
             
         # Calculate total lot size
@@ -3261,7 +3267,7 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                         direction_str = 'LONG' if signal['direction'] == 1 else 'SHORT'
                         print(f"⚠️  Already have {direction_str} position - skipping")
                     elif len(open_positions) >= self.max_positions:
-                        print(f"⚠️  Max positions reached ({self.max_positions}) - skipping")
+                        print(f"⚠️  Max positions reached for {self.symbol} ({self.max_positions}) - skipping")
                     else:
                         # Open position
                         print(f"📈 Attempting to open position...")

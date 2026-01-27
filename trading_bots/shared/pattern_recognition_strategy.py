@@ -539,15 +539,19 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
 
         direction = pattern['direction']
         entry = pattern['entry']
+        
+        # Validate entry price first - must be positive
+        if entry is None or entry <= 0:
+            return df, False
 
         # Calculate SL and TP based on pattern
         if direction == 1:  # Long
             # SL below support/neckline
-            if 'support' in pattern and pattern['support'] is not None:
+            if 'support' in pattern and pattern['support'] is not None and pattern['support'] > 0:
                 sl = pattern['support'] * 0.999
-            elif 'neckline' in pattern and pattern['neckline'] is not None:
+            elif 'neckline' in pattern and pattern['neckline'] is not None and pattern['neckline'] > 0:
                 sl = pattern['neckline'] * 0.999
-            elif 'head' in pattern and pattern['head'] is not None:
+            elif 'head' in pattern and pattern['head'] is not None and pattern['head'] > 0:
                 sl = pattern['head'] * 0.999
             else:
                 # Fallback: 0.5% below entry
@@ -559,11 +563,11 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
 
         else:  # Short
             # SL above resistance/neckline
-            if 'resistance' in pattern and pattern['resistance'] is not None:
+            if 'resistance' in pattern and pattern['resistance'] is not None and pattern['resistance'] > 0:
                 sl = pattern['resistance'] * 1.001
-            elif 'neckline' in pattern and pattern['neckline'] is not None:
+            elif 'neckline' in pattern and pattern['neckline'] is not None and pattern['neckline'] > 0:
                 sl = pattern['neckline'] * 1.001
-            elif 'head' in pattern and pattern['head'] is not None:
+            elif 'head' in pattern and pattern['head'] is not None and pattern['head'] > 0:
                 sl = pattern['head'] * 1.001
             else:
                 # Fallback: 0.5% above entry
