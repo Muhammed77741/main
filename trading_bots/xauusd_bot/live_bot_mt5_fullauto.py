@@ -159,6 +159,7 @@ class LiveBotMT5FullAuto:
         # Phase 2: 3-Position Mode tracking
         self.position_groups = {}  # {group_id: {'tp1_hit': bool, 'max_price': float, 'min_price': float, 'positions': [...]}}
         self.group_counter = 0  # Counter for position groups (0-99) used in magic number generation
+        self.logged_closed_groups = set()  # Track groups where we've already logged "Position 1 closed but NOT by TP1" to prevent spam
 
         # Resilience features (CRITICAL: Network stability)
         self.running = True  # Flag for graceful shutdown
@@ -484,7 +485,10 @@ class LiveBotMT5FullAuto:
                     profit_percent=profit_pct,
                     status=status,
                     market_regime=pos['regime'],
-                    comment=pos['comment']
+                    comment=pos['comment'],
+                    position_group_id=pos.get('position_group_id'),  # CRITICAL: Preserve group info
+                    position_num=pos.get('position_num', 0),  # CRITICAL: Preserve position number
+                    magic_number=pos.get('magic_number')  # CRITICAL: Preserve magic number
                 )
                 self.db.update_trade(trade)
                 print(f"📊 Position updated in database: Ticket={ticket}, OrderID={order_id_str}, Status={status}")
@@ -624,11 +628,17 @@ class LiveBotMT5FullAuto:
         """Sync database positions with actual exchange positions
         
         Detects positions that were manually closed on exchange but still show as OPEN in database
+        Also syncs manual changes to TP/SL levels
         """
         if not self.use_database or not self.db or self.dry_run or not self.mt5_connected:
             return
         
         try:
+            # Ensure MT5 connection is alive before querying
+            if not mt5_manager.ensure_connection():
+                print(f"⚠️  MT5 connection lost - skipping position sync")
+                return
+            
             # Get all OPEN positions from database
             db_trades = self.db.get_open_trades(self.bot_id)
             if not db_trades:
@@ -636,7 +646,14 @@ class LiveBotMT5FullAuto:
             
             # Get current open positions from MT5
             open_positions = mt5.positions_get(symbol=self.symbol)
-            mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+            
+            # Check if positions_get failed (returns None on error)
+            if open_positions is None:
+                print(f"⚠️  Failed to get positions from MT5 - skipping position sync")
+                return
+            
+            # Create a mapping of ticket to MT5 position for easy lookup
+            mt5_positions_map = {pos.ticket: pos for pos in open_positions}
             
             # Check each database position
             for trade in db_trades:
@@ -646,7 +663,7 @@ class LiveBotMT5FullAuto:
                     continue
                 
                 # If position is in database but not on MT5, it was closed manually
-                if ticket not in mt5_position_tickets:
+                if ticket not in mt5_positions_map:
                     print(f"📊 Position #{ticket} manually closed on MT5 - syncing database...")
                     
                     # Get current price for profit calculation
@@ -672,6 +689,52 @@ class LiveBotMT5FullAuto:
                     )
                     
                     print(f"✅ Database synced for position #{ticket}")
+                else:
+                    # Position still open - check if TP/SL were modified manually in MT5
+                    mt5_pos = mt5_positions_map[ticket]
+                    
+                    # Check if SL or TP differs between MT5 and database
+                    sl_changed = False
+                    tp_changed = False
+                    
+                    # Get actual values (convert None to 0.0 for comparison)
+                    mt5_sl = mt5_pos.sl if mt5_pos.sl is not None else 0.0
+                    db_sl = trade.stop_loss if trade.stop_loss is not None else 0.0
+                    mt5_tp = mt5_pos.tp if mt5_pos.tp is not None else 0.0
+                    db_tp = trade.take_profit if trade.take_profit is not None else 0.0
+                    
+                    # Check SL difference (allow 0.01 tolerance)
+                    if abs(mt5_sl - db_sl) > 0.01:
+                        sl_changed = True
+                    
+                    # Check TP difference (allow 0.01 tolerance)
+                    if abs(mt5_tp - db_tp) > 0.01:
+                        tp_changed = True
+                    
+                    # Update database if TP or SL changed
+                    if sl_changed or tp_changed:
+                        print(f"📊 Position #{ticket} TP/SL modified in MT5 - syncing database...")
+                        
+                        # Update the trade record
+                        trade.stop_loss = mt5_sl
+                        trade.take_profit = mt5_tp
+                        
+                        # Update in database
+                        self.db.update_trade(trade)
+                        
+                        # Also update in-memory tracker if exists
+                        if ticket in self.positions_tracker:
+                            self.positions_tracker[ticket]['sl'] = trade.stop_loss
+                            self.positions_tracker[ticket]['tp'] = trade.take_profit
+                        
+                        changes = []
+                        if sl_changed:
+                            changes.append(f"SL: {trade.stop_loss:.2f}")
+                        if tp_changed:
+                            changes.append(f"TP: {trade.take_profit:.2f}")
+                        
+                        print(f"✅ Position #{ticket} synced: {', '.join(changes)}")
+                        
         except Exception as e:
             print(f"⚠️  Error syncing positions with exchange: {e}")
 
@@ -995,9 +1058,12 @@ class LiveBotMT5FullAuto:
                     print(f"🎯 Group {group_id[:8]} Position 1 closed by TP1! Activating trailing for Pos 2 & 3")
                 else:
                     # Position 1 closed but NOT by TP1 - do NOT activate trailing
-                    print(f"⚠️  Group {group_id[:8]} Position 1 closed but NOT by TP1 - trailing NOT activated")
-                    print(f"   This usually means Position 1 was closed by SL or manually")
-                    print(f"   Positions 2 & 3 will keep their original SL")
+                    # Only log this warning ONCE per group to prevent spam
+                    if group_id not in self.logged_closed_groups:
+                        print(f"⚠️  Group {group_id[:8]} Position 1 closed but NOT by TP1 - trailing NOT activated")
+                        print(f"   This usually means Position 1 was closed by SL or manually")
+                        print(f"   Positions 2 & 3 will keep their original SL")
+                        self.logged_closed_groups.add(group_id)  # Mark as logged to prevent repeated warnings
 
             
             # Save tp1_hit to database
@@ -1341,6 +1407,11 @@ class LiveBotMT5FullAuto:
         mt5_position_tickets = set()
         
         if not self.dry_run:
+            # Ensure MT5 connection is alive before querying
+            if not mt5_manager.ensure_connection():
+                print(f"⚠️  MT5 connection lost - skipping position check")
+                return
+            
             open_positions = mt5.positions_get(symbol=self.symbol)
             
             # Check if positions_get failed (returns None on error)
@@ -2072,11 +2143,20 @@ class LiveBotMT5FullAuto:
         if not self.mt5_connected:
             return
         
+        # Ensure MT5 connection is alive before querying
+        if not mt5_manager.ensure_connection():
+            print(f"⚠️  MT5 connection lost - skipping closed position detection")
+            return
+        
         # Get currently open position tickets
         open_positions = mt5.positions_get(symbol=self.symbol)
         current_tickets = set()
         if open_positions:
             current_tickets = {pos.ticket for pos in open_positions}
+        elif open_positions is None:
+            # positions_get failed
+            print(f"⚠️  Failed to get positions from MT5 - skipping closed position detection")
+            return
         
         # Find positions that were tracked but are now closed
         tracked_tickets = set(self.positions_tracker.keys())
@@ -2476,9 +2556,15 @@ class LiveBotMT5FullAuto:
         """Get open positions for symbol"""
         if not self.mt5_connected:
             return []
+        
+        # Ensure MT5 connection is alive before querying
+        if not mt5_manager.ensure_connection():
+            print(f"⚠️  MT5 connection lost - cannot get open positions")
+            return []
             
         positions = mt5.positions_get(symbol=self.symbol)
         if positions is None:
+            print(f"⚠️  Failed to get positions from MT5")
             return []
             
         return list(positions)
@@ -2786,11 +2872,31 @@ class LiveBotMT5FullAuto:
                 "type_filling": self._get_filling_mode(),
             }
             
-            # Send order
-            result = mt5.order_send(request)
+            # Send order with retry logic (up to 3 attempts)
+            result = None
+            max_retries = 3
+            for attempt in range(max_retries):
+                # Ensure connection before sending order
+                if not mt5_manager.ensure_connection():
+                    print(f"   ⚠️  MT5 connection lost - attempt {attempt + 1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)  # Brief pause before retry
+                        continue
+                    else:
+                        break
+                
+                result = mt5.order_send(request)
+                
+                if result is not None:
+                    break  # Success, exit retry loop
+                
+                # Retry on None result (connection issue)
+                if attempt < max_retries - 1:
+                    print(f"   ⚠️  {tp_name} order attempt {attempt + 1} failed - retrying...")
+                    time.sleep(1)  # Brief pause before retry
             
             if result is None:
-                print(f"   ❌ {tp_name} order failed: No result from broker")
+                print(f"   ❌ {tp_name} order failed after {max_retries} attempts: No result from broker")
                 print(f"      Check: MT5 connection, symbol availability, trading permissions")
                 continue
 
