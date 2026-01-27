@@ -102,8 +102,9 @@ class PositionFetcherThread(QThread):
                                 # XAUUSD: price difference * volume * 100 (point value)
                                 unrealized_pnl = price_diff * trade.amount * 100.0
                             else:
-                                # For other forex pairs, use contract size of 100,000
-                                # This is a simplified calculation - may need adjustment for specific pairs
+                                # For other forex pairs, use standard contract size of 100,000
+                                # Note: This assumes standard lot sizing. Exotic pairs or metals
+                                # may require different multipliers (e.g., XAGUSD uses 5000)
                                 unrealized_pnl = price_diff * trade.amount * 100000.0
                         else:
                             # Binance/Crypto: simple calculation
@@ -543,11 +544,23 @@ class PositionsMonitor(QDialog):
                         if not current_price or current_price <= 0:
                             current_price = matching_trade.entry_price
                         
-                        # Calculate profit
+                        # Calculate profit with proper contract size multipliers
                         if matching_trade.trade_type.upper() == 'BUY':
-                            profit = (current_price - matching_trade.entry_price) * matching_trade.amount
+                            price_diff = current_price - matching_trade.entry_price
                         else:
-                            profit = (matching_trade.entry_price - current_price) * matching_trade.amount
+                            price_diff = matching_trade.entry_price - current_price
+                        
+                        # Apply proper multipliers for different exchanges
+                        if self.config.exchange == 'MT5':
+                            if self.config.symbol == 'XAUUSD':
+                                # XAUUSD: price difference * volume * 100 (point value)
+                                profit = price_diff * matching_trade.amount * 100.0
+                            else:
+                                # Other forex pairs: use contract size of 100,000
+                                profit = price_diff * matching_trade.amount * 100000.0
+                        else:
+                            # Binance/Crypto: simple calculation
+                            profit = price_diff * matching_trade.amount
                         
                         profit_percent = (profit / (matching_trade.entry_price * matching_trade.amount)) * 100 if matching_trade.entry_price > 0 else 0
                         
