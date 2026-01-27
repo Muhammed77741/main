@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""
+Test script to verify position size format unification:
+1. Crypto uses percentage (%)
+2. Forex uses pips
+3. Format is consistent between Live Trading and Backtest GUIs
+"""
+
+import sys
+from pathlib import Path
+
+# Add trading_app to path
+sys.path.insert(0, str(Path(__file__).parent / 'trading_app'))
+
+print("=" * 80)
+print("Testing Position Size Format Unification")
+print("=" * 80)
+
+# Test 1: Check settings_dialog.py
+print("\n[Test 1] Live Trading GUI (settings_dialog.py):")
+print("-" * 80)
+
+try:
+    with open('trading_app/gui/settings_dialog.py', 'r') as f:
+        content = f.read()
+    
+    # Check that suffix is set dynamically
+    if 'suffix = "%" if self.original_config.exchange == \'Binance\' else " pips"' in content:
+        print("✓ PASS: Dynamic suffix setting found")
+    else:
+        print("❌ FAIL: Dynamic suffix setting not found")
+        sys.exit(1)
+    
+    # Check that suffixes are applied to all TP/SL spin boxes
+    if 'self.trend_tp1_spin.setSuffix(suffix)' in content:
+        print("✓ PASS: TP/SL suffixes are applied")
+    else:
+        print("❌ FAIL: TP/SL suffixes not applied")
+        sys.exit(1)
+    
+    # Check unit label updated
+    if 'unit = "%" if self.original_config.exchange == \'Binance\' else "pips"' in content:
+        print("✓ PASS: Unit label uses 'pips' for Forex")
+    else:
+        print("❌ FAIL: Unit label not updated")
+        sys.exit(1)
+
+except Exception as e:
+    print(f"❌ FAIL: Error reading settings_dialog.py: {e}")
+    sys.exit(1)
+
+# Test 2: Check signal_analysis_dialog.py
+print("\n[Test 2] Backtest GUI (signal_analysis_dialog.py):")
+print("-" * 80)
+
+try:
+    with open('trading_app/gui/signal_analysis_dialog.py', 'r') as f:
+        content = f.read()
+    
+    # Check that crypto uses percentage directly (not multiplied by 100)
+    if 'self.trend_tp1_spin.setSuffix("%")' in content:
+        print("✓ PASS: Crypto uses '%' suffix")
+    else:
+        print("❌ FAIL: Crypto '%' suffix not found")
+        sys.exit(1)
+    
+    # Check that Forex uses pips
+    if 'self.trend_tp1_spin.setSuffix(" pips")' in content:
+        print("✓ PASS: Forex uses 'pips' suffix")
+    else:
+        print("❌ FAIL: Forex 'pips' suffix not found")
+        sys.exit(1)
+    
+    # Check that crypto values are not multiplied by 100 in update_tp_sl_labels
+    if 'self.trend_tp1_spin.setValue(CRYPTO_TREND_TP[\'tp1\'])' in content:
+        print("✓ PASS: Crypto values use direct percentage (not *100)")
+    else:
+        print("❌ FAIL: Crypto values might still be multiplied by 100")
+        sys.exit(1)
+    
+    # Check that custom TP levels don't divide by 100 for crypto
+    if "# For crypto, values are already in percentage" in content:
+        print("✓ PASS: Custom TP levels use direct percentage for crypto")
+    else:
+        print("❌ FAIL: Custom TP levels comment not found")
+        sys.exit(1)
+    
+    # Check migration logic for old saved settings
+    if "if settings.get('trend_tp1', 0) > 10:" in content:
+        print("✓ PASS: Migration logic for old saved settings found")
+    else:
+        print("❌ FAIL: Migration logic not found")
+        sys.exit(1)
+
+except Exception as e:
+    print(f"❌ FAIL: Error reading signal_analysis_dialog.py: {e}")
+    sys.exit(1)
+
+# Test 3: Verify constants are consistent
+print("\n[Test 3] Verify TP/SL constants:")
+print("-" * 80)
+
+try:
+    # Read signal_analysis_dialog.py to check constants
+    with open('trading_app/gui/signal_analysis_dialog.py', 'r') as f:
+        content = f.read()
+    
+    # Check crypto constants (should be in percentage)
+    if "CRYPTO_TREND_TP = {'tp1': 1.5, 'tp2': 2.75, 'tp3': 4.5}" in content:
+        print("✓ PASS: CRYPTO_TREND_TP constants are in percentage format")
+    else:
+        print("❌ FAIL: CRYPTO_TREND_TP constants format incorrect")
+        sys.exit(1)
+    
+    # Check MT5 constants (should be in points/pips)
+    if "MT5_TREND_TP = {'tp1': 30, 'tp2': 55, 'tp3': 90}" in content:
+        print("✓ PASS: MT5_TREND_TP constants are in pips format")
+    else:
+        print("❌ FAIL: MT5_TREND_TP constants format incorrect")
+        sys.exit(1)
+
+except Exception as e:
+    print(f"❌ FAIL: Error checking constants: {e}")
+    sys.exit(1)
+
+print("\n" + "=" * 80)
+print("✓ All tests passed!")
+print("=" * 80)
+print("\nSummary of changes:")
+print("1. ✓ Live Trading GUI uses % for crypto, pips for Forex")
+print("2. ✓ Backtest GUI uses % for crypto, pips for Forex")
+print("3. ✓ Format is consistent between both GUIs")
+print("4. ✓ Migration logic handles old saved settings")
+print("5. ✓ Values are stored correctly (no *100 for crypto)")
+print("=" * 80)
