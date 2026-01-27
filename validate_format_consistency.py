@@ -83,19 +83,21 @@ with open('trading_app/gui/signal_analysis_dialog.py', 'r') as f:
 # Extract constants
 import re
 
-# Find CRYPTO_TREND_TP
-crypto_trend_match = re.search(r"CRYPTO_TREND_TP = ({'tp1': [\d.]+, 'tp2': [\d.]+, 'tp3': [\d.]+})", content)
+# Find CRYPTO_TREND_TP (flexible pattern)
+crypto_trend_match = re.search(r"CRYPTO_TREND_TP\s*=\s*\{\s*'tp1':\s*([\d.]+),\s*'tp2':\s*([\d.]+),\s*'tp3':\s*([\d.]+)\s*\}", content)
 if crypto_trend_match:
-    print(f"CRYPTO_TREND_TP = {crypto_trend_match.group(1)}")
+    tp1, tp2, tp3 = crypto_trend_match.groups()
+    print(f"CRYPTO_TREND_TP = {{'tp1': {tp1}, 'tp2': {tp2}, 'tp3': {tp3}}}")
     print("  Format: percentage (e.g., 1.5 = 1.5%)")
 else:
     print("❌ FAIL: CRYPTO_TREND_TP not found")
     sys.exit(1)
 
-# Find MT5_TREND_TP
-mt5_trend_match = re.search(r"MT5_TREND_TP = ({'tp1': [\d.]+, 'tp2': [\d.]+, 'tp3': [\d.]+})", content)
+# Find MT5_TREND_TP (flexible pattern)
+mt5_trend_match = re.search(r"MT5_TREND_TP\s*=\s*\{\s*'tp1':\s*([\d.]+),\s*'tp2':\s*([\d.]+),\s*'tp3':\s*([\d.]+)\s*\}", content)
 if mt5_trend_match:
-    print(f"\nMT5_TREND_TP = {mt5_trend_match.group(1)}")
+    tp1, tp2, tp3 = mt5_trend_match.groups()
+    print(f"\nMT5_TREND_TP = {{'tp1': {tp1}, 'tp2': {tp2}, 'tp3': {tp3}}}")
     print("  Format: pips (e.g., 30 = 30 pips)")
 else:
     print("❌ FAIL: MT5_TREND_TP not found")
