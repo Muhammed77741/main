@@ -59,7 +59,10 @@ class BotConfig:
     telegram_chat_id: Optional[str] = None
 
     # Bot mode
-    dry_run: bool = True
+    # WARNING: DRY_RUN is always False (disabled) as per requirements
+    # This means the bot will place REAL TRADES by default
+    # Users cannot enable test/simulation mode through GUI settings
+    dry_run: bool = False  # WARNING: Always False - bot will place REAL trades
     testnet: bool = True
 
     def to_dict(self):
