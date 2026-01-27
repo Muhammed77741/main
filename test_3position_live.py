@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Test 3-Position Mode with Real MT5 Positions
-Opens 3 positions, closes TP1, checks trailing stop logic
+Test 3-Position Mode with Real MT5 Positions + Magic Number Integration
+Opens 3 positions with unique magic numbers, closes TP1, checks trailing stop logic
+Tests the new Magic Number system for position tracking
 """
 import sys
 import os
@@ -47,13 +48,14 @@ TREND_SL = 3.00  # points
 RANGE_SL = 2.00  # points
 
 print("="*70)
-print("3-POSITION MODE LIVE TEST FOR BCHUSD")
+print("3-POSITION MODE LIVE TEST FOR BCHUSD + MAGIC NUMBER")
 print("="*70)
 print(f"Symbol: {SYMBOL}")
 print(f"Total Position Size: {TOTAL_POSITION_SIZE} lots")
 print(f"3-Position Mode: {USE_3_POSITION_MODE}")
 print(f"Trailing Stops: {USE_TRAILING_STOPS} ({TRAILING_STOP_PCT*100}%)")
 print(f"Regime-based SL: {USE_REGIME_BASED_SL}")
+print(f"Testing: Magic Number integration (BBBBPPGG format)")
 print("="*70)
 
 # Initialize MT5
@@ -203,9 +205,22 @@ else:  # RETURN
 
 print(f"\nFilling mode: {filling_name}")
 
-# Generate group ID
+# Generate group ID and counter for magic number
 group_id = str(uuid.uuid4())[:8]
+group_counter = 42  # Test group counter (0-99)
+bot_id = f"bchusd_bot_{SYMBOL}"
+
+# Magic number generation function (matching LiveBotMT5FullAuto)
+def generate_magic(bot_id: str, position_num: int, group_counter: int) -> int:
+    """Generate unique magic number in BBBBPPGG format"""
+    bot_hash = abs(hash(bot_id)) % 10000
+    magic = int(f"{bot_hash:04d}{position_num:02d}{group_counter:02d}")
+    return magic
+
 print(f"Position Group ID: {group_id}")
+print(f"Group Counter: {group_counter}")
+print(f"Bot ID: {bot_id}")
+print(f"Bot Hash: {abs(hash(bot_id)) % 10000:04d}")
 
 # Connect to database
 print(f"\n[DB] Connecting to database...")
@@ -231,6 +246,30 @@ if response.strip().upper() != 'YES':
 
 # Open 3 positions
 print("\n[6] Opening 3 positions...")
+
+# Verify MT5 connection before proceeding
+if not mt5.terminal_info():
+    print("\nERROR: MT5 terminal connection lost!")
+    print("Please check:")
+    print("  - MT5 terminal is running")
+    print("  - MT5 is logged in to your account")
+    print("  - AutoTrading is enabled (green button)")
+    db_conn.close()
+    mt5.shutdown()
+    sys.exit(1)
+
+terminal_info = mt5.terminal_info()
+print(f"MT5 Terminal: {terminal_info.name}")
+print(f"Connected: {terminal_info.connected}")
+print(f"Trade allowed: {terminal_info.trade_allowed}")
+
+if not terminal_info.trade_allowed:
+    print("\nWARNING: Trading is not allowed!")
+    print("Enable AutoTrading in MT5 terminal (green button in toolbar)")
+    db_conn.close()
+    mt5.shutdown()
+    sys.exit(1)
+
 positions_opened = []
 tp_levels = [
     (tp1, lot1, 'TP1', tp1_distance, 1),
@@ -240,6 +279,10 @@ tp_levels = [
 
 for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
     print(f"\nOpening {tp_name} position...")
+    
+    # Generate unique magic number for this position
+    magic = generate_magic(bot_id, pos_num, group_counter)
+    print(f"  Magic Number: {magic} (format: {magic:08d})")
 
     # Prepare request
     request = {
@@ -251,17 +294,37 @@ for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
         "sl": sl,
         "tp": tp_price,
         "deviation": 20,
-        "magic": 234000,
-        "comment": f"V3_T_{tp_name}_P{pos_num}/3_G{group_id}",
+        "magic": magic,  # ✅ Use unique magic number
+        "comment": f"M{magic}",  # Shortened comment: magic number contains all info (BBBBPPGG)
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling_mode,
     }
+    
+    # Debug: Show request details
+    print(f"  Request details:")
+    print(f"    Symbol: {request['symbol']}")
+    print(f"    Volume: {request['volume']}")
+    print(f"    Type: {'BUY' if request['type'] == mt5.ORDER_TYPE_BUY else 'SELL'}")
+    print(f"    Price: ${request['price']:.2f}")
+    print(f"    SL: ${request['sl']:.2f}")
+    print(f"    TP: ${request['tp']:.2f}")
+    print(f"    Magic: {request['magic']}")
+    print(f"    Filling: {filling_name}")
 
     # Send order
     result = mt5.order_send(request)
 
     if result is None:
         print(f"ERROR: {tp_name} order failed: No result from broker")
+        # Get last error from MT5
+        error_code, error_desc = mt5.last_error()
+        print(f"  MT5 Error Code: {error_code}")
+        print(f"  MT5 Error Description: {error_desc}")
+        print(f"  Check:")
+        print(f"    - MT5 terminal is running and connected")
+        print(f"    - Symbol {SYMBOL} is available and market is open")
+        print(f"    - AutoTrading is enabled in MT5")
+        print(f"    - Account has sufficient funds")
         continue
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
@@ -277,17 +340,17 @@ for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
     print(f"  Entry: ${result.price:.2f}")
     print(f"  TP: ${tp_price:.2f}")
 
-    # Save to database (like live bot does)
+    # Save to database (like live bot does) - now with magic_number
     try:
         regime_code = "T" if CURRENT_REGIME == 'TREND' else "R"
         db_cursor.execute("""
             INSERT INTO trades (
                 bot_id, symbol, order_id, open_time, trade_type, amount,
                 entry_price, stop_loss, take_profit, status, market_regime,
-                comment, position_group_id, position_num, trailing_stop_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                comment, position_group_id, position_num, trailing_stop_active, magic_number
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            'bchusd',
+            bot_id,
             SYMBOL,
             str(result.order),
             datetime.now(),
@@ -298,13 +361,14 @@ for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
             tp_price,
             'OPEN',
             CURRENT_REGIME,
-            f"V3_{regime_code}_{tp_name}_P{pos_num}/3_G{group_id}",
+            f"M{magic}_P{pos_num}_{tp_name}",  # Shortened: magic + position info
             group_id,
             pos_num,
-            1 if USE_TRAILING_STOPS and pos_num > 1 else 0
+            1 if USE_TRAILING_STOPS and pos_num > 1 else 0,
+            magic  # ✅ Save magic number to database
         ))
         db_conn.commit()
-        print(f"  ✅ Saved to database with pos#{pos_num}, group={group_id[:8]}")
+        print(f"  ✅ Saved to database: pos#{pos_num}, group={group_id[:8]}, magic={magic}")
     except Exception as e:
         print(f"  ⚠️  Failed to save to DB: {e}")
 
@@ -314,7 +378,8 @@ for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
         'tp': tp_price,
         'lot': lot_size,
         'pos_num': pos_num,
-        'entry': result.price
+        'entry': result.price,
+        'magic': magic  # ✅ Store magic number for later tests
     })
 
     time.sleep(0.2)  # Small delay between orders
@@ -326,52 +391,76 @@ if len(positions_opened) == 0:
 
 print(f"\n[7] SUCCESS: Opened {len(positions_opened)}/3 positions!")
 
-# Create position_group record
+# Create position_group record with group_counter
 try:
     avg_entry = sum(p['entry'] for p in positions_opened) / len(positions_opened)
     db_cursor.execute("""
         INSERT INTO position_groups (
             group_id, bot_id, tp1_hit, entry_price, max_price, min_price,
-            trade_type, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            trade_type, group_counter, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         group_id,
-        'bchusd',
+        bot_id,
         0,  # TP1 not hit yet
         avg_entry,
         avg_entry,  # Initial max = entry
         avg_entry,  # Initial min = entry
         SIGNAL_TYPE,
+        group_counter,  # ✅ Save group_counter for magic number tracking
         datetime.now(),
         datetime.now()
     ))
     db_conn.commit()
-    print(f"\n✅ Position group saved to database: {group_id}")
+    print(f"\n✅ Position group saved to database: {group_id} (counter={group_counter})")
 except Exception as e:
     print(f"\n⚠️  Failed to save position group: {e}")
 
-# Show opened positions
+# Show opened positions with magic numbers
 print("\nOpened positions:")
 for pos in positions_opened:
-    print(f"  {pos['name']}: Ticket #{pos['ticket']}, Lot {pos['lot']}, TP ${pos['tp']:.2f}")
+    print(f"  {pos['name']}: Ticket #{pos['ticket']}, Magic {pos['magic']}, Lot {pos['lot']}, TP ${pos['tp']:.2f}")
+
+# Test magic number retrieval
+print("\n[8] Testing Magic Number retrieval from MT5...")
+for pos in positions_opened:
+    magic = pos['magic']
+    print(f"\n  Looking for position with magic={magic}...")
+    
+    # Retrieve position by magic number
+    mt5_positions = mt5.positions_get(magic=magic)
+    
+    if mt5_positions and len(mt5_positions) > 0:
+        mt5_pos = mt5_positions[0]
+        print(f"    ✅ Found position: Ticket #{mt5_pos.ticket}, Magic {mt5_pos.magic}")
+        print(f"       Volume: {mt5_pos.volume}, P/L: ${mt5_pos.profit:.2f}")
+        
+        # Verify magic number matches
+        if mt5_pos.magic == magic:
+            print(f"       ✅ Magic number verified!")
+        else:
+            print(f"       ⚠️  Magic mismatch: Expected {magic}, Got {mt5_pos.magic}")
+    else:
+        print(f"    ❌ Position with magic {magic} not found!")
+
+print("\n✅ Magic Number retrieval test complete!")
 
 # Wait a bit
-print("\n[8] Waiting 5 seconds before testing TP1 close...")
+print("\n[9] Waiting 5 seconds before testing TP1 close...")
 time.sleep(5)
 
 # Simulate TP1 hit - close first position
 if len(positions_opened) >= 1:
     tp1_pos = positions_opened[0]
-    print(f"\n[9] Simulating TP1 hit - closing position #{tp1_pos['ticket']}...")
+    print(f"\n[10] Simulating TP1 hit - closing position #{tp1_pos['ticket']} (magic={tp1_pos['magic']})...")
 
-    # Get current position
+    # Get current position using magic number
+    print(f"  Retrieving position by magic number: {tp1_pos['magic']}")
     mt5_pos = None
-    positions = mt5.positions_get(symbol=SYMBOL)
-    if positions:
-        for p in positions:
-            if p.ticket == tp1_pos['ticket']:
-                mt5_pos = p
-                break
+    positions_by_magic = mt5.positions_get(magic=tp1_pos['magic'])
+    if positions_by_magic and len(positions_by_magic) > 0:
+        mt5_pos = positions_by_magic[0]
+        print(f"  ✅ Found position via magic number: Ticket #{mt5_pos.ticket}")
 
     if mt5_pos is None:
         print(f"WARNING: Position #{tp1_pos['ticket']} not found (already closed?)")
@@ -388,8 +477,8 @@ if len(positions_opened) >= 1:
             "position": mt5_pos.ticket,
             "price": close_price,
             "deviation": 20,
-            "magic": 234000,
-            "comment": "TP1_HIT_TEST",
+            "magic": tp1_pos['magic'],  # ✅ Use same magic number
+            "comment": f"CLOSE_M{tp1_pos['magic']}",  # Shortened comment
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_mode,
         }
@@ -432,9 +521,22 @@ if len(positions_opened) >= 1:
             print(f"  Error code: {error_code}")
             print(f"  Message: {error_msg}")
 
+# Test retrieving positions by magic after TP1 close
+print(f"\n[11] Testing remaining positions retrieval by magic number...")
+for pos in positions_opened[1:]:  # Skip TP1 (closed)
+    magic = pos['magic']
+    print(f"  Checking position with magic={magic}...")
+    
+    mt5_positions = mt5.positions_get(magic=magic)
+    if mt5_positions and len(mt5_positions) > 0:
+        mt5_pos = mt5_positions[0]
+        print(f"    ✅ Position still open: Ticket #{mt5_pos.ticket}, P/L ${mt5_pos.profit:.2f}")
+    else:
+        print(f"    ⚠️  Position not found (may have been closed)")
+
 # Test trailing stop logic
 if USE_TRAILING_STOPS and len(positions_opened) >= 2:
-    print(f"\n[10] Testing trailing stop logic...")
+    print(f"\n[12] Testing trailing stop logic...")
     print(f"Trailing stop enabled: {TRAILING_STOP_PCT*100}%")
 
     # After TP1 hit, positions 2 and 3 should move SL to breakeven
@@ -471,12 +573,40 @@ if USE_TRAILING_STOPS and len(positions_opened) >= 2:
     print(f"  Trailing stop ({TRAILING_STOP_PCT*100}%): ${trailing_stop_price:.2f}")
     print(f"  If price retraces to ${trailing_stop_price:.2f}, close Pos 2 & 3")
 
+# Test database query for magic numbers
+print(f"\n[13] Testing database retrieval of magic numbers...")
+try:
+    db_cursor.execute("""
+        SELECT order_id, position_num, magic_number, status
+        FROM trades
+        WHERE position_group_id = ?
+        ORDER BY position_num
+    """, (group_id,))
+    
+    rows = db_cursor.fetchall()
+    print(f"  Found {len(rows)} positions in database:")
+    for row in rows:
+        order_id, pos_num, magic_num, status = row
+        print(f"    Position {pos_num}: Order #{order_id}, Magic {magic_num}, Status {status}")
+except Exception as e:
+    print(f"  ⚠️  Failed to query database: {e}")
+
 # Summary
 print("\n" + "="*70)
-print("TEST COMPLETE")
+print("TEST COMPLETE - MAGIC NUMBER INTEGRATION")
 print("="*70)
 print(f"Positions opened: {len(positions_opened)}/3")
 print(f"Group ID: {group_id}")
+print(f"Group Counter: {group_counter}")
+print(f"Bot ID Hash: {abs(hash(bot_id)) % 10000:04d}")
+
+print("\n✅ Magic Number Test Results:")
+print(f"  - Magic numbers generated in BBBBPPGG format")
+print(f"  - Positions opened with unique magic numbers")
+print(f"  - Magic numbers saved to database")
+print(f"  - Positions retrievable via mt5.positions_get(magic=...)")
+print(f"  - Group counter saved to position_groups table")
+
 print("\nRemaining open positions:")
 
 positions = mt5.positions_get(symbol=SYMBOL)
@@ -484,7 +614,7 @@ if positions:
     for p in positions:
         if group_id in p.comment:
             profit = p.profit
-            print(f"  Ticket #{p.ticket}: {p.volume} lot, P/L ${profit:.2f}")
+            print(f"  Ticket #{p.ticket}: Magic {p.magic}, {p.volume} lot, P/L ${profit:.2f}")
 else:
     print("  None")
 

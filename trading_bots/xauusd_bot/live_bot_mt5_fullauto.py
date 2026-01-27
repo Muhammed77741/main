@@ -158,6 +158,7 @@ class LiveBotMT5FullAuto:
 
         # Phase 2: 3-Position Mode tracking
         self.position_groups = {}  # {group_id: {'tp1_hit': bool, 'max_price': float, 'min_price': float, 'positions': [...]}}
+        self.group_counter = 0  # Counter for position groups (0-99) used in magic number generation
 
         # Resilience features (CRITICAL: Network stability)
         self.running = True  # Flag for graceful shutdown
@@ -248,6 +249,66 @@ class LiveBotMT5FullAuto:
                 ])
             print(f"📝 Created TP hits log file: {self.tp_hits_file}")
     
+    def _generate_magic(self, position_num: int, group_counter: int) -> int:
+        """
+        Generate unique magic number for position tracking
+        
+        Format: BBBBPPGG (8 digits)
+        - BBBB: bot_id hash (4 digits)  
+        - PP: position_num (01, 02, 03)
+        - GG: group_counter (00-99)
+        
+        Args:
+            position_num: Position number in group (1, 2, or 3)
+            group_counter: Group counter (0-99)
+            
+        Returns:
+            int: Unique magic number
+        """
+        # Hash bot_id to 4 digits
+        bot_hash = abs(hash(self.bot_id)) % 10000
+        
+        # Combine into 8-digit number
+        magic = int(f"{bot_hash:04d}{position_num:02d}{group_counter:02d}")
+        
+        return magic
+    
+    def _get_position_by_magic(self, position_num: int, group_counter: int):
+        """Get specific position by magic number
+        
+        Args:
+            position_num: Position number in group (1, 2, or 3)
+            group_counter: Group counter (0-99)
+            
+        Returns:
+            MT5 position object or None
+        """
+        magic = self._generate_magic(position_num, group_counter)
+        positions = mt5.positions_get(magic=magic)
+        
+        if positions and len(positions) > 0:
+            return positions[0]
+        return None
+    
+    def _get_group_positions_by_magic(self, group_counter: int) -> dict:
+        """
+        Get all 3 positions of a group by magic number
+        
+        Args:
+            group_counter: Group counter (0-99)
+            
+        Returns:
+            dict: {position_num: mt5_position, ...}
+        """
+        group_positions = {}
+        
+        for pos_num in [1, 2, 3]:
+            pos = self._get_position_by_magic(pos_num, group_counter)
+            if pos:
+                group_positions[pos_num] = pos
+        
+        return group_positions
+    
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals for graceful exit"""
         print(f"\n⚠️  Received signal {signum}, initiating graceful shutdown...")
@@ -301,7 +362,7 @@ class LiveBotMT5FullAuto:
         return self._PositionGroup
     
     def _log_position_opened(self, ticket, position_type, volume, entry_price,
-                             sl, tp, regime, comment='', position_group_id=None, position_num=0):
+                             sl, tp, regime, comment='', position_group_id=None, position_num=0, magic_number=None):
         """Log when position is opened"""
         open_time = datetime.now()
         current_timestamp = time.time()
@@ -324,6 +385,7 @@ class LiveBotMT5FullAuto:
             'comment': comment,
             'position_group_id': position_group_id,
             'position_num': position_num,
+            'magic_number': magic_number,
             # CRITICAL: Add timestamps for SL modification protection
             'opened_at': current_timestamp,  # Unix timestamp for precise age calculation
             'confirmed_at': None,            # Will be set after broker confirmation
@@ -354,14 +416,15 @@ class LiveBotMT5FullAuto:
                     market_regime=regime,
                     comment=comment,
                     position_group_id=position_group_id,
-                    position_num=position_num
+                    position_num=position_num,
+                    magic_number=magic_number
                 )
                 self.db.add_trade(trade)
-                print(f"📊 Position saved to database: Ticket={ticket}, OrderID={order_id_str}")
+                print(f"📊 Position saved to database: Ticket={ticket}, OrderID={order_id_str}, Magic={magic_number}")
             except Exception as e:
                 print(f"⚠️  Failed to save position to database: {e}")
         
-        print(f"📊 Logged opened position: Ticket={ticket}, Type={position_type}, Entry={entry_price}")
+        print(f"📊 Logged opened position: Ticket={ticket}, Type={position_type}, Entry={entry_price}, Magic={magic_number}")
     
     def _log_position_closed(self, ticket, close_price, profit, status='CLOSED'):
         """Log when position is closed"""
@@ -2551,11 +2614,16 @@ class LiveBotMT5FullAuto:
         """Open 3 independent positions with different TP levels and trailing (Phase 2)"""
         direction_str = "BUY" if signal['direction'] == 1 else "SELL"
         group_id = str(uuid.uuid4())
+        
+        # Increment group counter (reset to 0 after 99)
+        self.group_counter = (self.group_counter + 1) % 100
+        current_group_counter = self.group_counter
 
         print(f"\n{'='*60}")
         print(f"📈 OPENING 3-POSITION {direction_str} GROUP")
         print(f"{'='*60}")
         print(f"   Group ID: {group_id}")
+        print(f"   Group Counter: {current_group_counter}")
         
         # Check max positions (need room for 3 positions)
         open_positions = self.get_open_positions()
@@ -2631,6 +2699,9 @@ class LiveBotMT5FullAuto:
             ]
 
             for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
+                # Generate unique magic for this position
+                magic = self._generate_magic(pos_num, current_group_counter)
+                
                 # Create simulated ticket number with timestamp
                 simulated_ticket = int(time.time() * 1000) + pos_num
 
@@ -2643,12 +2714,13 @@ class LiveBotMT5FullAuto:
                     sl=signal['sl'],
                     tp=tp_price,
                     regime=regime,
-                    comment=f"V3_{regime_code}_P{pos_num}/3",
+                    comment=f"M{magic}_P{pos_num}_{tp_name}",  # Short DB comment
                     position_group_id=group_id,
-                    position_num=pos_num
+                    position_num=pos_num,
+                    magic_number=magic
                 )
 
-                print(f"   ✅ Simulated {tp_name} position logged: DRY-{simulated_ticket}")
+                print(f"   ✅ Simulated {tp_name} position logged: DRY-{simulated_ticket}, Magic={magic}")
                 time.sleep(0.1)  # Small delay between simulated orders
 
             # Save PositionGroup to database for dry-run too
@@ -2664,11 +2736,12 @@ class LiveBotMT5FullAuto:
                             max_price=signal['entry'],
                             min_price=signal['entry'],
                             trade_type=direction_str,
+                            group_counter=current_group_counter,
                             created_at=datetime.now(),
                             updated_at=datetime.now()
                         )
                         self.db.save_position_group(new_group)
-                        print(f"✅ Position group saved to database (dry-run): {group_id[:8]}")
+                        print(f"✅ Position group saved to database (dry-run): {group_id[:8]} (counter={current_group_counter})")
                 except Exception as e:
                     print(f"⚠️  Could not save position group to DB: {e}")
 
@@ -2694,6 +2767,9 @@ class LiveBotMT5FullAuto:
         ]
 
         for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
+            # Generate unique magic for this position
+            magic = self._generate_magic(pos_num, current_group_counter)
+            
             # Create request (lot sizes already validated above)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -2704,8 +2780,8 @@ class LiveBotMT5FullAuto:
                 "sl": signal['sl'],
                 "tp": tp_price,
                 "deviation": 20,
-                "magic": 234000,
-                "comment": f"V3_{regime_code}_{tp_name}",
+                "magic": magic,
+                "comment": f"M{magic}",  # Short comment: magic contains all info (BBBBPPGG)
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self._get_filling_mode(),
             }
@@ -2741,9 +2817,10 @@ class LiveBotMT5FullAuto:
                 sl=signal['sl'],
                 tp=tp_price,
                 regime=regime,
-                comment=f"V3_{regime_code}_P{pos_num}/3",
+                comment=f"M{magic}_P{pos_num}_{tp_name}",  # Short DB comment
                 position_group_id=group_id,
-                position_num=pos_num
+                position_num=pos_num,
+                magic_number=magic
             )
 
             positions_opened.append((result.order, tp_name, tp_price))
@@ -2774,11 +2851,12 @@ class LiveBotMT5FullAuto:
                         max_price=signal['entry'],
                         min_price=signal['entry'],
                         trade_type=direction_str,
+                        group_counter=current_group_counter,
                         created_at=datetime.now(),
                         updated_at=datetime.now()
                     )
                     self.db.save_position_group(new_group)
-                    print(f"✅ Position group saved to database: {group_id[:8]}")
+                    print(f"✅ Position group saved to database: {group_id[:8]} (counter={current_group_counter})")
             except Exception as e:
                 print(f"⚠️  Failed to save position group to database: {e}")
         
