@@ -2429,33 +2429,57 @@ class LiveBotMT5FullAuto:
             # Run strategy
             result = self.strategy.run_strategy(df)
 
-            # Get last signal (most recent)
+            # Get all signals
             signals = result[result['signal'] != 0]
 
             if len(signals) == 0:
                 return None
+            
+            # CRITICAL: Signal must be from LAST CLOSED BAR only (bar -1, aka df.index[-2])
+            # 
+            # Bar indexing explanation:
+            # - df.index[-1] = Current bar (position 0 in MT5) - INCOMPLETE, should NOT trade
+            # - df.index[-2] = Last closed bar (position 1 in MT5) - This is where we should look
+            # - df.index[-3] = Older bar - too old, should NOT trade
+            #
+            # Example: Bot runs at 01:00 on H1 timeframe
+            # - df.index[-1] = 01:00 (bar 01:00-02:00, just started, incomplete)
+            # - df.index[-2] = 00:00 (bar 00:00-01:00, just closed) ← Check this one!
+            # - df.index[-3] = 23:00 (previous day, too old)
+            
+            current_bar_time = df.index[-1]
+            last_closed_bar_time = df.index[-2] if len(df) >= 2 else None
+            
+            if last_closed_bar_time is None:
+                print("   ⚠️  Not enough data to determine last closed bar")
+                return None
+            
+            # Filter signals to only those from the last closed bar (df.index[-2])
+            # This ensures we're trading ONLY on the bar that just closed, not older bars
+            signals_from_last_closed = signals[signals.index == last_closed_bar_time]
+            
+            if len(signals_from_last_closed) == 0:
+                # No signal on the last closed bar - check if there are any recent signals
+                last_signal = signals.iloc[-1]
+                last_signal_time = signals.index[-1]
                 
-            # CRITICAL FIX: Signal must be from CLOSED candle only, NOT current incomplete bar
-            # For H1 timeframe: if current time is 14:30, current bar is 14:00-15:00 (incomplete)
-            # We should only trade signals from previous completed bar (13:00-14:00)
-            last_signal = signals.iloc[-1]
-            last_signal_time = signals.index[-1]
-            current_time = df.index[-1]
-
-            # Signal must NOT be from the current bar (df.index[-1])
-            # It must be from a previous completed candle
-            # For H1: signal should be at least 0.5 hours old (30+ minutes into next bar)
-            # This ensures we're not trading on incomplete candle data
-            time_diff_hours = (current_time - last_signal_time).total_seconds() / 3600
-
-            # FIXED: Signal must be from PREVIOUS candle, not current
-            # Use configured thresholds for signal freshness validation
-            # - If diff < MIN: signal is from current incomplete bar -> REJECT
-            # - If diff > MAX: signal is too old (2+ candles ago) -> REJECT
-            if time_diff_hours < SIGNAL_MIN_AGE_HOURS:  # Signal from current incomplete candle
-                return None
-            if time_diff_hours > SIGNAL_MAX_AGE_HOURS:  # Signal too old (2+ candles ago)
-                return None
+                # Calculate age to provide helpful debug info
+                time_diff_hours = (current_bar_time - last_signal_time).total_seconds() / 3600
+                
+                # OLD LOGIC (kept as fallback for mid-hour checks)
+                # Accept signals from last 0.5-1.5 hours (covers last closed bar at any time)
+                if SIGNAL_MIN_AGE_HOURS <= time_diff_hours <= SIGNAL_MAX_AGE_HOURS:
+                    # Signal is from a recent closed bar (not necessarily the LAST one)
+                    # This is acceptable for mid-hour checks (e.g., bot runs at 14:30)
+                    print(f"   ℹ️  Using signal from recent bar (age: {time_diff_hours:.1f}h)")
+                else:
+                    # Signal too fresh (current bar) or too old (2+ bars ago)
+                    return None
+            else:
+                # Found signal on the last closed bar - use it!
+                last_signal = signals_from_last_closed.iloc[-1]
+                last_signal_time = last_closed_bar_time
+                print(f"   ✅ Signal found on last closed bar: {last_closed_bar_time.strftime('%Y-%m-%d %H:%M')}")
             
             # Get entry price for signal ID generation
             entry = last_signal['entry_price']
