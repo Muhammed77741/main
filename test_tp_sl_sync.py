@@ -16,10 +16,10 @@ def test_tp_sl_sync_logic():
     
     # Simulate database position
     class MockTrade:
-        def __init__(self):
+        def __init__(self, sl=2880.0, tp=2920.0):
             self.order_id = "12345"
-            self.stop_loss = 2880.0
-            self.take_profit = 2920.0
+            self.stop_loss = sl
+            self.take_profit = tp
             self.trade_type = 'BUY'
             self.entry_price = 2900.0
             self.amount = 0.03
@@ -36,10 +36,9 @@ def test_tp_sl_sync_logic():
     trade = MockTrade()
     mt5_pos = MockMT5Position(12345, 2880.0, 2930.0)  # TP changed from 2920 to 2930
     
-    tp_changed = False
-    if mt5_pos.tp and trade.take_profit:
-        if abs(mt5_pos.tp - trade.take_profit) > 0.01:
-            tp_changed = True
+    mt5_tp = mt5_pos.tp if mt5_pos.tp is not None else 0.0
+    db_tp = trade.take_profit if trade.take_profit is not None else 0.0
+    tp_changed = abs(mt5_tp - db_tp) > 0.01
     
     assert tp_changed, "❌ Failed to detect TP change"
     print(f"✅ TP change detected: DB={trade.take_profit:.2f} -> MT5={mt5_pos.tp:.2f}")
@@ -49,10 +48,9 @@ def test_tp_sl_sync_logic():
     trade = MockTrade()
     mt5_pos = MockMT5Position(12345, 2870.0, 2920.0)  # SL changed from 2880 to 2870
     
-    sl_changed = False
-    if mt5_pos.sl and trade.stop_loss:
-        if abs(mt5_pos.sl - trade.stop_loss) > 0.01:
-            sl_changed = True
+    mt5_sl = mt5_pos.sl if mt5_pos.sl is not None else 0.0
+    db_sl = trade.stop_loss if trade.stop_loss is not None else 0.0
+    sl_changed = abs(mt5_sl - db_sl) > 0.01
     
     assert sl_changed, "❌ Failed to detect SL change"
     print(f"✅ SL change detected: DB={trade.stop_loss:.2f} -> MT5={mt5_pos.sl:.2f}")
@@ -62,16 +60,13 @@ def test_tp_sl_sync_logic():
     trade = MockTrade()
     mt5_pos = MockMT5Position(12345, 2870.0, 2930.0)  # Both changed
     
-    sl_changed = False
-    tp_changed = False
+    mt5_sl = mt5_pos.sl if mt5_pos.sl is not None else 0.0
+    db_sl = trade.stop_loss if trade.stop_loss is not None else 0.0
+    mt5_tp = mt5_pos.tp if mt5_pos.tp is not None else 0.0
+    db_tp = trade.take_profit if trade.take_profit is not None else 0.0
     
-    if mt5_pos.sl and trade.stop_loss:
-        if abs(mt5_pos.sl - trade.stop_loss) > 0.01:
-            sl_changed = True
-    
-    if mt5_pos.tp and trade.take_profit:
-        if abs(mt5_pos.tp - trade.take_profit) > 0.01:
-            tp_changed = True
+    sl_changed = abs(mt5_sl - db_sl) > 0.01
+    tp_changed = abs(mt5_tp - db_tp) > 0.01
     
     assert sl_changed and tp_changed, "❌ Failed to detect both changes"
     print(f"✅ Both changes detected:")
@@ -83,19 +78,40 @@ def test_tp_sl_sync_logic():
     trade = MockTrade()
     mt5_pos = MockMT5Position(12345, 2880.005, 2920.003)  # Very small difference
     
-    sl_changed = False
-    tp_changed = False
+    mt5_sl = mt5_pos.sl if mt5_pos.sl is not None else 0.0
+    db_sl = trade.stop_loss if trade.stop_loss is not None else 0.0
+    mt5_tp = mt5_pos.tp if mt5_pos.tp is not None else 0.0
+    db_tp = trade.take_profit if trade.take_profit is not None else 0.0
     
-    if mt5_pos.sl and trade.stop_loss:
-        if abs(mt5_pos.sl - trade.stop_loss) > 0.01:
-            sl_changed = True
-    
-    if mt5_pos.tp and trade.take_profit:
-        if abs(mt5_pos.tp - trade.take_profit) > 0.01:
-            tp_changed = True
+    sl_changed = abs(mt5_sl - db_sl) > 0.01
+    tp_changed = abs(mt5_tp - db_tp) > 0.01
     
     assert not sl_changed and not tp_changed, "❌ Incorrectly detected change within tolerance"
     print(f"✅ No changes detected (differences within 0.01 tolerance)")
+    
+    # Test Case 5: SL removed in MT5 (set to 0 or None)
+    print("\nTest Case 5: SL removed in MT5")
+    trade = MockTrade(sl=2880.0, tp=2920.0)
+    mt5_pos = MockMT5Position(12345, None, 2920.0)  # SL removed
+    
+    mt5_sl = mt5_pos.sl if mt5_pos.sl is not None else 0.0
+    db_sl = trade.stop_loss if trade.stop_loss is not None else 0.0
+    sl_changed = abs(mt5_sl - db_sl) > 0.01
+    
+    assert sl_changed, "❌ Failed to detect SL removal"
+    print(f"✅ SL removal detected: DB={trade.stop_loss:.2f} -> MT5=0.00")
+    
+    # Test Case 6: TP added in MT5 (was 0 or None)
+    print("\nTest Case 6: TP added in MT5")
+    trade = MockTrade(sl=2880.0, tp=0.0)
+    mt5_pos = MockMT5Position(12345, 2880.0, 2920.0)  # TP added
+    
+    mt5_tp = mt5_pos.tp if mt5_pos.tp is not None else 0.0
+    db_tp = trade.take_profit if trade.take_profit is not None else 0.0
+    tp_changed = abs(mt5_tp - db_tp) > 0.01
+    
+    assert tp_changed, "❌ Failed to detect TP addition"
+    print(f"✅ TP addition detected: DB=0.00 -> MT5={mt5_pos.tp:.2f}")
     
     return True
 
@@ -113,20 +129,20 @@ def test_sync_code_exists():
     # Check for key implementation elements
     has_tp_sl_sync = 'Also syncs manual changes to TP/SL levels' in content
     has_positions_map = 'mt5_positions_map = {pos.ticket: pos for pos in open_positions}' in content
-    has_tp_check = 'if abs(mt5_pos.tp - trade.take_profit) > 0.01:' in content
-    has_sl_check = 'if abs(mt5_pos.sl - trade.stop_loss) > 0.01:' in content
+    has_none_handling = 'mt5_pos.sl if mt5_pos.sl is not None else 0.0' in content
+    has_abs_comparison = 'if abs(mt5_sl - db_sl) > 0.01:' in content
     has_db_update = 'Position #{ticket} TP/SL modified in MT5 - syncing database' in content
     
     assert has_tp_sl_sync, "❌ Missing TP/SL sync documentation"
     assert has_positions_map, "❌ Missing positions map creation"
-    assert has_tp_check, "❌ Missing TP change detection"
-    assert has_sl_check, "❌ Missing SL change detection"
+    assert has_none_handling, "❌ Missing None/0 handling"
+    assert has_abs_comparison, "❌ Missing proper comparison logic"
     assert has_db_update, "❌ Missing database update logic"
     
     print("✅ TP/SL sync documentation present")
     print("✅ Positions map creation present")
-    print("✅ TP change detection present")
-    print("✅ SL change detection present")
+    print("✅ None/0 value handling present")
+    print("✅ Proper abs() comparison present")
     print("✅ Database update logic present")
     
     return True

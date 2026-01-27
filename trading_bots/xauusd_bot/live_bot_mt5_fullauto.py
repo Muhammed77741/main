@@ -697,18 +697,18 @@ class LiveBotMT5FullAuto:
                     sl_changed = False
                     tp_changed = False
                     
-                    if mt5_pos.sl and trade.stop_loss:
-                        # Allow small tolerance for price differences (0.01)
-                        if abs(mt5_pos.sl - trade.stop_loss) > 0.01:
-                            sl_changed = True
-                    elif mt5_pos.sl != trade.stop_loss:
+                    # Get actual values (convert None to 0.0 for comparison)
+                    mt5_sl = mt5_pos.sl if mt5_pos.sl is not None else 0.0
+                    db_sl = trade.stop_loss if trade.stop_loss is not None else 0.0
+                    mt5_tp = mt5_pos.tp if mt5_pos.tp is not None else 0.0
+                    db_tp = trade.take_profit if trade.take_profit is not None else 0.0
+                    
+                    # Check SL difference (allow 0.01 tolerance)
+                    if abs(mt5_sl - db_sl) > 0.01:
                         sl_changed = True
                     
-                    if mt5_pos.tp and trade.take_profit:
-                        # Allow small tolerance for price differences (0.01)
-                        if abs(mt5_pos.tp - trade.take_profit) > 0.01:
-                            tp_changed = True
-                    elif mt5_pos.tp != trade.take_profit:
+                    # Check TP difference (allow 0.01 tolerance)
+                    if abs(mt5_tp - db_tp) > 0.01:
                         tp_changed = True
                     
                     # Update database if TP or SL changed
@@ -716,8 +716,8 @@ class LiveBotMT5FullAuto:
                         print(f"📊 Position #{ticket} TP/SL modified in MT5 - syncing database...")
                         
                         # Update the trade record
-                        trade.stop_loss = mt5_pos.sl if mt5_pos.sl else 0.0
-                        trade.take_profit = mt5_pos.tp if mt5_pos.tp else 0.0
+                        trade.stop_loss = mt5_sl
+                        trade.take_profit = mt5_tp
                         
                         # Update in database
                         self.db.update_trade(trade)
