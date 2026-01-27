@@ -2714,7 +2714,7 @@ class LiveBotMT5FullAuto:
         # Check max positions (need room for 3 positions)
         open_positions = self.get_open_positions()
         if len(open_positions) + 3 > self.max_positions:
-            print(f"⚠️  Not enough room for 3 positions (need {3}, have {self.max_positions - len(open_positions)} slots)")
+            print(f"⚠️  Not enough room for 3 positions on {self.symbol} (need 3, have {self.max_positions - len(open_positions)} slots, {len(open_positions)} positions open)")
             return False
             
         # Calculate total lot size
@@ -3261,7 +3261,7 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                         direction_str = 'LONG' if signal['direction'] == 1 else 'SHORT'
                         print(f"⚠️  Already have {direction_str} position - skipping")
                     elif len(open_positions) >= self.max_positions:
-                        print(f"⚠️  Max positions reached ({self.max_positions}) - skipping")
+                        print(f"⚠️  Max positions reached for {self.symbol} ({self.max_positions}) - skipping")
                     else:
                         # Open position
                         print(f"📈 Attempting to open position...")
