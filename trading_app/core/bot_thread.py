@@ -445,18 +445,15 @@ class BotThread(QThread):
         seconds_since_close = current_timestamp % timeframe_seconds
 
         # Calculate seconds until next candle close
+        # Run EXACTLY at candle close (:00 seconds), not before
         seconds_until_close = timeframe_seconds - seconds_since_close
 
-        # Start 5 seconds BEFORE the candle close to allow strategy processing time
-        # This ensures signals are ready exactly when the candle closes
-        seconds_until_close -= 5
-
-        # Ensure we don't go negative
-        if seconds_until_close < 0:
+        # Ensure we don't go negative (if we're right at the boundary)
+        if seconds_until_close <= 0:
             seconds_until_close += timeframe_seconds
 
-        # Calculate next close datetime
-        next_close = datetime.fromtimestamp(current_timestamp + seconds_until_close + 5)  # +5 to show actual candle close time
+        # Calculate next close datetime (exact candle close time at :00)
+        next_close = datetime.fromtimestamp(current_timestamp + seconds_until_close)
 
         return seconds_until_close, next_close
 
