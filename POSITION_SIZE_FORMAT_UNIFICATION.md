@@ -9,29 +9,41 @@ Bring position sizes in Live Trading GUI and Backtest (Signal Analysis GUI) to a
 - for cryptocurrencies use percentages of current price (e.g., 0.5%, 1%, 2%);
 - for Forex use pips (e.g., 10 pips, 20 pips, etc.);
 
+**ВАЖНО / IMPORTANT:** Формат определяется по символу (BTC, ETH, SOL = крипто), а не по бирже (MT5 vs Binance).
+Format is determined by SYMBOL (BTC, ETH, SOL = crypto), not by EXCHANGE (MT5 vs Binance).
+
 ## Реализация / Implementation
 
 ### 1. Live Trading GUI (settings_dialog.py)
 
 **Изменения:**
+- Добавлена функция `is_crypto_symbol()` для определения типа актива по символу
 - Добавлена динамическая установка суффикса для всех полей TP/SL
-- Для Binance (крипто): используется суффикс `"%"`
-- Для MT5 (Forex): используется суффикс `" pips"`
+- Для криптовалют (BTC, ETH, SOL и т.д.): используется суффикс `"%"`
+- Для Forex/Commodities (XAUUSD, EURUSD и т.д.): используется суффикс `" pips"`
 - Обновлена метка единиц измерения с "points" на "pips"
 
 **Changes:**
+- Added `is_crypto_symbol()` function to determine asset type by symbol
 - Added dynamic suffix setting for all TP/SL fields
-- For Binance (crypto): uses `"%"` suffix
-- For MT5 (Forex): uses `" pips"` suffix
+- For crypto (BTC, ETH, SOL, etc.): uses `"%"` suffix
+- For Forex/Commodities (XAUUSD, EURUSD, etc.): uses `" pips"` suffix
 - Updated unit label from "points" to "pips"
 
 **Код / Code:**
 ```python
-# Set suffix for all TP/SL spin boxes based on exchange type
-suffix = "%" if self.original_config.exchange == 'Binance' else " pips"
+def is_crypto_symbol(symbol: str) -> bool:
+    """Check if symbol is cryptocurrency (BTC, ETH, SOL, etc.)"""
+    if not symbol:
+        return False
+    symbol_upper = symbol.upper()
+    crypto_keywords = ['BTC', 'ETH', 'XRP', 'LTC', 'ADA', 'DOT', 'DOGE', 'SOL', 'AVAX', 'MATIC']
+    return any(keyword in symbol_upper for keyword in crypto_keywords)
+
+# Set suffix based on symbol type, not exchange
+is_crypto = is_crypto_symbol(self.original_config.symbol)
+suffix = "%" if is_crypto else " pips"
 self.trend_tp1_spin.setSuffix(suffix)
-self.trend_tp2_spin.setSuffix(suffix)
-# ... и т.д. / etc.
 ```
 
 ### 2. Backtest GUI (signal_analysis_dialog.py)
@@ -107,6 +119,15 @@ if is_crypto and settings.get('trend_tp1', 0) > 10:
 - TP3: 50 pips (отображается как "50 pips" / displayed as "50 pips")
 - SL: 12 pips (отображается как "12 pips" / displayed as "12 pips")
 
+## Поддерживаемые символы / Supported Symbols
+
+### Криптовалюты (используют %) / Cryptocurrencies (use %)
+- **Binance:** BTC/USDT, ETH/USDT (через Binance API)
+- **MT5:** BTCUSD, ETHUSD, SOLUSD (через MT5)
+
+### Forex/Commodities (используют pips) / Forex/Commodities (use pips)
+- **MT5:** XAUUSD, EURUSD, GBPUSD, USDJPY и т.д. / etc.
+
 ## Тестирование / Testing
 
 ### Созданные тесты / Created Tests
@@ -164,16 +185,21 @@ To ensure backward compatibility with old saved settings:
 4. **validate_format_consistency.py** (новый / new)
    - Проверка консистентности форматов
 
+5. **test_mt5_crypto_symbols.py** (новый / new)
+   - Тестирование MT5 криптовалют (BTCUSD, ETHUSD, SOLUSD)
+
 ## Выводы / Conclusions
 
 ✅ Формат позиций унифицирован между Live Trading GUI и Backtest GUI
-✅ Криптовалюты используют проценты (%)
+✅ Криптовалюты используют проценты (%) - независимо от биржи
+✅ MT5 криптовалюты (BTCUSD, ETHUSD, SOLUSD) также используют %
 ✅ Forex использует пункты (pips)
 ✅ Обеспечена обратная совместимость
 ✅ Все тесты проходят успешно
 
 ✅ Position format unified between Live Trading GUI and Backtest GUI
-✅ Cryptocurrencies use percentages (%)
+✅ Cryptocurrencies use percentages (%) - regardless of exchange
+✅ MT5 crypto pairs (BTCUSD, ETHUSD, SOLUSD) also use %
 ✅ Forex uses pips
 ✅ Backward compatibility ensured
 ✅ All tests pass successfully

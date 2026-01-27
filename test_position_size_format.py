@@ -24,11 +24,18 @@ try:
     with open('trading_app/gui/settings_dialog.py', 'r') as f:
         content = f.read()
     
-    # Check that suffix is set dynamically
-    if 'suffix = "%" if self.original_config.exchange == \'Binance\' else " pips"' in content:
-        print("✓ PASS: Dynamic suffix setting found")
+    # Check that is_crypto_symbol function exists
+    if 'def is_crypto_symbol(symbol: str)' in content:
+        print("✓ PASS: is_crypto_symbol() function found")
     else:
-        print("❌ FAIL: Dynamic suffix setting not found")
+        print("❌ FAIL: is_crypto_symbol() function not found")
+        sys.exit(1)
+    
+    # Check that suffix is set based on symbol type (not exchange)
+    if 'is_crypto = is_crypto_symbol(self.original_config.symbol)' in content:
+        print("✓ PASS: Suffix determined by symbol type (not exchange)")
+    else:
+        print("❌ FAIL: Suffix not determined by symbol type")
         sys.exit(1)
     
     # Check that suffixes are applied to all TP/SL spin boxes
@@ -39,8 +46,8 @@ try:
         sys.exit(1)
     
     # Check unit label updated
-    if 'unit = "%" if self.original_config.exchange == \'Binance\' else "pips"' in content:
-        print("✓ PASS: Unit label uses 'pips' for Forex")
+    if 'unit = "%" if is_crypto else "pips"' in content:
+        print("✓ PASS: Unit label uses symbol-based detection")
     else:
         print("❌ FAIL: Unit label not updated")
         sys.exit(1)
@@ -127,9 +134,10 @@ print("\n" + "=" * 80)
 print("✓ All tests passed!")
 print("=" * 80)
 print("\nSummary of changes:")
-print("1. ✓ Live Trading GUI uses % for crypto, pips for Forex")
-print("2. ✓ Backtest GUI uses % for crypto, pips for Forex")
-print("3. ✓ Format is consistent between both GUIs")
-print("4. ✓ Migration logic handles old saved settings")
-print("5. ✓ Values are stored correctly (no *100 for crypto)")
+print("1. ✓ Live Trading GUI determines format by SYMBOL (not exchange)")
+print("2. ✓ Backtest GUI determines format by SYMBOL (not exchange)")
+print("3. ✓ Crypto symbols (BTC, ETH, SOL) use % - regardless of exchange")
+print("4. ✓ Forex symbols (XAUUSD, EURUSD) use pips")
+print("5. ✓ Migration logic handles old saved settings")
+print("6. ✓ Values are stored correctly (no *100 for crypto)")
 print("=" * 80)

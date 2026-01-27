@@ -10,6 +10,16 @@ from PySide6.QtCore import Qt
 from models import BotConfig
 
 
+def is_crypto_symbol(symbol: str) -> bool:
+    """Check if symbol is cryptocurrency (BTC, ETH, SOL, etc.)"""
+    if not symbol:
+        return False
+    symbol_upper = symbol.upper()
+    # Check for crypto keywords
+    crypto_keywords = ['BTC', 'ETH', 'XRP', 'LTC', 'ADA', 'DOT', 'DOGE', 'SOL', 'AVAX', 'MATIC']
+    return any(keyword in symbol_upper for keyword in crypto_keywords)
+
+
 class SettingsDialog(QDialog):
     """Bot settings dialog"""
 
@@ -284,12 +294,14 @@ class SettingsDialog(QDialog):
         layout.addLayout(sl_layout)
 
         # Unit label and set suffixes
-        unit = "%" if self.original_config.exchange == 'Binance' else "pips"
+        # Determine if crypto based on symbol, not exchange
+        is_crypto = is_crypto_symbol(self.original_config.symbol)
+        unit = "%" if is_crypto else "pips"
         unit_label = QLabel(f"<i>Unit: {unit} (TP and SL)</i>")
         layout.addWidget(unit_label)
         
-        # Set suffix for all TP/SL spin boxes based on exchange type
-        suffix = "%" if self.original_config.exchange == 'Binance' else " pips"
+        # Set suffix for all TP/SL spin boxes based on symbol type (crypto vs forex)
+        suffix = "%" if is_crypto else " pips"
         self.trend_tp1_spin.setSuffix(suffix)
         self.trend_tp2_spin.setSuffix(suffix)
         self.trend_tp3_spin.setSuffix(suffix)
@@ -347,12 +359,14 @@ class SettingsDialog(QDialog):
 
         # Regime-based SL
         self.use_regime_sl_check.setChecked(self.config.get('use_regime_based_sl', False))
-        if self.original_config.exchange == 'Binance':
-            # Crypto: percentage
+        # Determine defaults based on symbol type (crypto vs forex)
+        is_crypto = is_crypto_symbol(self.original_config.symbol)
+        if is_crypto:
+            # Crypto: percentage (e.g., 0.8% for BTC, ETH, SOL)
             self.trend_sl_spin.setValue(self.config.get('trend_sl', 0.8))
             self.range_sl_spin.setValue(self.config.get('range_sl', 0.6))
         else:
-            # XAUUSD: points
+            # Forex/Commodities: pips (e.g., 16 pips for XAUUSD, EURUSD)
             self.trend_sl_spin.setValue(self.config.get('trend_sl', 16))
             self.range_sl_spin.setValue(self.config.get('range_sl', 12))
 
