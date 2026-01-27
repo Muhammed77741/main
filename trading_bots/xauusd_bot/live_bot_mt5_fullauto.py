@@ -159,6 +159,7 @@ class LiveBotMT5FullAuto:
         # Phase 2: 3-Position Mode tracking
         self.position_groups = {}  # {group_id: {'tp1_hit': bool, 'max_price': float, 'min_price': float, 'positions': [...]}}
         self.group_counter = 0  # Counter for position groups (0-99) used in magic number generation
+        self.logged_closed_groups = set()  # Track groups where we've already logged "Position 1 closed but NOT by TP1" to prevent spam
 
         # Resilience features (CRITICAL: Network stability)
         self.running = True  # Flag for graceful shutdown
@@ -629,6 +630,11 @@ class LiveBotMT5FullAuto:
             return
         
         try:
+            # Ensure MT5 connection is alive before querying
+            if not mt5_manager.ensure_connection():
+                print(f"⚠️  MT5 connection lost - skipping position sync")
+                return
+            
             # Get all OPEN positions from database
             db_trades = self.db.get_open_trades(self.bot_id)
             if not db_trades:
@@ -636,7 +642,13 @@ class LiveBotMT5FullAuto:
             
             # Get current open positions from MT5
             open_positions = mt5.positions_get(symbol=self.symbol)
-            mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+            
+            # Check if positions_get failed (returns None on error)
+            if open_positions is None:
+                print(f"⚠️  Failed to get positions from MT5 - skipping position sync")
+                return
+            
+            mt5_position_tickets = set(pos.ticket for pos in open_positions)
             
             # Check each database position
             for trade in db_trades:
@@ -995,9 +1007,12 @@ class LiveBotMT5FullAuto:
                     print(f"🎯 Group {group_id[:8]} Position 1 closed by TP1! Activating trailing for Pos 2 & 3")
                 else:
                     # Position 1 closed but NOT by TP1 - do NOT activate trailing
-                    print(f"⚠️  Group {group_id[:8]} Position 1 closed but NOT by TP1 - trailing NOT activated")
-                    print(f"   This usually means Position 1 was closed by SL or manually")
-                    print(f"   Positions 2 & 3 will keep their original SL")
+                    # Only log this warning ONCE per group to prevent spam
+                    if group_id not in self.logged_closed_groups:
+                        print(f"⚠️  Group {group_id[:8]} Position 1 closed but NOT by TP1 - trailing NOT activated")
+                        print(f"   This usually means Position 1 was closed by SL or manually")
+                        print(f"   Positions 2 & 3 will keep their original SL")
+                        self.logged_closed_groups.add(group_id)  # Mark as logged to prevent repeated warnings
 
             
             # Save tp1_hit to database
@@ -1341,6 +1356,11 @@ class LiveBotMT5FullAuto:
         mt5_position_tickets = set()
         
         if not self.dry_run:
+            # Ensure MT5 connection is alive before querying
+            if not mt5_manager.ensure_connection():
+                print(f"⚠️  MT5 connection lost - skipping position check")
+                return
+            
             open_positions = mt5.positions_get(symbol=self.symbol)
             
             # Check if positions_get failed (returns None on error)
@@ -2072,11 +2092,20 @@ class LiveBotMT5FullAuto:
         if not self.mt5_connected:
             return
         
+        # Ensure MT5 connection is alive before querying
+        if not mt5_manager.ensure_connection():
+            print(f"⚠️  MT5 connection lost - skipping closed position detection")
+            return
+        
         # Get currently open position tickets
         open_positions = mt5.positions_get(symbol=self.symbol)
         current_tickets = set()
         if open_positions:
             current_tickets = {pos.ticket for pos in open_positions}
+        elif open_positions is None:
+            # positions_get failed
+            print(f"⚠️  Failed to get positions from MT5 - skipping closed position detection")
+            return
         
         # Find positions that were tracked but are now closed
         tracked_tickets = set(self.positions_tracker.keys())
@@ -2476,9 +2505,15 @@ class LiveBotMT5FullAuto:
         """Get open positions for symbol"""
         if not self.mt5_connected:
             return []
+        
+        # Ensure MT5 connection is alive before querying
+        if not mt5_manager.ensure_connection():
+            print(f"⚠️  MT5 connection lost - cannot get open positions")
+            return []
             
         positions = mt5.positions_get(symbol=self.symbol)
         if positions is None:
+            print(f"⚠️  Failed to get positions from MT5")
             return []
             
         return list(positions)
@@ -2786,11 +2821,31 @@ class LiveBotMT5FullAuto:
                 "type_filling": self._get_filling_mode(),
             }
             
-            # Send order
-            result = mt5.order_send(request)
+            # Send order with retry logic (up to 3 attempts)
+            result = None
+            max_retries = 3
+            for attempt in range(max_retries):
+                # Ensure connection before sending order
+                if not mt5_manager.ensure_connection():
+                    print(f"   ⚠️  MT5 connection lost - attempt {attempt + 1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)  # Brief pause before retry
+                        continue
+                    else:
+                        break
+                
+                result = mt5.order_send(request)
+                
+                if result is not None:
+                    break  # Success, exit retry loop
+                
+                # Retry on None result (connection issue)
+                if attempt < max_retries - 1:
+                    print(f"   ⚠️  {tp_name} order attempt {attempt + 1} failed - retrying...")
+                    time.sleep(1)  # Brief pause before retry
             
             if result is None:
-                print(f"   ❌ {tp_name} order failed: No result from broker")
+                print(f"   ❌ {tp_name} order failed after {max_retries} attempts: No result from broker")
                 print(f"      Check: MT5 connection, symbol availability, trading permissions")
                 continue
 
