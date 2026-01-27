@@ -156,15 +156,8 @@ class SettingsDialog(QDialog):
         self.max_pos_spin.setRange(1, 20)
         layout.addRow("Max positions:", self.max_pos_spin)
 
-        # DRY RUN mode
-        self.dry_run_check = QCheckBox("DRY RUN mode (no real trades)")
-        layout.addRow("", self.dry_run_check)
-
-        # Phase 2: 3-Position Mode
-        layout.addRow(QLabel("<b>3-Position Mode:</b>"))
-
-        self.use_3pos_check = QCheckBox("Enable 3-position mode")
-        layout.addRow("", self.use_3pos_check)
+        # Phase 2: 3-Position Mode (always enabled, settings only)
+        layout.addRow(QLabel("<b>3-Position Mode Settings:</b>"))
 
         self.total_pos_size_spin = QDoubleSpinBox()
         self.total_pos_size_spin.setRange(0.01, 100000.0)
@@ -324,7 +317,6 @@ class SettingsDialog(QDialog):
         self.timeframe_combo.setCurrentText(self.config.get('timeframe', '1h'))
         self.risk_spin.setValue(self.config.get('risk_percent', 2.0))
         self.max_pos_spin.setValue(self.config.get('max_positions', 3))
-        self.dry_run_check.setChecked(self.config.get('dry_run', True))
 
         # Strategy
         self.trend_tp1_spin.setValue(self.config.get('trend_tp1', 1.5))
@@ -345,8 +337,8 @@ class SettingsDialog(QDialog):
             self.trend_sl_spin.setValue(self.config.get('trend_sl', 16))
             self.range_sl_spin.setValue(self.config.get('range_sl', 12))
 
-        # Phase 2: 3-Position Mode
-        self.use_3pos_check.setChecked(self.config.get('use_3_position_mode', True))
+        # Phase 2: 3-Position Mode (always enabled, only configure settings)
+        # Note: use_3_position_mode is always True and cannot be changed
 
         # Handle None values by using 'or' fallback
         total_pos_default = 100.0 if self.original_config.exchange == 'Binance' else 0.1
@@ -375,7 +367,8 @@ class SettingsDialog(QDialog):
         self.config['timeframe'] = self.timeframe_combo.currentText()
         self.config['risk_percent'] = self.risk_spin.value()
         self.config['max_positions'] = self.max_pos_spin.value()
-        self.config['dry_run'] = self.dry_run_check.isChecked()
+        # DRY_RUN is always False (disabled) and cannot be changed by user
+        self.config['dry_run'] = False
 
         self.config['trend_tp1'] = self.trend_tp1_spin.value()
         self.config['trend_tp2'] = self.trend_tp2_spin.value()
@@ -389,8 +382,9 @@ class SettingsDialog(QDialog):
         self.config['trend_sl'] = self.trend_sl_spin.value()
         self.config['range_sl'] = self.range_sl_spin.value()
 
-        # Phase 2: 3-Position Mode
-        self.config['use_3_position_mode'] = self.use_3pos_check.isChecked()
+        # Phase 2: 3-Position Mode (always enabled, only save settings)
+        # Note: use_3_position_mode is always True and cannot be changed
+        self.config['use_3_position_mode'] = True
         self.config['total_position_size'] = self.total_pos_size_spin.value()
         self.config['min_order_size'] = self.min_order_size_spin.value()
         self.config['use_trailing_stops'] = self.use_trailing_check.isChecked()

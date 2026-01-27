@@ -59,7 +59,7 @@ class BotConfig:
     telegram_chat_id: Optional[str] = None
 
     # Bot mode
-    dry_run: bool = True
+    dry_run: bool = False  # Always disabled, user cannot change
     testnet: bool = True
 
     def to_dict(self):
