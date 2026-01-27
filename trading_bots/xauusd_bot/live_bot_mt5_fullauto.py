@@ -628,6 +628,7 @@ class LiveBotMT5FullAuto:
         """Sync database positions with actual exchange positions
         
         Detects positions that were manually closed on exchange but still show as OPEN in database
+        Also syncs manual changes to TP/SL levels
         """
         if not self.use_database or not self.db or self.dry_run or not self.mt5_connected:
             return
@@ -651,7 +652,8 @@ class LiveBotMT5FullAuto:
                 print(f"⚠️  Failed to get positions from MT5 - skipping position sync")
                 return
             
-            mt5_position_tickets = set(pos.ticket for pos in open_positions)
+            # Create a mapping of ticket to MT5 position for easy lookup
+            mt5_positions_map = {pos.ticket: pos for pos in open_positions}
             
             # Check each database position
             for trade in db_trades:
@@ -661,7 +663,7 @@ class LiveBotMT5FullAuto:
                     continue
                 
                 # If position is in database but not on MT5, it was closed manually
-                if ticket not in mt5_position_tickets:
+                if ticket not in mt5_positions_map:
                     print(f"📊 Position #{ticket} manually closed on MT5 - syncing database...")
                     
                     # Get current price for profit calculation
@@ -687,6 +689,52 @@ class LiveBotMT5FullAuto:
                     )
                     
                     print(f"✅ Database synced for position #{ticket}")
+                else:
+                    # Position still open - check if TP/SL were modified manually in MT5
+                    mt5_pos = mt5_positions_map[ticket]
+                    
+                    # Check if SL or TP differs between MT5 and database
+                    sl_changed = False
+                    tp_changed = False
+                    
+                    if mt5_pos.sl and trade.stop_loss:
+                        # Allow small tolerance for price differences (0.01)
+                        if abs(mt5_pos.sl - trade.stop_loss) > 0.01:
+                            sl_changed = True
+                    elif mt5_pos.sl != trade.stop_loss:
+                        sl_changed = True
+                    
+                    if mt5_pos.tp and trade.take_profit:
+                        # Allow small tolerance for price differences (0.01)
+                        if abs(mt5_pos.tp - trade.take_profit) > 0.01:
+                            tp_changed = True
+                    elif mt5_pos.tp != trade.take_profit:
+                        tp_changed = True
+                    
+                    # Update database if TP or SL changed
+                    if sl_changed or tp_changed:
+                        print(f"📊 Position #{ticket} TP/SL modified in MT5 - syncing database...")
+                        
+                        # Update the trade record
+                        trade.stop_loss = mt5_pos.sl if mt5_pos.sl else 0.0
+                        trade.take_profit = mt5_pos.tp if mt5_pos.tp else 0.0
+                        
+                        # Update in database
+                        self.db.update_trade(trade)
+                        
+                        # Also update in-memory tracker if exists
+                        if ticket in self.positions_tracker:
+                            self.positions_tracker[ticket]['sl'] = trade.stop_loss
+                            self.positions_tracker[ticket]['tp'] = trade.take_profit
+                        
+                        changes = []
+                        if sl_changed:
+                            changes.append(f"SL: {trade.stop_loss:.2f}")
+                        if tp_changed:
+                            changes.append(f"TP: {trade.take_profit:.2f}")
+                        
+                        print(f"✅ Position #{ticket} synced: {', '.join(changes)}")
+                        
         except Exception as e:
             print(f"⚠️  Error syncing positions with exchange: {e}")
 
