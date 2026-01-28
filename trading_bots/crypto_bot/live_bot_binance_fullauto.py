@@ -25,18 +25,23 @@ from shared.pattern_recognition_strategy import PatternRecognitionStrategy
 from shared.telegram_helper import check_telegram_bot_import
 
 # ============================================================================
-# Signal freshness validation constants (for H1 timeframe)
+# Signal freshness validation multipliers (for any timeframe)
 # ============================================================================
-# These constants ensure we only trade signals from previous CLOSED candles,
+# These multipliers ensure we only trade signals from previous CLOSED candles,
 # not from the current incomplete candle or very old signals
 #
-# For H1 timeframe:
-#   - Current incomplete bar: 0-0.5 hours old -> REJECT
-#   - Previous closed bar: 0.5-1.5 hours old -> ACCEPT
-#   - Older bars: > 1.5 hours old -> REJECT
+# The actual min/max age is calculated dynamically based on timeframe:
+#   MIN_AGE = 0.5 * timeframe_hours (half a bar)
+#   MAX_AGE = 1.5 * timeframe_hours (one and a half bars)
+#
+# Examples:
+#   1h:  MIN=0.5h, MAX=1.5h (30-90 minutes)
+#   30m: MIN=0.25h, MAX=0.75h (15-45 minutes)
+#   15m: MIN=0.125h, MAX=0.375h (7.5-22.5 minutes)
+#   5m:  MIN=0.042h, MAX=0.125h (2.5-7.5 minutes)
 # ============================================================================
-SIGNAL_MIN_AGE_HOURS = 0.5   # Minimum age to ensure signal is from closed candle
-SIGNAL_MAX_AGE_HOURS = 1.5   # Maximum age to ensure signal is fresh (not too old)
+SIGNAL_MIN_AGE_MULTIPLIER = 0.5   # Minimum: half a bar
+SIGNAL_MAX_AGE_MULTIPLIER = 1.5   # Maximum: one and a half bars
 
 
 class LiveBotBinanceFullAuto:
@@ -1620,6 +1625,38 @@ class LiveBotBinanceFullAuto:
             print(f"❌ Failed to get market data: {e}")
             return self._handle_connection_error(e, "fetch market data")
 
+    def _get_timeframe_hours(self):
+        """
+        Get the timeframe in hours
+        
+        Converts Binance timeframe string to hours for signal age validation
+        
+        Returns:
+            float: Timeframe in hours
+        """
+        # Map Binance timeframe strings to hours
+        timeframe_map = {
+            '1m': 1/60,    # 1 minute = 1/60 hours
+            '3m': 3/60,    # 3 minutes = 3/60 hours
+            '5m': 5/60,    # 5 minutes = 5/60 hours
+            '15m': 15/60,  # 15 minutes = 0.25 hours
+            '30m': 30/60,  # 30 minutes = 0.5 hours
+            '1h': 1,       # 1 hour
+            '2h': 2,       # 2 hours
+            '4h': 4,       # 4 hours
+            '6h': 6,       # 6 hours
+            '8h': 8,       # 8 hours
+            '12h': 12,     # 12 hours
+            '1d': 24,      # 1 day = 24 hours
+            '3d': 72,      # 3 days = 72 hours
+            '1w': 168,     # 1 week = 168 hours
+            '1M': 720,     # 1 month = ~720 hours
+        }
+        
+        # Get hours from map, default to 1 hour if not found
+        hours = timeframe_map.get(self.timeframe, 1)
+        return hours
+
     def detect_market_regime(self, df, lookback=100):
         """
         Detect market regime: TREND or RANGE
@@ -1746,18 +1783,23 @@ class LiveBotBinanceFullAuto:
                 # Calculate age to provide helpful debug info
                 time_diff_hours = (current_bar_time - last_signal_time).total_seconds() / 3600
                 
-                # OLD LOGIC (kept as fallback for mid-hour checks)
-                # Accept signals from last 0.5-1.5 hours (covers last closed bar at any time)
-                if SIGNAL_MIN_AGE_HOURS <= time_diff_hours <= SIGNAL_MAX_AGE_HOURS:
+                # DYNAMIC FILTER (adapts to timeframe)
+                # Calculate min/max age based on timeframe
+                timeframe_hours = self._get_timeframe_hours()
+                signal_min_age = SIGNAL_MIN_AGE_MULTIPLIER * timeframe_hours  # Half a bar
+                signal_max_age = SIGNAL_MAX_AGE_MULTIPLIER * timeframe_hours  # One and a half bars
+                
+                # Accept signals within the dynamic range (covers last closed bar at any time)
+                if signal_min_age <= time_diff_hours <= signal_max_age:
                     # Signal is from a recent closed bar (not necessarily the LAST one)
-                    # This is acceptable for mid-hour checks (e.g., bot runs at 14:30)
-                    print(f"   ℹ️  Using signal from recent bar (age: {time_diff_hours:.1f}h)")
+                    # This is acceptable for mid-timeframe checks (e.g., bot runs mid-bar)
+                    print(f"   ℹ️  Using signal from recent bar (age: {time_diff_hours:.2f}h, range: {signal_min_age:.2f}-{signal_max_age:.2f}h)")
                 else:
                     # Signal too fresh (current bar) or too old (2+ bars ago)
-                    if time_diff_hours < SIGNAL_MIN_AGE_HOURS:
-                        print(f"   ⏰ Signal from current incomplete candle (age: {time_diff_hours:.1f}h) - REJECTED")
+                    if time_diff_hours < signal_min_age:
+                        print(f"   ⏰ Signal too fresh ({time_diff_hours:.2f}h < {signal_min_age:.2f}h) - from current incomplete bar")
                     else:
-                        print(f"   ⏰ Last signal is {time_diff_hours:.1f}h old (not from latest candle, skipping)")
+                        print(f"   ⏰ Signal too old ({time_diff_hours:.2f}h > {signal_max_age:.2f}h) - older than 1.5 bars")
                     return None
             else:
                 # Found signal on the last closed bar - use it!

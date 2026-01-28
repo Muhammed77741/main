@@ -61,18 +61,23 @@ MIN_SL_DISTANCE_FROM_ENTRY_PCT = 0.003   # 0.3% - minimum distance from entry pr
 MIN_SL_DISTANCE_FROM_PRICE_PCT = 0.002   # 0.2% - minimum distance from current price
 
 # ============================================================================
-# Signal freshness validation constants (for H1 timeframe)
+# Signal freshness validation multipliers (for any timeframe)
 # ============================================================================
-# These constants ensure we only trade signals from previous CLOSED candles,
+# These multipliers ensure we only trade signals from previous CLOSED candles,
 # not from the current incomplete candle or very old signals
 #
-# For H1 timeframe:
-#   - Current incomplete bar: 0-0.5 hours old -> REJECT
-#   - Previous closed bar: 0.5-1.5 hours old -> ACCEPT
-#   - Older bars: > 1.5 hours old -> REJECT
+# The actual min/max age is calculated dynamically based on timeframe:
+#   MIN_AGE = 0.5 * timeframe_hours (half a bar)
+#   MAX_AGE = 1.5 * timeframe_hours (one and a half bars)
+#
+# Examples:
+#   H1:  MIN=0.5h, MAX=1.5h (30-90 minutes)
+#   M30: MIN=0.25h, MAX=0.75h (15-45 minutes)
+#   M15: MIN=0.125h, MAX=0.375h (7.5-22.5 minutes)
+#   M5:  MIN=0.042h, MAX=0.125h (2.5-7.5 minutes)
 # ============================================================================
-SIGNAL_MIN_AGE_HOURS = 0.5   # Minimum age to ensure signal is from closed candle
-SIGNAL_MAX_AGE_HOURS = 1.5   # Maximum age to ensure signal is fresh (not too old)
+SIGNAL_MIN_AGE_MULTIPLIER = 0.5   # Minimum: half a bar
+SIGNAL_MAX_AGE_MULTIPLIER = 1.5   # Maximum: one and a half bars
 
 
 class LiveBotMT5FullAuto:
@@ -2338,6 +2343,32 @@ class LiveBotMT5FullAuto:
         
         return df
         
+    def _get_timeframe_hours(self):
+        """
+        Get the timeframe in hours
+        
+        Converts MT5 timeframe constant to hours for signal age validation
+        
+        Returns:
+            float: Timeframe in hours
+        """
+        # Map MT5 timeframe constants to hours
+        timeframe_map = {
+            1: 1/60,      # TIMEFRAME_M1 = 1 minute = 1/60 hours
+            5: 5/60,      # TIMEFRAME_M5 = 5 minutes = 5/60 hours
+            15: 15/60,    # TIMEFRAME_M15 = 15 minutes = 0.25 hours
+            30: 30/60,    # TIMEFRAME_M30 = 30 minutes = 0.5 hours
+            16385: 1,     # TIMEFRAME_H1 = 1 hour
+            16388: 4,     # TIMEFRAME_H4 = 4 hours
+            16408: 24,    # TIMEFRAME_D1 = 1 day = 24 hours
+            32769: 168,   # TIMEFRAME_W1 = 1 week = 168 hours
+            49153: 720,   # TIMEFRAME_MN1 = 1 month = ~720 hours
+        }
+        
+        # Get hours from map, default to 1 hour if not found
+        hours = timeframe_map.get(self.timeframe, 1)
+        return hours
+        
     def detect_market_regime(self, df, lookback=100):
         """
         Detect market regime: TREND or RANGE
@@ -2466,14 +2497,23 @@ class LiveBotMT5FullAuto:
                 # Calculate age to provide helpful debug info
                 time_diff_hours = (current_bar_time - last_signal_time).total_seconds() / 3600
                 
-                # OLD LOGIC (kept as fallback for mid-hour checks)
-                # Accept signals from last 0.5-1.5 hours (covers last closed bar at any time)
-                if SIGNAL_MIN_AGE_HOURS <= time_diff_hours <= SIGNAL_MAX_AGE_HOURS:
+                # DYNAMIC FILTER (adapts to timeframe)
+                # Calculate min/max age based on timeframe
+                timeframe_hours = self._get_timeframe_hours()
+                signal_min_age = SIGNAL_MIN_AGE_MULTIPLIER * timeframe_hours  # Half a bar
+                signal_max_age = SIGNAL_MAX_AGE_MULTIPLIER * timeframe_hours  # One and a half bars
+                
+                # Accept signals within the dynamic range (covers last closed bar at any time)
+                if signal_min_age <= time_diff_hours <= signal_max_age:
                     # Signal is from a recent closed bar (not necessarily the LAST one)
-                    # This is acceptable for mid-hour checks (e.g., bot runs at 14:30)
-                    print(f"   ℹ️  Using signal from recent bar (age: {time_diff_hours:.1f}h)")
+                    # This is acceptable for mid-timeframe checks (e.g., bot runs mid-bar)
+                    print(f"   ℹ️  Using signal from recent bar (age: {time_diff_hours:.2f}h, range: {signal_min_age:.2f}-{signal_max_age:.2f}h)")
                 else:
                     # Signal too fresh (current bar) or too old (2+ bars ago)
+                    if time_diff_hours < signal_min_age:
+                        print(f"   ⏰ Signal too fresh ({time_diff_hours:.2f}h < {signal_min_age:.2f}h) - from current incomplete bar")
+                    else:
+                        print(f"   ⏰ Signal too old ({time_diff_hours:.2f}h > {signal_max_age:.2f}h) - older than 1.5 bars")
                     return None
             else:
                 # Found signal on the last closed bar - use it!
