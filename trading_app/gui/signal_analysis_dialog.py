@@ -156,10 +156,23 @@ class SignalAnalysisWorker(QThread):
             # Run strategy
             df_signals = strategy.run_strategy(df)
             
-            # Find signals
+            # Find signals - FILTER OUT SIGNALS FROM INCOMPLETE CANDLES
+            # Only include signals from closed candles (not the last bar which may be incomplete)
+            # Match live bot behavior: signals must be from previous completed candles
             signals_df = df_signals[df_signals['signal'] != 0].copy()
             
-            self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals...")
+            # CRITICAL FIX: Remove signal from last candle (current/incomplete)
+            # In backtesting, we should only trade on signals that would have been available
+            # at the time of decision (i.e., from completed candles only)
+            if len(signals_df) > 0:
+                # Get the last timestamp in the full dataset
+                last_timestamp = df_signals.index[-1]
+                
+                # Filter out any signals from the last (potentially incomplete) candle
+                # This matches the live bot behavior where we only trade on closed candles
+                signals_df = signals_df[signals_df.index < last_timestamp].copy()
+            
+            self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals (from closed candles only)...")
             
             # Calculate outcomes for each signal
             signals_df = self._calculate_signal_outcomes(signals_df, df_signals)
@@ -1118,10 +1131,23 @@ class SignalAnalysisWorkerMT5(QThread):
                 # Run strategy
                 df_signals = strategy.run_strategy(df)
                 
-                # Find signals
+                # Find signals - FILTER OUT SIGNALS FROM INCOMPLETE CANDLES
+                # Only include signals from closed candles (not the last bar which may be incomplete)
+                # Match live bot behavior: signals must be from previous completed candles
                 signals_df = df_signals[df_signals['signal'] != 0].copy()
                 
-                self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals...")
+                # CRITICAL FIX: Remove signal from last candle (current/incomplete)
+                # In backtesting, we should only trade on signals that would have been available
+                # at the time of decision (i.e., from completed candles only)
+                if len(signals_df) > 0:
+                    # Get the last timestamp in the full dataset
+                    last_timestamp = df_signals.index[-1]
+                    
+                    # Filter out any signals from the last (potentially incomplete) candle
+                    # This matches the live bot behavior where we only trade on closed candles
+                    signals_df = signals_df[signals_df.index < last_timestamp].copy()
+                
+                self.progress.emit(f"📊 Calculating trade outcomes for {len(signals_df)} signals (from closed candles only)...")
                 
                 # Calculate outcomes for each signal (reuse the same logic)
                 signals_df = self._calculate_signal_outcomes(signals_df, df_signals)
@@ -2680,9 +2706,9 @@ class SignalAnalysisDialog(QDialog):
 
         # Table
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(10)
+        self.results_table.setColumnCount(11)
         self.results_table.setHorizontalHeaderLabels([
-            'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
+            'Date/Time (Open)', 'Close Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
         ])
 
         # Configure table
@@ -3009,6 +3035,37 @@ class SignalAnalysisDialog(QDialog):
             f"• Invalid date range"
         )
         
+    def _calculate_bar_close_time(self, open_time, timeframe):
+        """
+        Calculate bar close time based on open time and timeframe
+        
+        Args:
+            open_time: datetime - bar open time
+            timeframe: str - timeframe ('1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w')
+        
+        Returns:
+            datetime - bar close time
+        """
+        timeframe_deltas = {
+            '1m': timedelta(minutes=1),
+            '3m': timedelta(minutes=3),
+            '5m': timedelta(minutes=5),
+            '15m': timedelta(minutes=15),
+            '30m': timedelta(minutes=30),
+            '1h': timedelta(hours=1),
+            '2h': timedelta(hours=2),
+            '4h': timedelta(hours=4),
+            '6h': timedelta(hours=6),
+            '8h': timedelta(hours=8),
+            '12h': timedelta(hours=12),
+            '1d': timedelta(days=1),
+            '3d': timedelta(days=3),
+            '1w': timedelta(weeks=1),
+        }
+        
+        delta = timeframe_deltas.get(timeframe, timedelta(hours=1))  # Default to 1h
+        return open_time + delta
+        
     def populate_results_table(self, signals_df):
         """Populate results table with signals"""
         # Check if multi-TP mode was used and if it has position groups
@@ -3018,19 +3075,19 @@ class SignalAnalysisDialog(QDialog):
         # Update table columns dynamically
         if has_position_groups:
             # Show position column in 3-position mode
-            self.results_table.setColumnCount(13)
+            self.results_table.setColumnCount(14)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time (Open)', 'Close Time', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         elif has_tp_levels:
-            self.results_table.setColumnCount(12)
+            self.results_table.setColumnCount(13)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time (Open)', 'Close Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         else:
-            self.results_table.setColumnCount(11)
+            self.results_table.setColumnCount(12)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time (Open)', 'Close Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'Bars', 'Entry Reason', 'Regime'
             ])
         
         # Configure table header
@@ -3057,9 +3114,17 @@ class SignalAnalysisDialog(QDialog):
                     current_group_id = group_id
                     group_color_toggle = not group_color_toggle
             
-            # Date/Time
+            # Date/Time (Open)
             date_item = QTableWidgetItem(timestamp.strftime('%Y-%m-%d %H:%M'))
             self.results_table.setItem(row_idx, col_idx, date_item)
+            col_idx += 1
+            
+            # Close Time (calculate based on timeframe)
+            timeframe = self.timeframe_combo.currentText()
+            close_time = self._calculate_bar_close_time(timestamp, timeframe)
+            close_item = QTableWidgetItem(close_time.strftime('%Y-%m-%d %H:%M'))
+            close_item.setForeground(Qt.darkGray)  # Slightly dimmed to distinguish from open time
+            self.results_table.setItem(row_idx, col_idx, close_item)
             col_idx += 1
             
             # Position number (only in 3-position mode)
