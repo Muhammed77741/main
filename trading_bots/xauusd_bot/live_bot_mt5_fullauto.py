@@ -2694,7 +2694,8 @@ class LiveBotMT5FullAuto:
                 'tp3_distance': tp3_dist,
                 'time': last_signal_time,
                 'regime': self.current_regime,
-                'signal_id': signal_id  # Add signal ID for duplicate tracking
+                'signal_id': signal_id,  # Add signal ID for duplicate tracking
+                'is_crypto': is_crypto   # Add crypto flag for display formatting
             }
             
         except Exception as e:
@@ -2785,7 +2786,9 @@ class LiveBotMT5FullAuto:
             print(f"   Lot: {lot_size}")
             print(f"   Entry: {signal['entry']:.2f}")
             print(f"   SL: {signal['sl']:.2f}")
-            print(f"   TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}p)")
+            # Format distance with % or p depending on symbol type
+            dist_unit = '%' if signal.get('is_crypto', False) else 'p'
+            print(f"   TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}{dist_unit})")
 
             # Create simulated ticket number with timestamp
             simulated_ticket = int(time.time() * 1000)
@@ -2958,14 +2961,17 @@ class LiveBotMT5FullAuto:
         print(f"   Position 2 (TP2): {lot2} lot")
         print(f"   Position 3 (TP3): {lot3} lot")
         
+        # Format distance with % or p depending on symbol type
+        dist_unit = '%' if signal.get('is_crypto', False) else 'p'
+        
         if self.dry_run:
             print(f"\n🧪 DRY RUN: Opening simulated 3 {direction_str} positions:")
             print(f"   Group ID: {group_id}")
             print(f"   Entry: {signal['entry']:.2f}")
             print(f"   SL: {signal['sl']:.2f}")
-            print(f"   Position 1: {lot1} lot, TP1: {signal['tp1']:.2f} ({signal['tp1_distance']}p)")
-            print(f"   Position 2: {lot2} lot, TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}p)")
-            print(f"   Position 3: {lot3} lot, TP3: {signal['tp3']:.2f} ({signal['tp3_distance']}p)")
+            print(f"   Position 1: {lot1} lot, TP1: {signal['tp1']:.2f} ({signal['tp1_distance']}{dist_unit})")
+            print(f"   Position 2: {lot2} lot, TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}{dist_unit})")
+            print(f"   Position 3: {lot3} lot, TP3: {signal['tp3']:.2f} ({signal['tp3_distance']}{dist_unit})")
             print(f"   Total risk: {self.risk_percent}%")
 
             # Generate simulated positions and log them
@@ -3110,7 +3116,9 @@ class LiveBotMT5FullAuto:
             print(f"   ✅ {tp_name} position opened!")
             print(f"      Order: #{result.order}")
             print(f"      Lot: {lot_size}")
-            print(f"      TP: {tp_price:.2f} ({tp_distance}p)")
+            # Format distance with % or p depending on symbol type
+            dist_unit = '%' if signal.get('is_crypto', False) else 'p'
+            print(f"      TP: {tp_price:.2f} ({tp_distance}{dist_unit})")
             
             # Log position
             position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
@@ -3392,6 +3400,9 @@ class LiveBotMT5FullAuto:
         
         # Send startup notification to Telegram
         if self.telegram_bot and self.telegram_chat_id:
+            # Format TP/SL units based on symbol type
+            dist_unit = '%' if is_crypto_symbol(self.symbol) else 'p'
+            
             startup_message = f"""
 🤖 <b>BOT STARTED</b>
 
@@ -3404,8 +3415,8 @@ Max positions: {self.max_positions}
 Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}
 
 🎯 <b>TP Levels:</b>
-TREND: {self.trend_tp1}p / {self.trend_tp2}p / {self.trend_tp3}p
-RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
+TREND: {self.trend_tp1}{dist_unit} / {self.trend_tp2}{dist_unit} / {self.trend_tp3}{dist_unit}
+RANGE: {self.range_tp1}{dist_unit} / {self.range_tp2}{dist_unit} / {self.range_tp3}{dist_unit}
 
 ⏰ <b>Started at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
