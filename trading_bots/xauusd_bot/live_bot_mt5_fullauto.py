@@ -219,12 +219,13 @@ class LiveBotMT5FullAuto:
             if threading.current_thread() is threading.main_thread():
                 signal.signal(signal.SIGINT, self._signal_handler)
                 signal.signal(signal.SIGTERM, self._signal_handler)
-                print("✅ Signal handlers registered")
+                print("✅ Signal handlers registered (Ctrl+C to stop)")
             else:
-                print("⚠️  Running in worker thread - signal handlers not registered")
-                print("   Bot will use self.running flag for graceful shutdown")
+                print("ℹ️  Running from GUI - using alternative shutdown method")
+                print("   (This is normal - use the Stop button to stop the bot)")
+                print("   See FAQ_WARNINGS_RU.md for more info")
         except ValueError as e:
-            print(f"⚠️  Could not register signal handlers: {e}")
+            print(f"ℹ️  Signal handlers not available: {e}")
             print("   Bot will use self.running flag for graceful shutdown")
 
         self._initialize_trades_log()
