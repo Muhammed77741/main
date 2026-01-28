@@ -2397,7 +2397,7 @@ class LiveBotMT5FullAuto:
         # Difference between EMAs in %
         ema_diff_pct = abs((current_fast - current_slow) / current_slow) * 100
         
-        # If EMAs diverge > 0.3% = clear trend
+        # If EMAs diverge > 0.5% = clear trend
         ema_trend = ema_diff_pct > 0.5
         
         # 2. ATR (volatility - should be above average)
