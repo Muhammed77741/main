@@ -2708,7 +2708,7 @@ class SignalAnalysisDialog(QDialog):
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(10)
         self.results_table.setHorizontalHeaderLabels([
-            'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
+            'Date/Time (Open)', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
         ])
 
         # Configure table
@@ -3046,17 +3046,17 @@ class SignalAnalysisDialog(QDialog):
             # Show position column in 3-position mode
             self.results_table.setColumnCount(13)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time (Open)', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         elif has_tp_levels:
             self.results_table.setColumnCount(12)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time (Open)', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         else:
             self.results_table.setColumnCount(11)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time (Open)', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'Bars', 'Entry Reason', 'Regime'
             ])
         
         # Configure table header
