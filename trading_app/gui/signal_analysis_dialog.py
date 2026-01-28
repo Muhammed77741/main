@@ -2706,9 +2706,9 @@ class SignalAnalysisDialog(QDialog):
 
         # Table
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(10)
+        self.results_table.setColumnCount(11)
         self.results_table.setHorizontalHeaderLabels([
-            'Date/Time (Open)', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
+            'Date/Time (Open)', 'Close Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Bars', 'Entry Reason', 'Regime'
         ])
 
         # Configure table
@@ -3035,6 +3035,37 @@ class SignalAnalysisDialog(QDialog):
             f"• Invalid date range"
         )
         
+    def _calculate_bar_close_time(self, open_time, timeframe):
+        """
+        Calculate bar close time based on open time and timeframe
+        
+        Args:
+            open_time: datetime - bar open time
+            timeframe: str - timeframe ('1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w')
+        
+        Returns:
+            datetime - bar close time
+        """
+        timeframe_deltas = {
+            '1m': timedelta(minutes=1),
+            '3m': timedelta(minutes=3),
+            '5m': timedelta(minutes=5),
+            '15m': timedelta(minutes=15),
+            '30m': timedelta(minutes=30),
+            '1h': timedelta(hours=1),
+            '2h': timedelta(hours=2),
+            '4h': timedelta(hours=4),
+            '6h': timedelta(hours=6),
+            '8h': timedelta(hours=8),
+            '12h': timedelta(hours=12),
+            '1d': timedelta(days=1),
+            '3d': timedelta(days=3),
+            '1w': timedelta(weeks=1),
+        }
+        
+        delta = timeframe_deltas.get(timeframe, timedelta(hours=1))  # Default to 1h
+        return open_time + delta
+        
     def populate_results_table(self, signals_df):
         """Populate results table with signals"""
         # Check if multi-TP mode was used and if it has position groups
@@ -3044,19 +3075,19 @@ class SignalAnalysisDialog(QDialog):
         # Update table columns dynamically
         if has_position_groups:
             # Show position column in 3-position mode
-            self.results_table.setColumnCount(13)
+            self.results_table.setColumnCount(14)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time (Open)', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time (Open)', 'Close Time', 'Pos', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         elif has_tp_levels:
-            self.results_table.setColumnCount(12)
+            self.results_table.setColumnCount(13)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time (Open)', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time (Open)', 'Close Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'TP Levels Hit', 'Bars', 'Entry Reason', 'Regime'
             ])
         else:
-            self.results_table.setColumnCount(11)
+            self.results_table.setColumnCount(12)
             self.results_table.setHorizontalHeaderLabels([
-                'Date/Time (Open)', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'Bars', 'Entry Reason', 'Regime'
+                'Date/Time (Open)', 'Close Time', 'Type', 'Price', 'Stop Loss', 'Take Profit', 'Result', 'Profit %', 'Profit USD', 'Bars', 'Entry Reason', 'Regime'
             ])
         
         # Configure table header
@@ -3083,9 +3114,17 @@ class SignalAnalysisDialog(QDialog):
                     current_group_id = group_id
                     group_color_toggle = not group_color_toggle
             
-            # Date/Time
+            # Date/Time (Open)
             date_item = QTableWidgetItem(timestamp.strftime('%Y-%m-%d %H:%M'))
             self.results_table.setItem(row_idx, col_idx, date_item)
+            col_idx += 1
+            
+            # Close Time (calculate based on timeframe)
+            timeframe = self.timeframe_combo.currentText()
+            close_time = self._calculate_bar_close_time(timestamp, timeframe)
+            close_item = QTableWidgetItem(close_time.strftime('%Y-%m-%d %H:%M'))
+            close_item.setForeground(Qt.darkGray)  # Slightly dimmed to distinguish from open time
+            self.results_table.setItem(row_idx, col_idx, close_item)
             col_idx += 1
             
             # Position number (only in 3-position mode)
