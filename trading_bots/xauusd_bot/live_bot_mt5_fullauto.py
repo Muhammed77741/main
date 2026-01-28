@@ -179,7 +179,19 @@ class LiveBotMT5FullAuto:
         self.max_hold_bars = max_hold_bars  # Close position after N bars if TP/SL not hit
 
         # Initialize strategy
-        self.strategy = PatternRecognitionStrategy(fib_mode='standard')
+        # For crypto: disable session filtering (trades 24/7)
+        # For forex/gold: enable session filtering (best hours only)
+        is_crypto = is_crypto_symbol(self.symbol)
+        self.strategy = PatternRecognitionStrategy(
+            fib_mode='standard',
+            best_hours_only=False if is_crypto else True
+        )
+        
+        # Log the configuration
+        if is_crypto:
+            print(f"   🌐 Crypto detected ({self.symbol}): Session filtering DISABLED (24/7 trading)")
+        else:
+            print(f"   ⏰ Forex/Commodity ({self.symbol}): Session filtering ENABLED (best hours: 8-10, 13-15 GMT)")
         
         # TREND MODE parameters (strong trend) - use provided values or defaults for XAUUSD
         self.trend_tp1 = trend_tp1 if trend_tp1 is not None else 30
