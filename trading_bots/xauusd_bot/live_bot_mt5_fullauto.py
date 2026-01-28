@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 import csv
 import os
-import asyncio
 import uuid
 import signal
 import json
@@ -24,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.pattern_recognition_strategy import PatternRecognitionStrategy
 from shared.telegram_helper import check_telegram_bot_import
+from shared.telegram_notifier import TelegramNotifier
 from shared.bot_resilience import retry_with_timeout, BotWatchdog, interruptible_sleep
 
 # Add trading_app directory to path to access MT5Manager
@@ -258,21 +258,26 @@ class LiveBotMT5FullAuto:
                 self.use_database = False
                 self.db = None
         
-        # Telegram bot (optional)
-        self.telegram_bot = None
+        # Telegram notifier (optional) - using synchronous TelegramNotifier instead of async Bot
+        self.telegram_notifier = None
         if telegram_token and telegram_chat_id:
             try:
-                success, Bot, error_msg = check_telegram_bot_import()
-                if not success:
-                    print(error_msg)
-                else:
-                    try:
-                        self.telegram_bot = Bot(token=telegram_token)
-                    except Exception as bot_error:
-                        print(f"⚠️  Failed to initialize Telegram bot: {bot_error}")
-                        print("     Check your bot token is valid.")
+                self.telegram_notifier = TelegramNotifier(
+                    bot_token=telegram_token,
+                    chat_id=telegram_chat_id,
+                    timezone_offset=5  # UTC+5 (adjust as needed)
+                )
+                print(f"✅ Telegram notifier initialized")
+                # Test connection
+                if self.telegram_notifier.test_connection():
+                    print(f"✅ Telegram bot connection verified")
             except Exception as e:
-                print(f"⚠️  Unexpected error during Telegram initialization: {e}")
+                print(f"⚠️  Failed to initialize Telegram notifier: {e}")
+                self.telegram_notifier = None
+
+        # Keep backward compatibility - some code checks self.telegram_bot
+        self.telegram_bot = self.telegram_notifier
+
 
         self.mt5_connected = False
 
@@ -402,10 +407,15 @@ class LiveBotMT5FullAuto:
                 print(f"⚠️  Error closing database: {e}")
         
         # 4. Send shutdown notification
-        if self.telegram_bot:
+        if self.telegram_notifier:
             try:
                 self.send_telegram("🛑 <b>Bot Stopped</b>\n\nBot has been shut down gracefully.")
+                # Wait for queued messages to be sent
+                self.telegram_notifier.wait_for_queue(timeout=5)
                 print("✅ Shutdown notification sent")
+                # Shutdown the queue processor
+                self.telegram_notifier.shutdown()
+                print("✅ Telegram notifier shut down")
             except Exception as e:
                 print(f"⚠️  Error sending notification: {e}")
         
@@ -2260,50 +2270,15 @@ class LiveBotMT5FullAuto:
                     )
             
     def send_telegram(self, message):
-        """Send Telegram notification (synchronous wrapper for async bot)"""
-        if self.telegram_bot and self.telegram_chat_id:
+        """Send Telegram notification (using synchronous TelegramNotifier)"""
+        if self.telegram_notifier:
             try:
-                # Use asyncio to send message, handling various event loop states
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_closed():
-                        # Create new event loop if current one is closed
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    
-                    if loop.is_running():
-                        # If loop is already running (e.g., in a thread), we can't use run_until_complete
-                        # In this case, we just skip sending (trading bots run in separate thread)
-                        # This is acceptable as Telegram notifications are non-critical
-                        print(f"ℹ️  Telegram notification skipped (event loop already running)")
-                        return
-                    else:
-                        # Run the coroutine in the event loop
-                        loop.run_until_complete(self._send_telegram_async(message))
-                except RuntimeError as e:
-                    # Fallback: create a new event loop
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(self._send_telegram_async(message))
-                    finally:
-                        try:
-                            loop.close()
-                        except Exception:
-                            pass  # Ignore cleanup errors
+                # Use TelegramNotifier's send_message method
+                # async_send=True queues the message for non-blocking send
+                self.telegram_notifier.send_message(message, parse_mode='HTML', async_send=True)
             except Exception as e:
                 print(f"⚠️  Telegram send failed: {e}")
 
-    async def _send_telegram_async(self, message):
-        """Async helper for sending Telegram messages"""
-        try:
-            await self.telegram_bot.send_message(
-                chat_id=self.telegram_chat_id,
-                text=message,
-                parse_mode='HTML'
-            )
-        except Exception as e:
-            print(f"⚠️  Telegram message send error: {e}")
                 
     def get_market_data(self, bars=250):
         """Get historical data from MT5
@@ -3189,7 +3164,6 @@ class LiveBotMT5FullAuto:
         
         # Send Telegram notification
         if self.telegram_bot:
-            import asyncio
             regime = signal.get('regime', 'UNKNOWN')
             message = f"🤖 <b>3 Positions Opened (Multi-TP)</b>\n\n"
             message += f"Direction: {direction_str}\n"
