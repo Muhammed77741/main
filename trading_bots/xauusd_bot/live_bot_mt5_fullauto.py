@@ -33,6 +33,10 @@ if str(trading_app_path) not in sys.path:
 
 from core.mt5_manager import mt5_manager
 
+# Import crypto symbol detection utility
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app' / 'gui'))
+from format_utils import is_crypto_symbol
+
 # ============================================================================
 # CRITICAL: Safety constants for multi-position SL modification protection
 # ============================================================================
@@ -59,6 +63,28 @@ BROKER_CONFIRMATION_TIMEOUT = 10     # seconds - wait for broker confirmation af
 # SL Distance validation constants (percentages)
 MIN_SL_DISTANCE_FROM_ENTRY_PCT = 0.003   # 0.3% - minimum distance from entry price
 MIN_SL_DISTANCE_FROM_PRICE_PCT = 0.002   # 0.2% - minimum distance from current price
+
+# ============================================================================
+# Crypto-specific TP/SL Configuration (in percentages)
+# ============================================================================
+# For crypto symbols (BTC, ETH, SOL, etc.) on MT5, SL/TP must be calculated
+# as percentages of price, not in points/pips like forex/commodities
+#
+# These values match Signal Analysis dialog defaults to ensure consistency
+# between backtesting and live trading
+# ============================================================================
+
+# Crypto TREND mode (strong directional movement)
+CRYPTO_TREND_TP1_PCT = 1.5   # 1.5% TP1
+CRYPTO_TREND_TP2_PCT = 2.75  # 2.75% TP2
+CRYPTO_TREND_TP3_PCT = 4.5   # 4.5% TP3
+CRYPTO_TREND_SL_PCT = 0.8    # 0.8% SL
+
+# Crypto RANGE mode (sideways/choppy market)
+CRYPTO_RANGE_TP1_PCT = 1.0   # 1.0% TP1
+CRYPTO_RANGE_TP2_PCT = 1.75  # 1.75% TP2
+CRYPTO_RANGE_TP3_PCT = 2.5   # 2.5% TP3
+CRYPTO_RANGE_SL_PCT = 0.6    # 0.6% SL
 
 # ============================================================================
 # Signal freshness validation multipliers (for any timeframe)
@@ -2536,38 +2562,73 @@ class LiveBotMT5FullAuto:
                 # Already opened this signal - skip to prevent duplicate
                 return None
 
-            # Adjust TP based on market regime
-            if self.current_regime == 'TREND':
-                tp1_distance = self.trend_tp1
-                tp2_distance = self.trend_tp2
-                tp3_distance = self.trend_tp3
-            else:
-                tp1_distance = self.range_tp1
-                tp2_distance = self.range_tp2
-                tp3_distance = self.range_tp3
-
-            # Calculate all 3 TP levels (entry already defined above)
-
-            # Calculate SL based on settings
-            if self.use_regime_based_sl:
-                # Use regime-based fixed SL
-                sl_distance = self.trend_sl_points if self.current_regime == 'TREND' else self.range_sl_points
+            # ============================================================================
+            # CRYPTO-AWARE TP/SL CALCULATION
+            # ============================================================================
+            # Check if this is a crypto symbol (BTC, ETH, SOL, etc.)
+            # Crypto uses percentage-based SL/TP, not points/pips
+            is_crypto = is_crypto_symbol(self.symbol)
+            
+            if is_crypto:
+                # CRYPTO: Use percentage-based calculations
+                if self.current_regime == 'TREND':
+                    tp1_pct = CRYPTO_TREND_TP1_PCT
+                    tp2_pct = CRYPTO_TREND_TP2_PCT
+                    tp3_pct = CRYPTO_TREND_TP3_PCT
+                    sl_pct = CRYPTO_TREND_SL_PCT
+                else:  # RANGE
+                    tp1_pct = CRYPTO_RANGE_TP1_PCT
+                    tp2_pct = CRYPTO_RANGE_TP2_PCT
+                    tp3_pct = CRYPTO_RANGE_TP3_PCT
+                    sl_pct = CRYPTO_RANGE_SL_PCT
+                
+                # Calculate SL/TP as percentages of entry price
                 if last_signal['signal'] == 1:  # LONG
-                    sl = entry - sl_distance
+                    sl = entry * (1 - sl_pct / 100)
+                    tp1 = entry * (1 + tp1_pct / 100)
+                    tp2 = entry * (1 + tp2_pct / 100)
+                    tp3 = entry * (1 + tp3_pct / 100)
                 else:  # SHORT
-                    sl = entry + sl_distance
+                    sl = entry * (1 + sl_pct / 100)
+                    tp1 = entry * (1 - tp1_pct / 100)
+                    tp2 = entry * (1 - tp2_pct / 100)
+                    tp3 = entry * (1 - tp3_pct / 100)
+                
+                print(f"   📊 CRYPTO MODE: Using percentage-based SL/TP")
+                print(f"      Regime: {self.current_regime}")
+                print(f"      SL: {sl_pct:.2f}% | TP1/2/3: {tp1_pct:.2f}%/{tp2_pct:.2f}%/{tp3_pct:.2f}%")
             else:
-                # Use strategy-calculated SL
-                sl = last_signal['stop_loss']
+                # FOREX/COMMODITIES: Use points-based calculations
+                # Adjust TP based on market regime
+                if self.current_regime == 'TREND':
+                    tp1_distance = self.trend_tp1
+                    tp2_distance = self.trend_tp2
+                    tp3_distance = self.trend_tp3
+                else:
+                    tp1_distance = self.range_tp1
+                    tp2_distance = self.range_tp2
+                    tp3_distance = self.range_tp3
 
-            if last_signal['signal'] == 1:  # LONG
-                tp1 = entry + tp1_distance
-                tp2 = entry + tp2_distance
-                tp3 = entry + tp3_distance
-            else:  # SHORT
-                tp1 = entry - tp1_distance
-                tp2 = entry - tp2_distance
-                tp3 = entry - tp3_distance
+                # Calculate SL based on settings
+                if self.use_regime_based_sl:
+                    # Use regime-based fixed SL
+                    sl_distance = self.trend_sl_points if self.current_regime == 'TREND' else self.range_sl_points
+                    if last_signal['signal'] == 1:  # LONG
+                        sl = entry - sl_distance
+                    else:  # SHORT
+                        sl = entry + sl_distance
+                else:
+                    # Use strategy-calculated SL
+                    sl = last_signal['stop_loss']
+
+                if last_signal['signal'] == 1:  # LONG
+                    tp1 = entry + tp1_distance
+                    tp2 = entry + tp2_distance
+                    tp3 = entry + tp3_distance
+                else:  # SHORT
+                    tp1 = entry - tp1_distance
+                    tp2 = entry - tp2_distance
+                    tp3 = entry - tp3_distance
 
             # Validate SL/TP values
             if sl <= 0:
@@ -2609,6 +2670,18 @@ class LiveBotMT5FullAuto:
             print(f"      SL: ${sl:.2f} | TP1/2/3: ${tp1:.2f}/${tp2:.2f}/${tp3:.2f}")
             print(f"      Signal ID: {signal_id}")
 
+            # Store distance values for position tracking
+            if is_crypto:
+                # For crypto, store percentage values
+                tp1_dist = tp1_pct
+                tp2_dist = tp2_pct
+                tp3_dist = tp3_pct
+            else:
+                # For forex/commodities, store point values
+                tp1_dist = tp1_distance
+                tp2_dist = tp2_distance
+                tp3_dist = tp3_distance
+
             return {
                 'direction': last_signal['signal'],
                 'entry': entry,
@@ -2616,9 +2689,9 @@ class LiveBotMT5FullAuto:
                 'tp1': tp1,
                 'tp2': tp2,
                 'tp3': tp3,
-                'tp1_distance': tp1_distance,
-                'tp2_distance': tp2_distance,
-                'tp3_distance': tp3_distance,
+                'tp1_distance': tp1_dist,
+                'tp2_distance': tp2_dist,
+                'tp3_distance': tp3_dist,
                 'time': last_signal_time,
                 'regime': self.current_regime,
                 'signal_id': signal_id  # Add signal ID for duplicate tracking

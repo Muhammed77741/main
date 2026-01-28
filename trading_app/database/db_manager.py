@@ -309,42 +309,51 @@ class DatabaseManager:
 
     def save_config(self, config: BotConfig):
         """Save or update bot configuration"""
-        cursor = self.conn.cursor()
+        try:
+            cursor = self.conn.cursor()
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO bot_configs (
-                bot_id, name, symbol, exchange, api_key, api_secret,
-                risk_percent, max_positions, timeframe, strategy,
-                trend_tp1, trend_tp2, trend_tp3,
-                range_tp1, range_tp2, range_tp3,
-                total_position_size, use_3_position_mode, min_order_size,
-                use_trailing_stops, trailing_stop_pct,
-                use_regime_based_sl, trend_sl, range_sl,
-                telegram_enabled, telegram_token, telegram_chat_id,
-                dry_run, testnet, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            config.bot_id, config.name, config.symbol, config.exchange,
-            config.api_key, config.api_secret,
-            config.risk_percent, config.max_positions, config.timeframe, config.strategy,
-            config.trend_tp1, config.trend_tp2, config.trend_tp3,
-            config.range_tp1, config.range_tp2, config.range_tp3,
-            getattr(config, 'total_position_size', None),
-            1 if getattr(config, 'use_3_position_mode', True) else 0,
-            getattr(config, 'min_order_size', None),
-            1 if getattr(config, 'use_trailing_stops', True) else 0,
-            getattr(config, 'trailing_stop_pct', 0.5),
-            1 if getattr(config, 'use_regime_based_sl', False) else 0,
-            getattr(config, 'trend_sl', 0.8),
-            getattr(config, 'range_sl', 0.6),
-            1 if config.telegram_enabled else 0,
-            config.telegram_token, config.telegram_chat_id,
-            1 if config.dry_run else 0,
-            1 if config.testnet else 0,
-            datetime.now()
-        ))
+            cursor.execute("""
+                INSERT OR REPLACE INTO bot_configs (
+                    bot_id, name, symbol, exchange, api_key, api_secret,
+                    risk_percent, max_positions, timeframe, strategy,
+                    trend_tp1, trend_tp2, trend_tp3,
+                    range_tp1, range_tp2, range_tp3,
+                    total_position_size, use_3_position_mode, min_order_size,
+                    use_trailing_stops, trailing_stop_pct,
+                    use_regime_based_sl, trend_sl, range_sl,
+                    telegram_enabled, telegram_token, telegram_chat_id,
+                    dry_run, testnet, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                config.bot_id, config.name, config.symbol, config.exchange,
+                config.api_key, config.api_secret,
+                config.risk_percent, config.max_positions, config.timeframe, config.strategy,
+                config.trend_tp1, config.trend_tp2, config.trend_tp3,
+                config.range_tp1, config.range_tp2, config.range_tp3,
+                getattr(config, 'total_position_size', None),
+                1 if getattr(config, 'use_3_position_mode', True) else 0,
+                getattr(config, 'min_order_size', None),
+                1 if getattr(config, 'use_trailing_stops', True) else 0,
+                getattr(config, 'trailing_stop_pct', 0.5),
+                1 if getattr(config, 'use_regime_based_sl', False) else 0,
+                getattr(config, 'trend_sl', 0.8),
+                getattr(config, 'range_sl', 0.6),
+                1 if config.telegram_enabled else 0,
+                config.telegram_token, config.telegram_chat_id,
+                1 if config.dry_run else 0,
+                1 if config.testnet else 0,
+                datetime.now()
+            ))
 
-        self.conn.commit()
+            self.conn.commit()
+        except sqlite3.Error as e:
+            print(f"❌ Database error saving config: {e}")
+            # Attempt rollback if possible
+            try:
+                self.conn.rollback()
+            except:
+                pass
+            raise
 
     def load_config(self, bot_id: str) -> Optional[BotConfig]:
         """Load bot configuration"""
