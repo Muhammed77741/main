@@ -485,6 +485,13 @@ class StatisticsDialog(QDialog):
                 elif trade.profit < 0:
                     profit_item.setForeground(QColor("#F44336"))  # Red
                 self.history_table.setItem(i, 9, profit_item)
+                
+                # VALIDATION: Check if profit_percent sign matches profit sign
+                if trade.profit_percent is not None:
+                    profit_sign = 1 if trade.profit > 0 else (-1 if trade.profit < 0 else 0)
+                    pct_sign = 1 if trade.profit_percent > 0 else (-1 if trade.profit_percent < 0 else 0)
+                    if profit_sign != 0 and pct_sign != 0 and profit_sign != pct_sign:
+                        print(f"⚠️  Sign mismatch for trade {trade.order_id}: profit=${trade.profit:.2f} ({'+' if profit_sign > 0 else '-'}), profit_pct={trade.profit_percent:.2f}% ({'+' if pct_sign > 0 else '-'})")
             else:
                 self.history_table.setItem(i, 9, QTableWidgetItem('-'))
 
@@ -498,6 +505,23 @@ class StatisticsDialog(QDialog):
                 if trade.profit_percent > 0:
                     pct_item.setForeground(QColor("#4CAF50"))  # Green
                 elif trade.profit_percent < 0:
+                    pct_item.setForeground(QColor("#F44336"))  # Red
+                self.history_table.setItem(i, 10, pct_item)
+            elif trade.profit is not None and trade.entry_price and trade.close_price and trade.entry_price > 0:
+                # Calculate profit_percent if it's missing but we have the data
+                if trade.trade_type == 'BUY':
+                    profit_pct = ((trade.close_price - trade.entry_price) / trade.entry_price) * 100
+                else:
+                    profit_pct = ((trade.entry_price - trade.close_price) / trade.entry_price) * 100
+                
+                pct_item = QTableWidgetItem(f"{profit_pct:+.2f}%")
+                # Bold and color code percentage
+                font = QFont()
+                font.setBold(True)
+                pct_item.setFont(font)
+                if profit_pct > 0:
+                    pct_item.setForeground(QColor("#4CAF50"))  # Green
+                elif profit_pct < 0:
                     pct_item.setForeground(QColor("#F44336"))  # Red
                 self.history_table.setItem(i, 10, pct_item)
             else:
