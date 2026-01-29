@@ -49,13 +49,23 @@ class TelegramNotifier:
         """Create requests session with connection pooling and retry"""
         session = requests.Session()
         
-        # Configure retry strategy
-        retry_strategy = Retry(
-            total=3,  # 3 retry attempts
-            backoff_factor=1,  # 1, 2, 4 seconds between retries
-            status_forcelist=[429, 500, 502, 503, 504],  # Retry on these HTTP codes
-            method_whitelist=["POST", "GET"]
-        )
+        # Configure retry strategy (compatible with both old and new urllib3 versions)
+        try:
+            # Try new parameter name first (urllib3 >= 1.26)
+            retry_strategy = Retry(
+                total=3,  # 3 retry attempts
+                backoff_factor=1,  # 1, 2, 4 seconds between retries
+                status_forcelist=[429, 500, 502, 503, 504],  # Retry on these HTTP codes
+                allowed_methods=["POST", "GET"]  # New parameter name
+            )
+        except TypeError:
+            # Fallback to old parameter name (urllib3 < 1.26)
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=1,
+                status_forcelist=[429, 500, 502, 503, 504],
+                method_whitelist=["POST", "GET"]  # Old parameter name
+            )
         
         # Configure adapter with connection pool
         adapter = HTTPAdapter(

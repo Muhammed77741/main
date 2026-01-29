@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 import csv
 import os
-import asyncio
 import uuid
 import signal
 import json
@@ -24,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.pattern_recognition_strategy import PatternRecognitionStrategy
 from shared.telegram_helper import check_telegram_bot_import
+from shared.telegram_notifier import TelegramNotifier
 from shared.bot_resilience import retry_with_timeout, BotWatchdog, interruptible_sleep
 
 # Add trading_app directory to path to access MT5Manager
@@ -32,6 +32,10 @@ if str(trading_app_path) not in sys.path:
     sys.path.insert(0, str(trading_app_path))
 
 from core.mt5_manager import mt5_manager
+
+# Import crypto symbol detection utility
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app' / 'gui'))
+from format_utils import is_crypto_symbol
 
 # ============================================================================
 # CRITICAL: Safety constants for multi-position SL modification protection
@@ -59,6 +63,28 @@ BROKER_CONFIRMATION_TIMEOUT = 10     # seconds - wait for broker confirmation af
 # SL Distance validation constants (percentages)
 MIN_SL_DISTANCE_FROM_ENTRY_PCT = 0.003   # 0.3% - minimum distance from entry price
 MIN_SL_DISTANCE_FROM_PRICE_PCT = 0.002   # 0.2% - minimum distance from current price
+
+# ============================================================================
+# Crypto-specific TP/SL Configuration (in percentages)
+# ============================================================================
+# For crypto symbols (BTC, ETH, SOL, etc.) on MT5, SL/TP must be calculated
+# as percentages of price, not in points/pips like forex/commodities
+#
+# These values match Signal Analysis dialog defaults to ensure consistency
+# between backtesting and live trading
+# ============================================================================
+
+# Crypto TREND mode (strong directional movement)
+CRYPTO_TREND_TP1_PCT = 1.5   # 1.5% TP1
+CRYPTO_TREND_TP2_PCT = 2.75  # 2.75% TP2
+CRYPTO_TREND_TP3_PCT = 4.5   # 4.5% TP3
+CRYPTO_TREND_SL_PCT = 0.8    # 0.8% SL
+
+# Crypto RANGE mode (sideways/choppy market)
+CRYPTO_RANGE_TP1_PCT = 1.0   # 1.0% TP1
+CRYPTO_RANGE_TP2_PCT = 1.75  # 1.75% TP2
+CRYPTO_RANGE_TP3_PCT = 2.5   # 2.5% TP3
+CRYPTO_RANGE_SL_PCT = 0.6    # 0.6% SL
 
 # ============================================================================
 # Signal freshness validation multipliers (for any timeframe)
@@ -153,7 +179,19 @@ class LiveBotMT5FullAuto:
         self.max_hold_bars = max_hold_bars  # Close position after N bars if TP/SL not hit
 
         # Initialize strategy
-        self.strategy = PatternRecognitionStrategy(fib_mode='standard')
+        # For crypto: disable session filtering (trades 24/7)
+        # For forex/gold: enable session filtering (best hours only)
+        is_crypto = is_crypto_symbol(self.symbol)
+        self.strategy = PatternRecognitionStrategy(
+            fib_mode='standard',
+            best_hours_only=False if is_crypto else True
+        )
+        
+        # Log the configuration
+        if is_crypto:
+            print(f"   🌐 Crypto detected ({self.symbol}): Session filtering DISABLED (24/7 trading)")
+        else:
+            print(f"   ⏰ Forex/Commodity ({self.symbol}): Session filtering ENABLED (best hours: 8-10, 13-15 GMT)")
         
         # TREND MODE parameters (strong trend) - use provided values or defaults for XAUUSD
         self.trend_tp1 = trend_tp1 if trend_tp1 is not None else 30
@@ -193,12 +231,13 @@ class LiveBotMT5FullAuto:
             if threading.current_thread() is threading.main_thread():
                 signal.signal(signal.SIGINT, self._signal_handler)
                 signal.signal(signal.SIGTERM, self._signal_handler)
-                print("✅ Signal handlers registered")
+                print("✅ Signal handlers registered (Ctrl+C to stop)")
             else:
-                print("⚠️  Running in worker thread - signal handlers not registered")
-                print("   Bot will use self.running flag for graceful shutdown")
+                print("ℹ️  Running from GUI - using alternative shutdown method")
+                print("   (This is normal - use the Stop button to stop the bot)")
+                print("   See FAQ_WARNINGS_RU.md for more info")
         except ValueError as e:
-            print(f"⚠️  Could not register signal handlers: {e}")
+            print(f"ℹ️  Signal handlers not available: {e}")
             print("   Bot will use self.running flag for graceful shutdown")
 
         self._initialize_trades_log()
@@ -219,21 +258,26 @@ class LiveBotMT5FullAuto:
                 self.use_database = False
                 self.db = None
         
-        # Telegram bot (optional)
-        self.telegram_bot = None
+        # Telegram notifier (optional) - using synchronous TelegramNotifier instead of async Bot
+        self.telegram_notifier = None
         if telegram_token and telegram_chat_id:
             try:
-                success, Bot, error_msg = check_telegram_bot_import()
-                if not success:
-                    print(error_msg)
-                else:
-                    try:
-                        self.telegram_bot = Bot(token=telegram_token)
-                    except Exception as bot_error:
-                        print(f"⚠️  Failed to initialize Telegram bot: {bot_error}")
-                        print("     Check your bot token is valid.")
+                self.telegram_notifier = TelegramNotifier(
+                    bot_token=telegram_token,
+                    chat_id=telegram_chat_id,
+                    timezone_offset=5  # UTC+5 (adjust as needed)
+                )
+                print(f"✅ Telegram notifier initialized")
+                # Test connection
+                if self.telegram_notifier.test_connection():
+                    print(f"✅ Telegram bot connection verified")
             except Exception as e:
-                print(f"⚠️  Unexpected error during Telegram initialization: {e}")
+                print(f"⚠️  Failed to initialize Telegram notifier: {e}")
+                self.telegram_notifier = None
+
+        # Keep backward compatibility - some code checks self.telegram_bot
+        self.telegram_bot = self.telegram_notifier
+
 
         self.mt5_connected = False
 
@@ -363,10 +407,15 @@ class LiveBotMT5FullAuto:
                 print(f"⚠️  Error closing database: {e}")
         
         # 4. Send shutdown notification
-        if self.telegram_bot:
+        if self.telegram_notifier:
             try:
                 self.send_telegram("🛑 <b>Bot Stopped</b>\n\nBot has been shut down gracefully.")
+                # Wait for queued messages to be sent
+                self.telegram_notifier.wait_for_queue(timeout=5)
                 print("✅ Shutdown notification sent")
+                # Shutdown the queue processor
+                self.telegram_notifier.shutdown()
+                print("✅ Telegram notifier shut down")
             except Exception as e:
                 print(f"⚠️  Error sending notification: {e}")
         
@@ -2221,50 +2270,15 @@ class LiveBotMT5FullAuto:
                     )
             
     def send_telegram(self, message):
-        """Send Telegram notification (synchronous wrapper for async bot)"""
-        if self.telegram_bot and self.telegram_chat_id:
+        """Send Telegram notification (using synchronous TelegramNotifier)"""
+        if self.telegram_notifier:
             try:
-                # Use asyncio to send message, handling various event loop states
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_closed():
-                        # Create new event loop if current one is closed
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    
-                    if loop.is_running():
-                        # If loop is already running (e.g., in a thread), we can't use run_until_complete
-                        # In this case, we just skip sending (trading bots run in separate thread)
-                        # This is acceptable as Telegram notifications are non-critical
-                        print(f"ℹ️  Telegram notification skipped (event loop already running)")
-                        return
-                    else:
-                        # Run the coroutine in the event loop
-                        loop.run_until_complete(self._send_telegram_async(message))
-                except RuntimeError as e:
-                    # Fallback: create a new event loop
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        loop.run_until_complete(self._send_telegram_async(message))
-                    finally:
-                        try:
-                            loop.close()
-                        except Exception:
-                            pass  # Ignore cleanup errors
+                # Use TelegramNotifier's send_message method
+                # async_send=True queues the message for non-blocking send
+                self.telegram_notifier.send_message(message, parse_mode='HTML', async_send=True)
             except Exception as e:
                 print(f"⚠️  Telegram send failed: {e}")
 
-    async def _send_telegram_async(self, message):
-        """Async helper for sending Telegram messages"""
-        try:
-            await self.telegram_bot.send_message(
-                chat_id=self.telegram_chat_id,
-                text=message,
-                parse_mode='HTML'
-            )
-        except Exception as e:
-            print(f"⚠️  Telegram message send error: {e}")
                 
     def get_market_data(self, bars=250):
         """Get historical data from MT5
@@ -2536,38 +2550,73 @@ class LiveBotMT5FullAuto:
                 # Already opened this signal - skip to prevent duplicate
                 return None
 
-            # Adjust TP based on market regime
-            if self.current_regime == 'TREND':
-                tp1_distance = self.trend_tp1
-                tp2_distance = self.trend_tp2
-                tp3_distance = self.trend_tp3
-            else:
-                tp1_distance = self.range_tp1
-                tp2_distance = self.range_tp2
-                tp3_distance = self.range_tp3
-
-            # Calculate all 3 TP levels (entry already defined above)
-
-            # Calculate SL based on settings
-            if self.use_regime_based_sl:
-                # Use regime-based fixed SL
-                sl_distance = self.trend_sl_points if self.current_regime == 'TREND' else self.range_sl_points
+            # ============================================================================
+            # CRYPTO-AWARE TP/SL CALCULATION
+            # ============================================================================
+            # Check if this is a crypto symbol (BTC, ETH, SOL, etc.)
+            # Crypto uses percentage-based SL/TP, not points/pips
+            is_crypto = is_crypto_symbol(self.symbol)
+            
+            if is_crypto:
+                # CRYPTO: Use percentage-based calculations
+                if self.current_regime == 'TREND':
+                    tp1_pct = CRYPTO_TREND_TP1_PCT
+                    tp2_pct = CRYPTO_TREND_TP2_PCT
+                    tp3_pct = CRYPTO_TREND_TP3_PCT
+                    sl_pct = CRYPTO_TREND_SL_PCT
+                else:  # RANGE
+                    tp1_pct = CRYPTO_RANGE_TP1_PCT
+                    tp2_pct = CRYPTO_RANGE_TP2_PCT
+                    tp3_pct = CRYPTO_RANGE_TP3_PCT
+                    sl_pct = CRYPTO_RANGE_SL_PCT
+                
+                # Calculate SL/TP as percentages of entry price
                 if last_signal['signal'] == 1:  # LONG
-                    sl = entry - sl_distance
+                    sl = entry * (1 - sl_pct / 100)
+                    tp1 = entry * (1 + tp1_pct / 100)
+                    tp2 = entry * (1 + tp2_pct / 100)
+                    tp3 = entry * (1 + tp3_pct / 100)
                 else:  # SHORT
-                    sl = entry + sl_distance
+                    sl = entry * (1 + sl_pct / 100)
+                    tp1 = entry * (1 - tp1_pct / 100)
+                    tp2 = entry * (1 - tp2_pct / 100)
+                    tp3 = entry * (1 - tp3_pct / 100)
+                
+                print(f"   📊 CRYPTO MODE: Using percentage-based SL/TP")
+                print(f"      Regime: {self.current_regime}")
+                print(f"      SL: {sl_pct:.2f}% | TP1/2/3: {tp1_pct:.2f}%/{tp2_pct:.2f}%/{tp3_pct:.2f}%")
             else:
-                # Use strategy-calculated SL
-                sl = last_signal['stop_loss']
+                # FOREX/COMMODITIES: Use points-based calculations
+                # Adjust TP based on market regime
+                if self.current_regime == 'TREND':
+                    tp1_distance = self.trend_tp1
+                    tp2_distance = self.trend_tp2
+                    tp3_distance = self.trend_tp3
+                else:
+                    tp1_distance = self.range_tp1
+                    tp2_distance = self.range_tp2
+                    tp3_distance = self.range_tp3
 
-            if last_signal['signal'] == 1:  # LONG
-                tp1 = entry + tp1_distance
-                tp2 = entry + tp2_distance
-                tp3 = entry + tp3_distance
-            else:  # SHORT
-                tp1 = entry - tp1_distance
-                tp2 = entry - tp2_distance
-                tp3 = entry - tp3_distance
+                # Calculate SL based on settings
+                if self.use_regime_based_sl:
+                    # Use regime-based fixed SL
+                    sl_distance = self.trend_sl_points if self.current_regime == 'TREND' else self.range_sl_points
+                    if last_signal['signal'] == 1:  # LONG
+                        sl = entry - sl_distance
+                    else:  # SHORT
+                        sl = entry + sl_distance
+                else:
+                    # Use strategy-calculated SL
+                    sl = last_signal['stop_loss']
+
+                if last_signal['signal'] == 1:  # LONG
+                    tp1 = entry + tp1_distance
+                    tp2 = entry + tp2_distance
+                    tp3 = entry + tp3_distance
+                else:  # SHORT
+                    tp1 = entry - tp1_distance
+                    tp2 = entry - tp2_distance
+                    tp3 = entry - tp3_distance
 
             # Validate SL/TP values
             if sl <= 0:
@@ -2609,6 +2658,18 @@ class LiveBotMT5FullAuto:
             print(f"      SL: ${sl:.2f} | TP1/2/3: ${tp1:.2f}/${tp2:.2f}/${tp3:.2f}")
             print(f"      Signal ID: {signal_id}")
 
+            # Store distance values for position tracking
+            if is_crypto:
+                # For crypto, store percentage values
+                tp1_dist = tp1_pct
+                tp2_dist = tp2_pct
+                tp3_dist = tp3_pct
+            else:
+                # For forex/commodities, store point values
+                tp1_dist = tp1_distance
+                tp2_dist = tp2_distance
+                tp3_dist = tp3_distance
+
             return {
                 'direction': last_signal['signal'],
                 'entry': entry,
@@ -2616,12 +2677,13 @@ class LiveBotMT5FullAuto:
                 'tp1': tp1,
                 'tp2': tp2,
                 'tp3': tp3,
-                'tp1_distance': tp1_distance,
-                'tp2_distance': tp2_distance,
-                'tp3_distance': tp3_distance,
+                'tp1_distance': tp1_dist,
+                'tp2_distance': tp2_dist,
+                'tp3_distance': tp3_dist,
                 'time': last_signal_time,
                 'regime': self.current_regime,
-                'signal_id': signal_id  # Add signal ID for duplicate tracking
+                'signal_id': signal_id,  # Add signal ID for duplicate tracking
+                'is_crypto': is_crypto   # Add crypto flag for display formatting
             }
             
         except Exception as e:
@@ -2712,7 +2774,9 @@ class LiveBotMT5FullAuto:
             print(f"   Lot: {lot_size}")
             print(f"   Entry: {signal['entry']:.2f}")
             print(f"   SL: {signal['sl']:.2f}")
-            print(f"   TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}p)")
+            # Format distance with % or p depending on symbol type
+            dist_unit = '%' if signal.get('is_crypto', False) else 'p'
+            print(f"   TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}{dist_unit})")
 
             # Create simulated ticket number with timestamp
             simulated_ticket = int(time.time() * 1000)
@@ -2885,14 +2949,17 @@ class LiveBotMT5FullAuto:
         print(f"   Position 2 (TP2): {lot2} lot")
         print(f"   Position 3 (TP3): {lot3} lot")
         
+        # Format distance with % or p depending on symbol type
+        dist_unit = '%' if signal.get('is_crypto', False) else 'p'
+        
         if self.dry_run:
             print(f"\n🧪 DRY RUN: Opening simulated 3 {direction_str} positions:")
             print(f"   Group ID: {group_id}")
             print(f"   Entry: {signal['entry']:.2f}")
             print(f"   SL: {signal['sl']:.2f}")
-            print(f"   Position 1: {lot1} lot, TP1: {signal['tp1']:.2f} ({signal['tp1_distance']}p)")
-            print(f"   Position 2: {lot2} lot, TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}p)")
-            print(f"   Position 3: {lot3} lot, TP3: {signal['tp3']:.2f} ({signal['tp3_distance']}p)")
+            print(f"   Position 1: {lot1} lot, TP1: {signal['tp1']:.2f} ({signal['tp1_distance']}{dist_unit})")
+            print(f"   Position 2: {lot2} lot, TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}{dist_unit})")
+            print(f"   Position 3: {lot3} lot, TP3: {signal['tp3']:.2f} ({signal['tp3_distance']}{dist_unit})")
             print(f"   Total risk: {self.risk_percent}%")
 
             # Generate simulated positions and log them
@@ -3037,7 +3104,9 @@ class LiveBotMT5FullAuto:
             print(f"   ✅ {tp_name} position opened!")
             print(f"      Order: #{result.order}")
             print(f"      Lot: {lot_size}")
-            print(f"      TP: {tp_price:.2f} ({tp_distance}p)")
+            # Format distance with % or p depending on symbol type
+            dist_unit = '%' if signal.get('is_crypto', False) else 'p'
+            print(f"      TP: {tp_price:.2f} ({tp_distance}{dist_unit})")
             
             # Log position
             position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
@@ -3095,7 +3164,6 @@ class LiveBotMT5FullAuto:
         
         # Send Telegram notification
         if self.telegram_bot:
-            import asyncio
             regime = signal.get('regime', 'UNKNOWN')
             message = f"🤖 <b>3 Positions Opened (Multi-TP)</b>\n\n"
             message += f"Direction: {direction_str}\n"
@@ -3319,6 +3387,9 @@ class LiveBotMT5FullAuto:
         
         # Send startup notification to Telegram
         if self.telegram_bot and self.telegram_chat_id:
+            # Format TP/SL units based on symbol type
+            dist_unit = '%' if is_crypto_symbol(self.symbol) else 'p'
+            
             startup_message = f"""
 🤖 <b>BOT STARTED</b>
 
@@ -3331,8 +3402,8 @@ Max positions: {self.max_positions}
 Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}
 
 🎯 <b>TP Levels:</b>
-TREND: {self.trend_tp1}p / {self.trend_tp2}p / {self.trend_tp3}p
-RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
+TREND: {self.trend_tp1}{dist_unit} / {self.trend_tp2}{dist_unit} / {self.trend_tp3}{dist_unit}
+RANGE: {self.range_tp1}{dist_unit} / {self.range_tp2}{dist_unit} / {self.range_tp3}{dist_unit}
 
 ⏰ <b>Started at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 

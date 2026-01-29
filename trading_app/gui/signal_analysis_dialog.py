@@ -151,7 +151,13 @@ class SignalAnalysisWorker(QThread):
             self.progress.emit(f"🔍 Analyzing signals using PatternRecognitionStrategy...")
             
             # Initialize strategy (same as live bot)
-            strategy = PatternRecognitionStrategy(fib_mode='standard')
+            # For crypto: disable session filtering (trades 24/7)
+            # For forex/gold: enable session filtering (best hours only)
+            is_crypto = is_crypto_symbol(self.symbol)
+            strategy = PatternRecognitionStrategy(
+                fib_mode='standard',
+                best_hours_only=False if is_crypto else True
+            )
             
             # Run strategy
             df_signals = strategy.run_strategy(df)
@@ -1126,7 +1132,13 @@ class SignalAnalysisWorkerMT5(QThread):
                 self.progress.emit(f"🔍 Analyzing signals using PatternRecognitionStrategy...")
                 
                 # Initialize strategy (same as live bot)
-                strategy = PatternRecognitionStrategy(fib_mode='standard')
+                # For crypto: disable session filtering (trades 24/7)
+                # For forex/gold: enable session filtering (best hours only)
+                is_crypto = is_crypto_symbol(self.symbol)
+                strategy = PatternRecognitionStrategy(
+                    fib_mode='standard',
+                    best_hours_only=False if is_crypto else True
+                )
                 
                 # Run strategy
                 df_signals = strategy.run_strategy(df)
