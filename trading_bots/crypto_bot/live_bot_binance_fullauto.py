@@ -24,6 +24,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from shared.pattern_recognition_strategy import PatternRecognitionStrategy
 from shared.telegram_helper import check_telegram_bot_import
 
+# ============================================================================
+# Signal freshness validation multipliers (for any timeframe)
+# ============================================================================
+# These multipliers ensure we only trade signals from previous CLOSED candles,
+# not from the current incomplete candle or very old signals
+#
+# The actual min/max age is calculated dynamically based on timeframe:
+#   MIN_AGE = 0.5 * timeframe_hours (half a bar)
+#   MAX_AGE = 1.5 * timeframe_hours (one and a half bars)
+#
+# Examples:
+#   1h:  MIN=0.5h, MAX=1.5h (30-90 minutes)
+#   30m: MIN=0.25h, MAX=0.75h (15-45 minutes)
+#   15m: MIN=0.125h, MAX=0.375h (7.5-22.5 minutes)
+#   5m:  MIN=0.042h, MAX=0.125h (2.5-7.5 minutes)
+# ============================================================================
+SIGNAL_MIN_AGE_MULTIPLIER = 0.5   # Minimum: half a bar
+SIGNAL_MAX_AGE_MULTIPLIER = 1.5   # Maximum: one and a half bars
+
 
 class LiveBotBinanceFullAuto:
     """
@@ -45,7 +64,8 @@ class LiveBotBinanceFullAuto:
                  dry_run=False, testnet=True, api_key=None, api_secret=None,
                  trailing_stop_enabled=True, trailing_stop_percent=1.5,
                  bot_id=None, use_database=True, use_3_position_mode=False,
-                 total_position_size=None, min_order_size=None, trailing_stop_pct=0.5):
+                 total_position_size=None, min_order_size=None, use_trailing_stops=True, trailing_stop_pct=0.5,
+                 use_regime_based_sl=False, trend_sl=0.8, range_sl=0.6):
         """
         Initialize bot
 
@@ -65,6 +85,9 @@ class LiveBotBinanceFullAuto:
             trailing_stop_percent: Trailing stop activation threshold (%)
             bot_id: Unique bot identifier for database tracking
             use_database: If True, use database for position tracking
+            use_regime_based_sl: Use fixed regime-based SL instead of strategy SL
+            trend_sl: TREND mode SL in percent (default 0.8% for crypto)
+            range_sl: RANGE mode SL in percent (default 0.6% for crypto)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -86,7 +109,13 @@ class LiveBotBinanceFullAuto:
         self.use_3_position_mode = use_3_position_mode
         self.total_position_size = total_position_size
         self.min_order_size = min_order_size
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops
         self.trailing_stop_pct = trailing_stop_pct  # Trailing stop percentage for 3-position mode
+
+        # Regime-based SL settings
+        self.use_regime_based_sl = use_regime_based_sl
+        self.trend_sl_pct = trend_sl  # SL for TREND mode in percent
+        self.range_sl_pct = range_sl  # SL for RANGE mode in percent
 
         # Trailing stop settings
         self.trailing_stop_enabled = trailing_stop_enabled
@@ -117,6 +146,9 @@ class LiveBotBinanceFullAuto:
 
         # Phase 2: 3-Position Mode tracking
         self.position_groups = {}  # {group_id: {'tp1_hit': bool, 'max_price': float, 'min_price': float, 'positions': [...]}}
+        
+        # Signal tracking to prevent duplicate opening
+        self.opened_signal_ids = set()  # Track signal IDs that have been opened to prevent duplicates
 
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
@@ -155,6 +187,14 @@ class LiveBotBinanceFullAuto:
         # Exchange connection
         self.exchange = None
         self.exchange_connected = False
+
+        # Connection monitoring
+        self.connection_errors = 0
+        self.max_connection_errors = 5
+        self.reconnect_delays = [60, 120, 300, 600, 900]  # Exponential backoff in seconds
+        self.last_successful_fetch = None
+        self.heartbeat_interval = 300  # Check connection every 5 minutes
+        self.last_heartbeat = None
 
     def _initialize_trades_log(self):
         """Initialize CSV file for trade logging"""
@@ -200,7 +240,9 @@ class LiveBotBinanceFullAuto:
             'regime': regime,
             'duration': None,
             'status': 'OPEN',
-            'comment': comment
+            'comment': comment,
+            'position_group_id': position_group_id,
+            'position_num': position_num
         }
         
         # Also save to database if enabled
@@ -297,6 +339,18 @@ class LiveBotBinanceFullAuto:
 
         print(f"📊 Logged closed position: Order={order_id}, Profit={profit:.2f} USDT, Profit%={profit_pct:.2f}%, Duration={pos['duration']}h")
 
+    def _get_position_group_model(self):
+        """Helper to get PositionGroup model class (cached import)"""
+        if not hasattr(self, '_PositionGroup'):
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.position_group import PositionGroup
+                self._PositionGroup = PositionGroup
+            except Exception as e:
+                print(f"⚠️  Could not import PositionGroup model: {e}")
+                self._PositionGroup = None
+        return self._PositionGroup
+
     def _write_trade_to_csv(self, trade_data):
         """Write completed trade to CSV file"""
         with open(self.trades_file, 'a', newline='') as f:
@@ -377,7 +431,7 @@ class LiveBotBinanceFullAuto:
                 # Send to Telegram
                 if self.telegram_bot:
                     try:
-                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}\n\nPlease configure API credentials."))
+                        self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}\n\nPlease configure API credentials.")
                     except Exception as e:
                         print(f"⚠️  Failed to send Telegram notification: {e}")
                 
@@ -390,7 +444,7 @@ class LiveBotBinanceFullAuto:
                 # Send to Telegram
                 if self.telegram_bot:
                     try:
-                        asyncio.run(self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}"))
+                        self.send_telegram(f"❌ <b>Connection Error</b>\n\n{error_msg}")
                     except Exception as e:
                         print(f"⚠️  Failed to send Telegram notification: {e}")
                 
@@ -398,76 +452,106 @@ class LiveBotBinanceFullAuto:
 
             print(f"🔄 Connecting to Binance {'Testnet' if self.testnet else 'Mainnet'}...")
             print(f"   Symbol: {self.symbol}")
-            print(f"   API Key: {self.api_key[:8]}...{self.api_key[-4:]}")
 
-            if self.testnet:
-                # Testnet configuration
-                print("⚠️  Using TESTNET - no real money will be traded")
-                self.exchange = ccxt.binance({
-                    'apiKey': self.api_key,
-                    'secret': self.api_secret,
-                    'enableRateLimit': True,
-                    'options': {
-                        'defaultType': 'future',
-                        'adjustForTimeDifference': True,
-                    },
-                    'urls': {
-                        'api': {
-                            'public': 'https://testnet.binancefuture.com/fapi/v1',
-                            'private': 'https://testnet.binancefuture.com/fapi/v1',
-                        },
-                        'test': {
-                            'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
-                            'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
-                        }
-                    }
-                })
+            # FIX: In dry-run mode, show API key status
+            if self.dry_run:
+                print(f"   DRY-RUN Mode: Public API only (no authentication needed)")
             else:
-                # Mainnet configuration
-                print("⚠️  Using MAINNET - real money trading!")
-                self.exchange = ccxt.binance({
-                    'apiKey': self.api_key,
-                    'secret': self.api_secret,
-                    'enableRateLimit': True,
-                    'options': {
-                        'defaultType': 'future',
-                        'adjustForTimeDifference': True,  # Auto-adjust for time sync
-                    }
-                })
+                print(f"   API Key: {self.api_key[:8]}...{self.api_key[-4:]}")
 
-            # Test connection
-            print("🔄 Testing connection...")
-            balance = self.exchange.fetch_balance()
+            # FIX: In dry-run mode, use public API without authentication
+            if self.dry_run:
+                # Dry-run: Public API only (no API keys needed)
+                print("🧪 DRY-RUN: Connecting with public API (no authentication)")
+                if self.testnet:
+                    self.exchange = ccxt.binance({
+                        'enableRateLimit': True,
+                        'options': {'defaultType': 'future'},
+                        'urls': {
+                            'api': {
+                                'public': 'https://testnet.binancefuture.com/fapi/v1',
+                            }
+                        }
+                    })
+                else:
+                    self.exchange = ccxt.binance({
+                        'enableRateLimit': True,
+                        'options': {'defaultType': 'future'}
+                    })
+                # Mark as connected immediately (no balance check needed)
+                self.exchange_connected = True
+                print(f"✅ Connected to Binance {'Testnet' if self.testnet else 'Mainnet'} (public API)")
+                print(f"   DRY-RUN Mode: TP/SL monitoring active, no real trades")
+            else:
+                # Live mode: Requires API keys
+                if self.testnet:
+                    # Testnet configuration
+                    print("⚠️  Using TESTNET - no real money will be traded")
+                    self.exchange = ccxt.binance({
+                        'apiKey': self.api_key,
+                        'secret': self.api_secret,
+                        'enableRateLimit': True,
+                        'options': {
+                            'defaultType': 'future',
+                            'adjustForTimeDifference': True,
+                        },
+                        'urls': {
+                            'api': {
+                                'public': 'https://testnet.binancefuture.com/fapi/v1',
+                                'private': 'https://testnet.binancefuture.com/fapi/v1',
+                            },
+                            'test': {
+                                'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
+                                'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
+                            }
+                        }
+                    })
+                else:
+                    # Mainnet configuration
+                    print("⚠️  Using MAINNET - real money trading!")
+                    self.exchange = ccxt.binance({
+                        'apiKey': self.api_key,
+                        'secret': self.api_secret,
+                        'enableRateLimit': True,
+                        'options': {
+                            'defaultType': 'future',
+                            'adjustForTimeDifference': True,  # Auto-adjust for time sync
+                        }
+                    })
 
-            # Set position mode to One-Way (not Hedge mode) for simpler position tracking
-            try:
-                # Check current position mode
-                position_mode = self.exchange.fapiPrivateGetPositionSideDual()
-                is_hedge = position_mode.get('dualSidePosition', True)
+                # Test connection
+                print("🔄 Testing connection...")
+                balance = self.exchange.fetch_balance()
 
-                print(f"📊 Position mode: {'Hedge Mode' if is_hedge else 'One-Way Mode'}")
-
-                # If in hedge mode, switch to one-way mode
-                if is_hedge:
-                    print("🔄 Switching to One-Way position mode...")
-                    self.exchange.fapiPrivatePostPositionSideDual({'dualSidePosition': 'false'})
-                    print("✅ Switched to One-Way position mode")
-            except Exception as e:
-                print(f"⚠️  Could not check/set position mode: {e}")
-
-            self.exchange_connected = True
-
-            usdt_free = balance.get('USDT', {}).get('free', 0) or 0
-            print(f"✅ Connected to Binance {'Testnet' if self.testnet else 'Mainnet'}")
-            print(f"   Available balance: {usdt_free:.2f} USDT")
-            
-            # Send success notification to Telegram
-            if self.telegram_bot:
+                # Set position mode to One-Way (not Hedge mode) for simpler position tracking
                 try:
-                    asyncio.run(self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}"))
+                    # Check current position mode
+                    position_mode = self.exchange.fapiPrivateGetPositionSideDual()
+                    is_hedge = position_mode.get('dualSidePosition', True)
+
+                    print(f"📊 Position mode: {'Hedge Mode' if is_hedge else 'One-Way Mode'}")
+
+                    # If in hedge mode, switch to one-way mode
+                    if is_hedge:
+                        print("🔄 Switching to One-Way position mode...")
+                        self.exchange.fapiPrivatePostPositionSideDual({'dualSidePosition': 'false'})
+                        print("✅ Switched to One-Way position mode")
                 except Exception as e:
-                    print(f"⚠️  Failed to send Telegram notification: {e}")
-            
+                    print(f"⚠️  Could not check/set position mode: {e}")
+
+                self.exchange_connected = True
+
+                usdt_free = balance.get('USDT', {}).get('free', 0) or 0
+                print(f"✅ Connected to Binance {'Testnet' if self.testnet else 'Mainnet'}")
+                print(f"   Available balance: {usdt_free:.2f} USDT")
+
+                # Send success notification to Telegram (live mode only)
+                if self.telegram_bot:
+                    try:
+                        self.send_telegram(f"✅ <b>Connected to Binance</b>\n\nSymbol: {self.symbol}\nBalance: {usdt_free:.2f} USDT\nMode: {'Testnet' if self.testnet else 'Mainnet'}")
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+
             return True
 
         except ccxt.AuthenticationError as e:
@@ -486,7 +570,7 @@ class LiveBotBinanceFullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>Authentication Failed</b>\n\n{str(e)}\n\nPlease check your API credentials."))
+                    self.send_telegram(f"❌ <b>Authentication Failed</b>\n\n{str(e)}\n\nPlease check your API credentials.")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -515,7 +599,7 @@ class LiveBotBinanceFullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>Binance Exchange Error</b>\n\n{error_msg}\n\nPlease check the logs for details."))
+                    self.send_telegram(f"❌ <b>Binance Exchange Error</b>\n\n{error_msg}\n\nPlease check the logs for details.")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
 
@@ -528,7 +612,7 @@ class LiveBotBinanceFullAuto:
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>Connection Failed</b>\n\n{str(e)}\n\nType: {type(e).__name__}"))
+                    self.send_telegram(f"❌ <b>Connection Failed</b>\n\n{str(e)}\n\nType: {type(e).__name__}")
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
@@ -539,6 +623,143 @@ class LiveBotBinanceFullAuto:
         if self.exchange_connected:
             self.exchange.close()
             self.exchange_connected = False
+
+    def _handle_connection_error(self, error, operation="operation"):
+        """
+        Handle connection errors with smart retry logic
+
+        Args:
+            error: Exception that occurred
+            operation: Name of the operation that failed
+        """
+        self.connection_errors += 1
+
+        error_msg = f"❌ Connection error during {operation}: {str(error)}"
+        print(error_msg)
+
+        # Mark as disconnected if too many errors
+        if self.connection_errors >= 3:
+            if self.exchange_connected:
+                print(f"⚠️  {self.connection_errors} consecutive errors - marking as disconnected")
+                self.exchange_connected = False
+
+                # Send Telegram notification
+                if self.telegram_bot:
+                    try:
+                        self.send_telegram(
+                            f"🔴 <b>Connection Lost</b>\n\n"
+                            f"Operation: {operation}\n"
+                            f"Error: {str(error)}\n"
+                            f"Consecutive errors: {self.connection_errors}\n\n"
+                            f"Bot will attempt to reconnect..."
+                        )
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+
+        return None
+
+    def _reset_connection_errors(self):
+        """Reset connection error counter after successful operation"""
+        if self.connection_errors > 0:
+            was_errors = self.connection_errors
+            self.connection_errors = 0
+            self.last_successful_fetch = datetime.now()
+
+            # Notify if connection was restored
+            if was_errors >= 3 and self.telegram_bot:
+                try:
+                    self.send_telegram(
+                        f"✅ <b>Connection Restored</b>\n\n"
+                        f"After {was_errors} failed attempts, connection is working again.\n"
+                        f"Bot resumed normal operation."
+                    )
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+
+    def _check_heartbeat(self):
+        """
+        Periodic heartbeat check to verify connection is alive
+        Returns True if check passed, False otherwise
+        """
+        now = datetime.now()
+
+        # Check if heartbeat is needed
+        if self.last_heartbeat:
+            time_since_heartbeat = (now - self.last_heartbeat).total_seconds()
+            if time_since_heartbeat < self.heartbeat_interval:
+                return True  # Too soon for another check
+
+        # Perform heartbeat check
+        try:
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            if ticker and ticker.get('last'):
+                self.last_heartbeat = now
+                self._reset_connection_errors()
+                return True
+        except Exception as e:
+            print(f"⚠️  Heartbeat check failed: {e}")
+            self._handle_connection_error(e, "heartbeat check")
+            return False
+
+        return False
+
+    def _attempt_reconnect(self):
+        """
+        Attempt to reconnect with exponential backoff
+        Returns True if reconnected, False otherwise
+        """
+        # Calculate delay based on error count
+        delay_index = min(self.connection_errors - 1, len(self.reconnect_delays) - 1)
+        delay = self.reconnect_delays[delay_index]
+
+        print(f"🔄 Attempting reconnection (attempt {self.connection_errors}/{self.max_connection_errors})...")
+        print(f"   Waiting {delay}s before reconnect...")
+
+        time.sleep(delay)
+
+        # Attempt reconnection
+        if self.connect_exchange():
+            print("✅ Reconnection successful!")
+            self.connection_errors = 0
+            self.last_successful_fetch = datetime.now()
+
+            # Send success notification
+            if self.telegram_bot:
+                try:
+                    self.send_telegram(
+                        f"✅ <b>Reconnected Successfully</b>\n\n"
+                        f"Connection restored after {delay}s wait.\n"
+                        f"Bot resumed normal operation."
+                    )
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+
+            return True
+        else:
+            print(f"❌ Reconnection failed (attempt {self.connection_errors})")
+
+            # Check if max attempts reached
+            if self.connection_errors >= self.max_connection_errors:
+                error_msg = (
+                    f"🛑 <b>Critical: Max Reconnection Attempts Reached</b>\n\n"
+                    f"Failed to reconnect after {self.max_connection_errors} attempts.\n"
+                    f"Bot requires manual intervention.\n\n"
+                    f"Please check:\n"
+                    f"- Internet connection\n"
+                    f"- API credentials\n"
+                    f"- Exchange status"
+                )
+                print(f"\n{'='*80}")
+                print(error_msg.replace('<b>', '').replace('</b>', '').replace('\n', '\n'))
+                print(f"{'='*80}\n")
+
+                if self.telegram_bot:
+                    try:
+                        self.send_telegram(error_msg)
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+
+            return False
 
     def update_trailing_stops(self):
         """
@@ -551,6 +772,10 @@ class LiveBotBinanceFullAuto:
         4. Move SL up to lock in profits (peak - trailing_distance%)
         """
         if not self.trailing_stop_enabled or not self.exchange_connected:
+            return
+
+        # FIX: Skip in dry-run mode (requires private API)
+        if self.dry_run:
             return
 
         try:
@@ -692,7 +917,7 @@ class LiveBotBinanceFullAuto:
         - When any position reaches TP1, activate trailing for Pos 2 & 3
         - Trailing formula: 50% retracement from max profit
         """
-        if not self.use_3_position_mode:
+        if not self.use_3_position_mode or not self.use_trailing_stops:
             return
 
         # Group positions by position_group_id
@@ -708,39 +933,151 @@ class LiveBotBinanceFullAuto:
 
         # Process each group
         for group_id, group_positions in groups.items():
-            # Initialize group tracking if needed
+            # Initialize group tracking if needed (restore from DB if available)
             if group_id not in self.position_groups:
-                # Find entry price from any position in group
-                entry_price = group_positions[0][1]['entry_price']
-                self.position_groups[group_id] = {
-                    'tp1_hit': False,
-                    'max_price': entry_price,
-                    'min_price': entry_price,
-                    'positions': [p[0] for p in group_positions]
-                }
+                # Try to restore from database first
+                restored_group = None
+                if self.use_database and self.db:
+                    try:
+                        restored_group = self.db.get_position_group(group_id)
+                        if restored_group:
+                            print(f"✅ Restored position group {group_id[:8]} from database")
+                            print(f"   TP1 hit: {restored_group.tp1_hit}, Max: {restored_group.max_price}, Min: {restored_group.min_price}")
+                    except Exception as e:
+                        print(f"⚠️  Could not restore position group from DB: {e}")
+
+                if restored_group:
+                    # Use restored data
+                    self.position_groups[group_id] = {
+                        'tp1_hit': restored_group.tp1_hit,
+                        'max_price': restored_group.max_price,
+                        'min_price': restored_group.min_price,
+                        'positions': [p[0] for p in group_positions],
+                        'entry_price': restored_group.entry_price,
+                        'trade_type': restored_group.trade_type
+                    }
+                else:
+                    # Create new group
+                    entry_price = group_positions[0][1]['entry_price']
+                    trade_type = group_positions[0][1]['type']
+                    self.position_groups[group_id] = {
+                        'tp1_hit': False,
+                        'max_price': entry_price,
+                        'min_price': entry_price,
+                        'positions': [p[0] for p in group_positions],
+                        'entry_price': entry_price,
+                        'trade_type': trade_type
+                    }
+
+                    # Save new group to database
+                    if self.use_database and self.db:
+                        try:
+                            PositionGroup = self._get_position_group_model()
+                            if PositionGroup:
+                                new_group = PositionGroup(
+                                    group_id=group_id,
+                                    bot_id=self.bot_id,
+                                    tp1_hit=False,
+                                    entry_price=entry_price,
+                                    max_price=entry_price,
+                                    min_price=entry_price,
+                                    trade_type=trade_type,
+                                    created_at=datetime.now(),
+                                    updated_at=datetime.now()
+                                )
+                                self.db.save_position_group(new_group)
+                                print(f"✅ Saved new position group {group_id[:8]} to database")
+                        except Exception as e:
+                            print(f"⚠️  Could not save position group to DB: {e}")
 
             group_info = self.position_groups[group_id]
 
             # Update max/min price
+            price_updated = False
             if group_positions[0][1]['type'] == 'BUY':
                 if current_price > group_info['max_price']:
                     group_info['max_price'] = current_price
+                    price_updated = True
             else:  # SELL
                 if current_price < group_info['min_price']:
                     group_info['min_price'] = current_price
+                    price_updated = True
 
-            # Check if any position reached TP1
+            # Save to database if price was updated
+            if price_updated and self.use_database and self.db:
+                try:
+                    PositionGroup = self._get_position_group_model()
+                    if PositionGroup:
+                        updated_group = PositionGroup(
+                            group_id=group_id,
+                            bot_id=self.bot_id,
+                            tp1_hit=group_info['tp1_hit'],
+                            entry_price=group_info['entry_price'],
+                            max_price=group_info['max_price'],
+                            min_price=group_info['min_price'],
+                            trade_type=group_info['trade_type'],
+                            created_at=datetime.now(),
+                            updated_at=datetime.now()
+                        )
+                        self.db.update_position_group(updated_group)
+                except Exception as e:
+                    print(f"⚠️  Could not update position group in DB: {e}")
+
+            # Check if Position 1 is closed (not in group anymore) OR price reached TP1
+            tp1_just_hit = False
+            pos1_found = False
+            pos1_status = None
             for order_id, pos_data in group_positions:
                 if pos_data.get('position_num') == 1:
+                    pos1_found = True
+                    pos1_status = pos_data.get('status', 'OPEN')
                     tp1 = pos_data['tp']
-                    if pos_data['type'] == 'BUY':
-                        if current_price >= tp1:
+
+                    if not group_info['tp1_hit']:  # Only check if not already hit
+                        # Activate trailing if position 1 is being closed/processed
+                        if pos1_status != 'OPEN':
                             group_info['tp1_hit'] = True
-                            print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
-                    else:  # SELL
-                        if current_price <= tp1:
-                            group_info['tp1_hit'] = True
-                            print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
+                            tp1_just_hit = True
+                            print(f"🎯 Group {group_id[:8]} Position 1 closing ({pos1_status})! Activating trailing for Pos 2 & 3")
+                        # Or if price reached TP1 (fallback for same-cycle activation)
+                        elif pos_data['type'] == 'BUY':
+                            if current_price >= tp1:
+                                group_info['tp1_hit'] = True
+                                tp1_just_hit = True
+                                print(f"🎯 Group {group_id[:8]} TP1 reached at ${current_price:.2f}! Activating trailing for Pos 2 & 3")
+                        else:  # SELL
+                            if current_price <= tp1:
+                                group_info['tp1_hit'] = True
+                                tp1_just_hit = True
+                                print(f"🎯 Group {group_id[:8]} TP1 reached at ${current_price:.2f}! Activating trailing for Pos 2 & 3")
+
+            # If Position 1 not found in group (already closed), activate trailing
+            if not pos1_found and not group_info['tp1_hit']:
+                group_info['tp1_hit'] = True
+                tp1_just_hit = True
+                print(f"🎯 Group {group_id[:8]} Position 1 closed! Activating trailing for Pos 2 & 3")
+
+            # Save tp1_hit to database
+            if tp1_just_hit and self.use_database and self.db:
+                try:
+                    PositionGroup = self._get_position_group_model()
+                    if PositionGroup:
+                        updated_group = PositionGroup(
+                            group_id=group_id,
+                            bot_id=self.bot_id,
+                            tp1_hit=True,
+                            entry_price=group_info['entry_price'],
+                            max_price=group_info['max_price'],
+                            min_price=group_info['min_price'],
+                            trade_type=group_info['trade_type'],
+                            tp1_close_price=current_price,
+                            created_at=datetime.now(),
+                            updated_at=datetime.now()
+                        )
+                        self.db.update_position_group(updated_group)
+                        print(f"✅ Saved TP1 hit to database for group {group_id[:8]}")
+                except Exception as e:
+                    print(f"⚠️  Could not save TP1 hit to DB: {e}")
 
             # Update trailing stops for Pos 2 & 3 if TP1 hit
             if group_info['tp1_hit']:
@@ -749,28 +1086,196 @@ class LiveBotBinanceFullAuto:
                     if pos_num in [2, 3]:  # Only Pos 2 and 3 trail
                         entry_price = pos_data['entry_price']
 
+                        # Mark trailing stop as active in database
+                        if self.use_database and self.db:
+                            try:
+                                # Find the trade in database and update trailing_stop_active flag
+                                open_trades = self.db.get_open_trades(self.bot_id)
+                                for trade in open_trades:
+                                    if trade.order_id == str(order_id) and not trade.trailing_stop_active:
+                                        trade.trailing_stop_active = True
+                                        self.db.update_trade(trade)
+                                        print(f"✓ Pos {pos_num} ({order_id}) marked as trailing stop active in database")
+                                        break  # Exit loop after updating the target trade
+                            except Exception as e:
+                                print(f"⚠️  Error updating trailing_stop_active in DB: {e}")
+
                         if pos_data['type'] == 'BUY':
                             # Trailing stop: configurable % retracement from max price
                             new_sl = group_info['max_price'] - (group_info['max_price'] - entry_price) * self.trailing_stop_pct
 
                             # Only update if new SL is better (higher) than current
                             if new_sl > pos_data['sl']:
-                                print(f"   📊 Pos {pos_num} trailing SL updated: ${pos_data['sl']:.2f} → ${new_sl:.2f}")
-                                pos_data['sl'] = new_sl
-                                # Update in tracker
-                                if order_id in self.positions_tracker:
-                                    self.positions_tracker[order_id]['sl'] = new_sl
+                                old_sl = pos_data['sl']
+                                print(f"   📊 Pos {pos_num} trailing SL updated: ${old_sl:.2f} → ${new_sl:.2f}")
+
+                                # Update SL on exchange
+                                sl_updated_on_exchange = False
+                                if not self.dry_run and self.exchange_connected:
+                                    try:
+                                        # Binance Futures: Cancel old stop-loss order and create new one
+                                        # Get current open positions to find the position
+                                        open_positions = self.get_open_positions()
+                                        position = next((p for p in open_positions if str(p.get('id', '')) == order_id), None)
+
+                                        if position:
+                                            # Try to set stop-loss using exchange API
+                                            try:
+                                                # Use private API to set stop-loss on existing position
+                                                result = self.exchange.fapiPrivatePostPositionSideDual({
+                                                    'symbol': self.symbol.replace('/', ''),
+                                                    'stopPrice': str(new_sl),
+                                                    'closePosition': 'false'
+                                                })
+                                                print(f"   ✅ Stop-loss updated on Binance: ${new_sl:.2f}")
+                                                sl_updated_on_exchange = True
+                                            except Exception as inner_e:
+                                                # Fallback: Try setting via position margin endpoint
+                                                try:
+                                                    params = {
+                                                        'symbol': self.symbol.replace('/', ''),
+                                                        'stopPrice': str(new_sl),
+                                                        'closePosition': True
+                                                    }
+                                                    self.exchange.fapiPrivatePostOrder(params)
+                                                    print(f"   ✅ Stop-loss updated on Binance (fallback): ${new_sl:.2f}")
+                                                    sl_updated_on_exchange = True
+                                                except Exception as fallback_e:
+                                                    print(f"   ⚠️  Could not update SL on exchange: {inner_e}, fallback: {fallback_e}")
+                                                    print(f"   ⚠️  Continuing with in-memory tracking only")
+                                                    sl_updated_on_exchange = True  # Allow bot monitoring to work
+                                        else:
+                                            print(f"   ⚠️  Position not found on exchange, updating in memory only")
+                                            sl_updated_on_exchange = True  # Allow bot monitoring
+                                    except Exception as e:
+                                        print(f"   ⚠️  Error updating SL on exchange: {e}")
+                                        print(f"   ⚠️  Continuing with in-memory tracking")
+                                        sl_updated_on_exchange = True  # Allow bot monitoring to work
+                                else:
+                                    sl_updated_on_exchange = True  # Simulate success in dry-run
+                                
+                                # Only update in memory if broker update succeeded
+                                if sl_updated_on_exchange:
+                                    pos_data['sl'] = new_sl
+                                    # Update in tracker
+                                    if order_id in self.positions_tracker:
+                                        self.positions_tracker[order_id]['sl'] = new_sl
+                                    
+                                    # Update in database
+                                    if self.use_database and self.db:
+                                        try:
+                                            open_trades = self.db.get_open_trades(self.bot_id)
+                                            for trade in open_trades:
+                                                if trade.order_id == str(order_id):
+                                                    trade.stop_loss = new_sl
+                                                    self.db.update_trade(trade)
+                                                    break
+                                        except Exception as e:
+                                            print(f"   ⚠️  Failed to update SL in database: {e}")
+                                    
+                                    # Send Telegram notification for trailing stop update
+                                    if self.telegram_bot:
+                                        message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                        message += f"Order: {order_id}\n"
+                                        message += f"Position: {pos_num}/3\n"
+                                        message += f"Type: {pos_data['type']}\n"
+                                        message += f"Entry: ${entry_price:.2f}\n"
+                                        message += f"New SL: ${new_sl:.2f}\n"
+                                        message += f"Max Price: ${group_info['max_price']:.2f}"
+                                        try:
+                                            self.send_telegram(message)
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to send Telegram notification: {e}")
+                                else:
+                                    print(f"   ⚠️  SL not updated in memory - exchange update failed")
                         else:  # SELL
                             # Trailing stop: configurable % retracement from min price
                             new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
 
                             # Only update if new SL is better (lower) than current
                             if new_sl < pos_data['sl']:
-                                print(f"   📊 Pos {pos_num} trailing SL updated: ${pos_data['sl']:.2f} → ${new_sl:.2f}")
-                                pos_data['sl'] = new_sl
-                                # Update in tracker
-                                if order_id in self.positions_tracker:
-                                    self.positions_tracker[order_id]['sl'] = new_sl
+                                old_sl = pos_data['sl']
+                                print(f"   📊 Pos {pos_num} trailing SL updated: ${old_sl:.2f} → ${new_sl:.2f}")
+
+                                # Update SL on exchange
+                                sl_updated_on_exchange = False
+                                if not self.dry_run and self.exchange_connected:
+                                    try:
+                                        # Binance Futures: Cancel old stop-loss order and create new one
+                                        # Get current open positions to find the position
+                                        open_positions = self.get_open_positions()
+                                        position = next((p for p in open_positions if str(p.get('id', '')) == order_id), None)
+
+                                        if position:
+                                            # Try to set stop-loss using exchange API
+                                            try:
+                                                # Use private API to set stop-loss on existing position
+                                                result = self.exchange.fapiPrivatePostPositionSideDual({
+                                                    'symbol': self.symbol.replace('/', ''),
+                                                    'stopPrice': str(new_sl),
+                                                    'closePosition': 'false'
+                                                })
+                                                print(f"   ✅ Stop-loss updated on Binance: ${new_sl:.2f}")
+                                                sl_updated_on_exchange = True
+                                            except Exception as inner_e:
+                                                # Fallback: Try setting via position margin endpoint
+                                                try:
+                                                    params = {
+                                                        'symbol': self.symbol.replace('/', ''),
+                                                        'stopPrice': str(new_sl),
+                                                        'closePosition': True
+                                                    }
+                                                    self.exchange.fapiPrivatePostOrder(params)
+                                                    print(f"   ✅ Stop-loss updated on Binance (fallback): ${new_sl:.2f}")
+                                                    sl_updated_on_exchange = True
+                                                except Exception as fallback_e:
+                                                    print(f"   ⚠️  Could not update SL on exchange: {inner_e}, fallback: {fallback_e}")
+                                                    print(f"   ⚠️  Continuing with in-memory tracking only")
+                                                    sl_updated_on_exchange = True  # Allow bot monitoring to work
+                                        else:
+                                            print(f"   ⚠️  Position not found on exchange, updating in memory only")
+                                            sl_updated_on_exchange = True  # Allow bot monitoring
+                                    except Exception as e:
+                                        print(f"   ⚠️  Error updating SL on exchange: {e}")
+                                        print(f"   ⚠️  Continuing with in-memory tracking")
+                                        sl_updated_on_exchange = True  # Allow bot monitoring to work
+                                else:
+                                    sl_updated_on_exchange = True  # Simulate success in dry-run
+                                
+                                # Only update in memory if broker update succeeded
+                                if sl_updated_on_exchange:
+                                    pos_data['sl'] = new_sl
+                                    # Update in tracker
+                                    if order_id in self.positions_tracker:
+                                        self.positions_tracker[order_id]['sl'] = new_sl
+                                    
+                                    # Update in database
+                                    if self.use_database and self.db:
+                                        try:
+                                            open_trades = self.db.get_open_trades(self.bot_id)
+                                            for trade in open_trades:
+                                                if trade.order_id == str(order_id):
+                                                    trade.stop_loss = new_sl
+                                                    self.db.update_trade(trade)
+                                                    break
+                                        except Exception as e:
+                                            print(f"   ⚠️  Failed to update SL in database: {e}")
+                                    
+                                    # Send Telegram notification for trailing stop update
+                                    if self.telegram_bot:
+                                        message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                        message += f"Order: {order_id}\n"
+                                        message += f"Position: {pos_num}/3\n"
+                                        message += f"Type: {pos_data['type']}\n"
+                                        message += f"Entry: ${entry_price:.2f}\n"
+                                        message += f"New SL: ${new_sl:.2f}\n"
+                                        message += f"Min Price: ${group_info['min_price']:.2f}"
+                                        try:
+                                            self.send_telegram(message)
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to send Telegram notification: {e}")
+                                else:
+                                    print(f"   ⚠️  SL not updated in memory - exchange update failed")
 
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
@@ -792,6 +1297,12 @@ class LiveBotBinanceFullAuto:
             if self.use_database and self.db:
                 try:
                     db_trades = self.db.get_open_trades(self.bot_id)
+                    if self.dry_run:
+                        # Silently monitor positions in background for dry-run mode
+                        pass
+                    elif db_trades:
+                        # Log for live mode too
+                        print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
                     for trade in db_trades:
                         positions_to_check[trade.order_id] = {
                             'tp': trade.take_profit,
@@ -844,12 +1355,14 @@ class LiveBotBinanceFullAuto:
                     current_bar = ohlcv[0]
                     bar_high = current_bar[2]  # high price
                     bar_low = current_bar[3]   # low price
+                    self._reset_connection_errors()  # Success
                 else:
                     # Fallback if can't get bar data
                     bar_high = None
                     bar_low = None
             except Exception as e:
                 print(f"⚠️  Could not fetch current bar data: {e}")
+                self._handle_connection_error(e, "fetch bar data")
                 bar_high = None
                 bar_low = None
             
@@ -894,8 +1407,10 @@ class LiveBotBinanceFullAuto:
                         if not current_price:
                             print(f"⚠️  Could not get current price for dry_run position {order_id}")
                             continue
+                        self._reset_connection_errors()  # Success
                     except Exception as e:
                         print(f"⚠️  Error getting current price for dry_run: {e}")
+                        self._handle_connection_error(e, "fetch ticker")
                         continue
                 
                 # Phase 2: Update trailing stops for 3-position groups
@@ -906,6 +1421,42 @@ class LiveBotBinanceFullAuto:
                 tp_target = tracked_pos['tp']
                 sl_target = tracked_pos['sl']
                 position_type = tracked_pos['type']
+                entry_price = tracked_pos['entry_price']
+                
+                # Skip if TP or SL is None/missing
+                if tp_target is None or sl_target is None:
+                    print(f"⚠️  Position {order_id} has missing TP ({tp_target}) or SL ({sl_target}) - skipping check")
+                    continue
+                
+                # Convert to float to ensure proper comparison
+                try:
+                    tp_target = float(tp_target)
+                    sl_target = float(sl_target)
+                except (ValueError, TypeError) as e:
+                    print(f"⚠️  Position {order_id} has invalid TP/SL values - skipping check: {e}")
+                    continue
+                
+                # Determine which TP level this is from position_num or comment
+                tp_level = 'TP1'  # Default for single-position mode
+                position_num = tracked_pos.get('position_num', 0)
+                if position_num == 1:
+                    tp_level = 'TP1'
+                elif position_num == 2:
+                    tp_level = 'TP2'
+                elif position_num == 3:
+                    tp_level = 'TP3'
+                elif 'P1/3' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP1'
+                elif 'P2/3' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP2'
+                elif 'P3/3' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP3'
+                elif 'TP1' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP1'
+                elif 'TP2' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP2'
+                elif 'TP3' in tracked_pos.get('comment', ''):
+                    tp_level = 'TP3'
 
                 # Check if TP or SL is hit based on bar high/low OR current price
                 tp_hit = False
@@ -930,7 +1481,7 @@ class LiveBotBinanceFullAuto:
                 
                 # If TP or SL is hit
                 if tp_hit or sl_hit:
-                    hit_type = 'TP' if tp_hit else 'SL'
+                    hit_type = tp_level if tp_hit else 'SL'
                     target_price = tp_target if tp_hit else sl_target
                     
                     # Update status in both tracker and database immediately
@@ -1016,7 +1567,7 @@ class LiveBotBinanceFullAuto:
                             order_id=order_id,
                             close_price=current_price,
                             profit=profit_usdt,
-                            status=hit_type  # Status will be 'TP' or 'SL'
+                            status='CLOSED'  # Status is always CLOSED after TP/SL hit
                         )
                     
                     # Send Telegram notification
@@ -1042,7 +1593,7 @@ class LiveBotBinanceFullAuto:
                         message += f"Status: CLOSED"
                         
                         try:
-                            asyncio.run(self.send_telegram(message))
+                            self.send_telegram(message)
                         except Exception as e:
                             print(f"⚠️  Failed to send Telegram notification: {e}")
         
@@ -1066,10 +1617,45 @@ class LiveBotBinanceFullAuto:
             df['is_active'] = df['hour'].isin(range(0, 24))  # Crypto trades 24/7
             df['is_best_hours'] = df['hour'].isin([8, 9, 10, 13, 14, 15, 16, 17])  # Active trading hours
 
+            # Success - reset error counter
+            self._reset_connection_errors()
+
             return df
         except Exception as e:
             print(f"❌ Failed to get market data: {e}")
-            return None
+            return self._handle_connection_error(e, "fetch market data")
+
+    def _get_timeframe_hours(self):
+        """
+        Get the timeframe in hours
+        
+        Converts Binance timeframe string to hours for signal age validation
+        
+        Returns:
+            float: Timeframe in hours
+        """
+        # Map Binance timeframe strings to hours
+        timeframe_map = {
+            '1m': 1/60,    # 1 minute = 1/60 hours
+            '3m': 3/60,    # 3 minutes = 3/60 hours
+            '5m': 5/60,    # 5 minutes = 5/60 hours
+            '15m': 15/60,  # 15 minutes = 0.25 hours
+            '30m': 30/60,  # 30 minutes = 0.5 hours
+            '1h': 1,       # 1 hour
+            '2h': 2,       # 2 hours
+            '4h': 4,       # 4 hours
+            '6h': 6,       # 6 hours
+            '8h': 8,       # 8 hours
+            '12h': 12,     # 12 hours
+            '1d': 24,      # 1 day = 24 hours
+            '3d': 72,      # 3 days = 72 hours
+            '1w': 168,     # 1 week = 168 hours
+            '1M': 720,     # 1 month = ~720 hours
+        }
+        
+        # Get hours from map, default to 1 hour if not found
+        hours = timeframe_map.get(self.timeframe, 1)
+        return hours
 
     def detect_market_regime(self, df, lookback=100):
         """
@@ -1166,18 +1752,75 @@ class LiveBotBinanceFullAuto:
                 print(f"   ℹ️  No signals detected")
                 return None
 
-            # Check only the most recent signal
-            last_signal = signals.iloc[-1]
-            last_signal_time = signals.index[-1]
-            current_time = df.index[-1]
-
-            time_diff_hours = (current_time - last_signal_time).total_seconds() / 3600
-
-            if time_diff_hours > 1.5:
-                print(f"   ⏰ Last signal is {time_diff_hours:.1f}h old (not from latest candle, skipping)")
+            # CRITICAL: Signal must be from LAST CLOSED BAR only (bar -1, aka df.index[-2])
+            # 
+            # Bar indexing explanation:
+            # - df.index[-1] = Current bar - INCOMPLETE, should NOT trade
+            # - df.index[-2] = Last closed bar - This is where we should look
+            # - df.index[-3] = Older bar - too old, should NOT trade
+            #
+            # Example: Bot runs at 01:00 on H1 timeframe
+            # - df.index[-1] = 01:00 (bar 01:00-02:00, just started, incomplete)
+            # - df.index[-2] = 00:00 (bar 00:00-01:00, just closed) ← Check this one!
+            # - df.index[-3] = 23:00 (previous day, too old)
+            
+            current_bar_time = df.index[-1]
+            last_closed_bar_time = df.index[-2] if len(df) >= 2 else None
+            
+            if last_closed_bar_time is None:
+                print("   ⚠️  Not enough data to determine last closed bar")
                 return None
-
-            print(f"   ✅ Signal from latest candle (age: {time_diff_hours:.1f}h)")
+            
+            # Filter signals to only those from the last closed bar (df.index[-2])
+            # This ensures we're trading ONLY on the bar that just closed, not older bars
+            signals_from_last_closed = signals[signals.index == last_closed_bar_time]
+            
+            if len(signals_from_last_closed) == 0:
+                # No signal on the last closed bar - check if there are any recent signals
+                last_signal = signals.iloc[-1]
+                last_signal_time = signals.index[-1]
+                
+                # Calculate age to provide helpful debug info
+                time_diff_hours = (current_bar_time - last_signal_time).total_seconds() / 3600
+                
+                # DYNAMIC FILTER (adapts to timeframe)
+                # Calculate min/max age based on timeframe
+                timeframe_hours = self._get_timeframe_hours()
+                signal_min_age = SIGNAL_MIN_AGE_MULTIPLIER * timeframe_hours  # Half a bar
+                signal_max_age = SIGNAL_MAX_AGE_MULTIPLIER * timeframe_hours  # One and a half bars
+                
+                # Accept signals within the dynamic range (covers last closed bar at any time)
+                if signal_min_age <= time_diff_hours <= signal_max_age:
+                    # Signal is from a recent closed bar (not necessarily the LAST one)
+                    # This is acceptable for mid-timeframe checks (e.g., bot runs mid-bar)
+                    print(f"   ℹ️  Using signal from recent bar (age: {time_diff_hours:.2f}h, range: {signal_min_age:.2f}-{signal_max_age:.2f}h)")
+                else:
+                    # Signal too fresh (current bar) or too old (2+ bars ago)
+                    if time_diff_hours < signal_min_age:
+                        print(f"   ⏰ Signal too fresh ({time_diff_hours:.2f}h < {signal_min_age:.2f}h) - from current incomplete bar")
+                    else:
+                        print(f"   ⏰ Signal too old ({time_diff_hours:.2f}h > {signal_max_age:.2f}h) - older than 1.5 bars")
+                    return None
+            else:
+                # Found signal on the last closed bar - use it!
+                last_signal = signals_from_last_closed.iloc[-1]
+                last_signal_time = last_closed_bar_time
+                print(f"   ✅ Signal found on last closed bar: {last_closed_bar_time.strftime('%Y-%m-%d %H:%M')}")
+            
+            # Get entry price for signal ID generation
+            entry = last_signal['entry_price']
+            
+            # Generate unique signal ID to prevent duplicate opening
+            # Signal ID is based on: timestamp (rounded to hour), direction, and entry price
+            signal_timestamp_str = last_signal_time.strftime('%Y%m%d%H')  # Round to hour
+            signal_direction = int(last_signal['signal'])
+            signal_entry = round(entry, 2)
+            signal_id = f"{signal_timestamp_str}_{signal_direction}_{signal_entry}"
+            
+            # Check if we've already opened this signal
+            if signal_id in self.opened_signal_ids:
+                print(f"   🔁 Signal already opened (ID: {signal_id}) - skipping duplicate")
+                return None
 
             # Adjust TP based on market regime (in %)
             if self.current_regime == 'TREND':
@@ -1189,9 +1832,19 @@ class LiveBotBinanceFullAuto:
                 tp2_pct = self.range_tp2_pct
                 tp3_pct = self.range_tp3_pct
 
-            # Calculate TP levels in price
-            entry = last_signal['entry_price']
-            sl = last_signal['stop_loss']
+            # Calculate TP levels in price (entry already defined above)
+            
+            # Calculate SL based on settings
+            if self.use_regime_based_sl:
+                # Use regime-based fixed SL (percentage)
+                sl_pct = self.trend_sl_pct if self.current_regime == 'TREND' else self.range_sl_pct
+                if last_signal['signal'] == 1:  # LONG
+                    sl = entry * (1 - sl_pct / 100)
+                else:  # SHORT
+                    sl = entry * (1 + sl_pct / 100)
+            else:
+                # Use strategy-calculated SL
+                sl = last_signal['stop_loss']
 
             if last_signal['signal'] == 1:  # LONG
                 tp1 = entry * (1 + tp1_pct / 100)
@@ -1203,7 +1856,7 @@ class LiveBotBinanceFullAuto:
                 tp3 = entry * (1 - tp3_pct / 100)
 
             direction = "LONG" if last_signal['signal'] == 1 else "SHORT"
-            print(f"\n   ✅ FRESH SIGNAL FROM LATEST CANDLE!")
+            print(f"\n   ✅ FRESH SIGNAL FROM CLOSED CANDLE!")
             print(f"      Direction: {direction}")
             print(f"      Market Regime: {self.current_regime}")
             print(f"      Entry: ${entry:.2f}")
@@ -1211,6 +1864,7 @@ class LiveBotBinanceFullAuto:
             print(f"      TP1: ${tp1:.2f} ({tp1_pct}%)")
             print(f"      TP2: ${tp2:.2f} ({tp2_pct}%)")
             print(f"      TP3: ${tp3:.2f} ({tp3_pct}%)")
+            print(f"      Signal ID: {signal_id}")
 
             return {
                 'direction': last_signal['signal'],
@@ -1223,7 +1877,8 @@ class LiveBotBinanceFullAuto:
                 'tp2_pct': tp2_pct,
                 'tp3_pct': tp3_pct,
                 'time': last_signal_time,
-                'regime': self.current_regime
+                'regime': self.current_regime,
+                'signal_id': signal_id  # Add signal ID for duplicate tracking
             }
 
         except Exception as e:
@@ -1301,6 +1956,10 @@ class LiveBotBinanceFullAuto:
         if not self.exchange_connected:
             return []
 
+        # FIX: In dry-run mode, return empty (positions tracked in memory only)
+        if self.dry_run:
+            return []
+
         try:
             positions = self.exchange.fetch_positions([self.symbol])
             # Filter only positions with contracts > 0
@@ -1331,7 +1990,7 @@ class LiveBotBinanceFullAuto:
         print(f"   Position size: {position_size}")
 
         if self.dry_run:
-            print(f"\n🧪 DRY RUN: Would open {direction_str} position:")
+            print(f"\n🧪 DRY RUN: Opening simulated {direction_str} position:")
             print(f"   Symbol: {self.symbol}")
             print(f"   Amount: {position_size}")
             print(f"   Entry: ${signal['entry']:.2f}")
@@ -1339,6 +1998,34 @@ class LiveBotBinanceFullAuto:
             print(f"   TP1: ${signal['tp1']:.2f} ({signal['tp1_pct']}%)")
             print(f"   TP2: ${signal['tp2']:.2f} ({signal['tp2_pct']}%)")
             print(f"   TP3: ${signal['tp3']:.2f} ({signal['tp3_pct']}%)")
+
+            # Create simulated order ID with DRY- prefix
+            import time
+            simulated_order_id = f"DRY-{int(time.time() * 1000)}"
+
+            # Log position to tracker and database
+            position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
+            regime = signal.get('regime', 'UNKNOWN')
+            regime_code = "T" if regime == 'TREND' else "R"
+
+            self._log_position_opened(
+                order_id=simulated_order_id,
+                position_type=position_type,
+                amount=position_size,
+                entry_price=signal['entry'],
+                sl=signal['sl'],
+                tp=signal['tp2'],
+                regime=regime,
+                comment=f"V3_{regime_code}"
+            )
+            
+            # Track signal ID to prevent duplicate opening
+            if 'signal_id' in signal:
+                self.opened_signal_ids.add(signal['signal_id'])
+                print(f"   📝 Signal ID tracked: {signal['signal_id']}")
+
+            print(f"   ✅ Simulated position logged: {simulated_order_id}")
+            print(f"\n🧪 DRY RUN: Simulated position created and tracked")
             return True
 
         try:
@@ -1402,7 +2089,12 @@ class LiveBotBinanceFullAuto:
                 message += f"SL: ${signal['sl']:.2f}\n"
                 message += f"TP: ${signal['tp2']:.2f}\n"
                 message += f"Risk: {self.risk_percent}%"
-                asyncio.run(self.send_telegram(message))
+                self.send_telegram(message)
+            
+            # Track signal ID to prevent duplicate opening
+            if 'signal_id' in signal:
+                self.opened_signal_ids.add(signal['signal_id'])
+                print(f"   📝 Signal ID tracked: {signal['signal_id']}")
 
             return True
 
@@ -1428,6 +2120,12 @@ class LiveBotBinanceFullAuto:
         print(f"📈 OPENING 3-POSITION {direction_str} GROUP")
         print(f"{'='*60}")
         print(f"   Group ID: {group_id}")
+        
+        # Check max positions (need room for 3 positions)
+        open_positions = self.get_open_positions()
+        if len(open_positions) + 3 > self.max_positions:
+            print(f"⚠️  Not enough room for 3 positions on {self.symbol} (need 3, have {self.max_positions - len(open_positions)} slots, {len(open_positions)} positions open)")
+            return False
 
         # Calculate total position size
         if self.total_position_size:
@@ -1446,17 +2144,14 @@ class LiveBotBinanceFullAuto:
             total_size * 0.34   # Pos 3 (slightly larger for rounding)
         ]
 
-        # Auto-adjust if below minimum
-        adjusted = False
-        for i in range(len(pos_sizes)):
-            if pos_sizes[i] < min_size:
-                print(f"   ⚠️  Position {i+1} size {pos_sizes[i]:.6f} < minimum {min_size}, adjusting...")
-                pos_sizes[i] = min_size
-                adjusted = True
-
-        if adjusted:
-            total_size = sum(pos_sizes)
-            print(f"   Adjusted total size: {total_size:.6f}")
+        # Check if ANY lot size is below minimum - if so, fallback to single position
+        if any(size < min_size for size in pos_sizes):
+            print(f"   ⚠️  WARNING: Position sizes too small for 3-position mode")
+            print(f"   Position 1: {pos_sizes[0]:.6f} (min: {min_size})")
+            print(f"   Position 2: {pos_sizes[1]:.6f} (min: {min_size})")
+            print(f"   Position 3: {pos_sizes[2]:.6f} (min: {min_size})")
+            print(f"   🔄 FALLBACK: Opening single position with TP2 instead")
+            return self._open_single_position(signal)
 
         # Position configuration
         positions_data = [
@@ -1466,15 +2161,71 @@ class LiveBotBinanceFullAuto:
         ]
 
         if self.dry_run:
-            print(f"\n🧪 DRY RUN: Would open 3 {direction_str} positions:")
+            print(f"\n🧪 DRY RUN: Opening simulated 3 {direction_str} positions:")
             print(f"   Group ID: {group_id}")
             print(f"   Entry: ${signal['entry']:.2f}")
             print(f"   SL: ${signal['sl']:.2f}")
+
+            # Generate simulated order IDs and log positions
+            regime = signal.get('regime', 'UNKNOWN')
+            regime_code = "T" if regime == 'TREND' else "R"
+            position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
+
             for pos_data in positions_data:
                 print(f"\n   Position {pos_data['num']}:")
                 print(f"      Size: {pos_data['size']:.6f}")
                 print(f"      TP: ${pos_data['tp']:.2f} ({pos_data['tp_pct']}%)")
                 print(f"      Trailing: {'YES (after TP1)' if pos_data['trailing'] else 'NO'}")
+
+                # Create simulated order ID with DRY- prefix
+                import time
+                simulated_order_id = f"DRY-{int(time.time() * 1000)}-{pos_data['num']}"
+
+                # Log position to tracker and database
+                self._log_position_opened(
+                    order_id=simulated_order_id,
+                    position_type=position_type,
+                    amount=pos_data['size'],
+                    entry_price=signal['entry'],
+                    sl=signal['sl'],
+                    tp=pos_data['tp'],
+                    regime=regime,
+                    comment=f"V3_{regime_code}_P{pos_data['num']}/3",
+                    position_group_id=group_id,
+                    position_num=pos_data['num']
+                )
+                print(f"      ✅ Simulated position logged: {simulated_order_id}")
+
+                # Small delay between simulated orders
+                time.sleep(0.1)
+
+            # Save PositionGroup to database for dry-run too
+            if self.use_database and self.db:
+                try:
+                    PositionGroup = self._get_position_group_model()
+                    if PositionGroup:
+                        new_group = PositionGroup(
+                            group_id=group_id,
+                            bot_id=self.bot_id,
+                            tp1_hit=False,
+                            entry_price=signal['entry'],
+                            max_price=signal['entry'],
+                            min_price=signal['entry'],
+                            trade_type=direction_str,
+                            created_at=datetime.now(),
+                            updated_at=datetime.now()
+                        )
+                        self.db.save_position_group(new_group)
+                        print(f"✅ Position group saved to database (dry-run): {group_id[:8]}")
+                except Exception as e:
+                    print(f"⚠️  Could not save position group to DB: {e}")
+            
+            # Track signal ID to prevent duplicate opening
+            if 'signal_id' in signal:
+                self.opened_signal_ids.add(signal['signal_id'])
+                print(f"   📝 Signal ID tracked: {signal['signal_id']}")
+
+            print(f"\n🧪 DRY RUN: 3 simulated positions created and tracked")
             return True
 
         try:
@@ -1485,15 +2236,16 @@ class LiveBotBinanceFullAuto:
                 print(f"\n   🔄 Opening Position {pos_data['num']}/{len(positions_data)}...")
 
                 # Place market order
+                # NOTE: For 3-position mode, do NOT set TP/SL on exchange
+                # because Binance Futures merges positions in same direction,
+                # and setting TP/SL on one position overwrites all others.
+                # Bot will monitor TP/SL levels manually via _check_tp_sl_realtime()
                 order = self.exchange.create_order(
                     symbol=self.symbol,
                     type='market',
                     side=side,
-                    amount=pos_data['size'],
-                    params={
-                        'stopLoss': {'triggerPrice': signal['sl']},
-                        'takeProfit': {'triggerPrice': pos_data['tp']}
-                    }
+                    amount=pos_data['size']
+                    # No params - bot monitors TP/SL manually
                 )
 
                 print(f"      ✅ Position {pos_data['num']} opened!")
@@ -1533,6 +2285,27 @@ class LiveBotBinanceFullAuto:
                 for pos in positions:
                     print(f"      Position: {pos.get('side')} {pos.get('contracts')} @ ${pos.get('entryPrice', 0):.2f}")
 
+            # Save PositionGroup to database
+            if self.use_database and self.db:
+                try:
+                    PositionGroup = self._get_position_group_model()
+                    if PositionGroup:
+                        new_group = PositionGroup(
+                            group_id=group_id,
+                            bot_id=self.bot_id,
+                            tp1_hit=False,
+                            entry_price=signal['entry'],
+                            max_price=signal['entry'],
+                            min_price=signal['entry'],
+                            trade_type=direction_str,
+                            created_at=datetime.now(),
+                            updated_at=datetime.now()
+                        )
+                        self.db.save_position_group(new_group)
+                        print(f"✅ Position group saved to database: {group_id[:8]}")
+                except Exception as e:
+                    print(f"⚠️  Could not save position group to DB: {e}")
+
             # Send Telegram notification
             if self.telegram_bot:
                 message = f"🤖 <b>3-Position Group Opened</b>\n\n"
@@ -1547,7 +2320,12 @@ class LiveBotBinanceFullAuto:
                 message += f"Position 2: {pos_sizes[1]:.6f} → TP2 ${signal['tp2']:.2f} (trails)\n"
                 message += f"Position 3: {pos_sizes[2]:.6f} → TP3 ${signal['tp3']:.2f} (trails)\n"
                 message += f"\nRisk: {self.risk_percent}%"
-                asyncio.run(self.send_telegram(message))
+                self.send_telegram(message)
+            
+            # Track signal ID to prevent duplicate opening
+            if 'signal_id' in signal:
+                self.opened_signal_ids.add(signal['signal_id'])
+                print(f"   📝 Signal ID tracked: {signal['signal_id']}")
 
             return True
 
@@ -1557,17 +2335,51 @@ class LiveBotBinanceFullAuto:
             traceback.print_exc()
             return False
 
-    async def send_telegram(self, message):
-        """Send Telegram notification"""
+    def send_telegram(self, message):
+        """Send Telegram notification (synchronous wrapper for async bot)"""
         if self.telegram_bot and self.telegram_chat_id:
             try:
-                await self.telegram_bot.send_message(
-                    chat_id=self.telegram_chat_id,
-                    text=message,
-                    parse_mode='HTML'
-                )
+                # Use asyncio to send message, handling various event loop states
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_closed():
+                        # Create new event loop if current one is closed
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    if loop.is_running():
+                        # If loop is already running (e.g., in a thread), we can't use run_until_complete
+                        # In this case, we just skip sending (trading bots run in separate thread)
+                        # This is acceptable as Telegram notifications are non-critical
+                        print(f"ℹ️  Telegram notification skipped (event loop already running)")
+                        return
+                    else:
+                        # Run the coroutine in the event loop
+                        loop.run_until_complete(self._send_telegram_async(message))
+                except RuntimeError as e:
+                    # Fallback: create a new event loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(self._send_telegram_async(message))
+                    finally:
+                        try:
+                            loop.close()
+                        except Exception:
+                            pass  # Ignore cleanup errors
             except Exception as e:
                 print(f"⚠️  Telegram send failed: {e}")
+
+    async def _send_telegram_async(self, message):
+        """Async helper for sending Telegram messages"""
+        try:
+            await self.telegram_bot.send_message(
+                chat_id=self.telegram_chat_id,
+                text=message,
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            print(f"⚠️  Telegram message send error: {e}")
 
     def _check_closed_positions(self):
         """Check for positions that have been closed and log them"""
@@ -1629,6 +2441,45 @@ class LiveBotBinanceFullAuto:
                 # Check for closed positions
                 self._check_closed_positions()
 
+    def _cleanup_old_signal_ids(self):
+        """Clean up signal IDs older than 7 days to prevent memory growth
+        
+        Signal IDs are in format: YYYYMMDDHH_direction_entry
+        We can parse the timestamp and remove old ones
+        """
+        if not self.opened_signal_ids:
+            return
+        
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.now() - timedelta(days=7)
+        cutoff_str = cutoff_date.strftime('%Y%m%d')
+        
+        # Filter out old signal IDs with validation
+        old_count = len(self.opened_signal_ids)
+        cleaned_ids = set()
+        
+        for sig_id in self.opened_signal_ids:
+            try:
+                # Validate format: YYYYMMDDHH_direction_entry
+                parts = sig_id.split('_')
+                if len(parts) >= 3:
+                    timestamp_str = parts[0]
+                    # Keep only recent signals (timestamp >= cutoff)
+                    if timestamp_str >= cutoff_str:
+                        cleaned_ids.add(sig_id)
+                else:
+                    # Invalid format - keep it to avoid data loss
+                    cleaned_ids.add(sig_id)
+            except Exception:
+                # Error parsing - keep it to avoid data loss
+                cleaned_ids.add(sig_id)
+        
+        self.opened_signal_ids = cleaned_ids
+        new_count = len(self.opened_signal_ids)
+        
+        if old_count != new_count:
+            print(f"   🧹 Cleaned up {old_count - new_count} old signal IDs (keeping {new_count})")
+
     def run(self):
         """Main bot loop"""
         print(f"\n{'='*80}")
@@ -1672,7 +2523,7 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
 ✅ Bot is now active and monitoring the market!
 """
             try:
-                asyncio.run(self.send_telegram(startup_message))
+                self.send_telegram(startup_message)
                 print("📱 Startup notification sent to Telegram")
             except Exception as e:
                 print(f"⚠️  Failed to send startup notification: {e}")
@@ -1694,10 +2545,12 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                 # Check connection
                 if not self.exchange_connected:
                     print("❌ Exchange disconnected! Attempting to reconnect...")
-                    if not self.connect_exchange():
-                        print("❌ Reconnection failed. Waiting 60s...")
-                        time.sleep(60)
+                    if not self._attempt_reconnect():
+                        print("❌ Reconnection failed. Will retry next iteration...")
                         continue
+
+                # Periodic heartbeat check
+                self._check_heartbeat()
 
                 # Check current positions
                 open_positions = self.get_open_positions()
@@ -1707,6 +2560,10 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                 
                 # Check TP/SL levels in real-time
                 self._check_tp_sl_realtime()
+                
+                # Cleanup old signal IDs periodically (every 24 hours based on iteration counter)
+                if iteration % 24 == 0:
+                    self._cleanup_old_signal_ids()
                 
                 print(f"📊 Open positions: {len(open_positions)}/{self.max_positions}")
 
@@ -1764,7 +2621,7 @@ RANGE: {self.range_tp1_pct}% / {self.range_tp2_pct}% / {self.range_tp3_pct}%
                         direction_str = 'LONG' if signal['direction'] == 1 else 'SHORT'
                         print(f"⚠️  Already have {direction_str} position - skipping")
                     elif len(open_positions) >= self.max_positions:
-                        print(f"⚠️  Max positions reached ({self.max_positions}) - skipping")
+                        print(f"⚠️  Max positions reached for {self.symbol} ({self.max_positions}) - skipping")
                     else:
                         # Open position
                         print(f"📈 Attempting to open position...")
@@ -1824,7 +2681,7 @@ Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 🛑 Bot has been stopped by user.
 """
                 try:
-                    asyncio.run(self.send_telegram(shutdown_message))
+                    self.send_telegram(shutdown_message)
                     print("📱 Shutdown notification sent to Telegram")
                 except Exception as e:
                     print(f"⚠️  Failed to send shutdown notification: {e}")

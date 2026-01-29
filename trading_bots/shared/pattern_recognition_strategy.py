@@ -539,16 +539,23 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
 
         direction = pattern['direction']
         entry = pattern['entry']
+        
+        # Validate entry price first - must be positive
+        if entry is None or entry <= 0:
+            return df, False
 
         # Calculate SL and TP based on pattern
         if direction == 1:  # Long
             # SL below support/neckline
-            if 'support' in pattern:
+            if 'support' in pattern and pattern['support'] is not None and pattern['support'] > 0:
                 sl = pattern['support'] * 0.999
-            elif 'neckline' in pattern:
+            elif 'neckline' in pattern and pattern['neckline'] is not None and pattern['neckline'] > 0:
                 sl = pattern['neckline'] * 0.999
-            else:
+            elif 'head' in pattern and pattern['head'] is not None and pattern['head'] > 0:
                 sl = pattern['head'] * 0.999
+            else:
+                # Fallback: 0.5% below entry
+                sl = entry * 0.995
 
             # Fibonacci TP
             risk = entry - sl
@@ -556,16 +563,44 @@ class PatternRecognitionStrategy(Fibonacci1618Strategy):
 
         else:  # Short
             # SL above resistance/neckline
-            if 'resistance' in pattern:
+            if 'resistance' in pattern and pattern['resistance'] is not None and pattern['resistance'] > 0:
                 sl = pattern['resistance'] * 1.001
-            elif 'neckline' in pattern:
+            elif 'neckline' in pattern and pattern['neckline'] is not None and pattern['neckline'] > 0:
                 sl = pattern['neckline'] * 1.001
-            else:
+            elif 'head' in pattern and pattern['head'] is not None and pattern['head'] > 0:
                 sl = pattern['head'] * 1.001
+            else:
+                # Fallback: 0.5% above entry
+                sl = entry * 1.005
 
             # Fibonacci TP
             risk = sl - entry
             tp = entry - (risk * self.fib_extension)
+
+        # Validate SL/TP values before proceeding
+        if sl <= 0:
+            # Invalid SL - must be positive price
+            return df, False
+
+        if tp <= 0:
+            # Invalid TP - must be positive price
+            return df, False
+
+        # Validate SL/TP are on correct side of entry
+        if direction == 1:  # LONG
+            if sl >= entry:
+                # SL must be below entry for LONG
+                return df, False
+            if tp <= entry:
+                # TP must be above entry for LONG
+                return df, False
+        else:  # SHORT
+            if sl <= entry:
+                # SL must be above entry for SHORT
+                return df, False
+            if tp >= entry:
+                # TP must be below entry for SHORT
+                return df, False
 
         # Min risk check
         risk_pct = abs(entry - sl) / entry

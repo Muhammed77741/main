@@ -14,14 +14,96 @@ import sys
 from pathlib import Path
 import csv
 import os
-import asyncio
 import uuid
+import signal
+import json
 
 # Add parent directory to path to access shared modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shared.pattern_recognition_strategy import PatternRecognitionStrategy
 from shared.telegram_helper import check_telegram_bot_import
+from shared.telegram_notifier import TelegramNotifier
+from shared.bot_resilience import retry_with_timeout, BotWatchdog, interruptible_sleep
+
+# Add trading_app directory to path to access MT5Manager
+trading_app_path = Path(__file__).parent.parent.parent / 'trading_app'
+if str(trading_app_path) not in sys.path:
+    sys.path.insert(0, str(trading_app_path))
+
+from core.mt5_manager import mt5_manager
+
+# Import crypto symbol detection utility
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app' / 'gui'))
+from format_utils import is_crypto_symbol
+
+# ============================================================================
+# CRITICAL: Safety constants for multi-position SL modification protection
+# ============================================================================
+# These constants prevent race condition where trailing stops are applied
+# immediately after position opening, causing premature SL hits on positions 2 & 3
+#
+# Timeline:
+#   0-30s:  No SL modifications allowed (position confirmation period)
+#   30-60s: TP1 can close, but NO trailing activation yet
+#   60s+:   Trailing can activate (only if TP1 confirmed hit)
+#
+# Values chosen based on:
+#   - Broker confirmation time: typically 5-10 seconds
+#   - Network latency: 1-5 seconds
+#   - MT5 synchronization delay: 5-10 seconds
+#   - Safety margin: 2x typical delays
+# ============================================================================
+
+MIN_POSITION_AGE_FOR_TRAILING = 60  # seconds - minimum 1 minute after opening before trailing can activate
+MIN_POSITION_AGE_FOR_SL_MODIFY = 30  # seconds - minimum 30 seconds before any SL modification
+MIN_SL_MODIFY_INTERVAL = 10          # seconds - minimum time between consecutive SL modifications
+BROKER_CONFIRMATION_TIMEOUT = 10     # seconds - wait for broker confirmation after opening
+
+# SL Distance validation constants (percentages)
+MIN_SL_DISTANCE_FROM_ENTRY_PCT = 0.003   # 0.3% - minimum distance from entry price
+MIN_SL_DISTANCE_FROM_PRICE_PCT = 0.002   # 0.2% - minimum distance from current price
+
+# ============================================================================
+# Crypto-specific TP/SL Configuration (in percentages)
+# ============================================================================
+# For crypto symbols (BTC, ETH, SOL, etc.) on MT5, SL/TP must be calculated
+# as percentages of price, not in points/pips like forex/commodities
+#
+# These values match Signal Analysis dialog defaults to ensure consistency
+# between backtesting and live trading
+# ============================================================================
+
+# Crypto TREND mode (strong directional movement)
+CRYPTO_TREND_TP1_PCT = 1.5   # 1.5% TP1
+CRYPTO_TREND_TP2_PCT = 2.75  # 2.75% TP2
+CRYPTO_TREND_TP3_PCT = 4.5   # 4.5% TP3
+CRYPTO_TREND_SL_PCT = 0.8    # 0.8% SL
+
+# Crypto RANGE mode (sideways/choppy market)
+CRYPTO_RANGE_TP1_PCT = 1.0   # 1.0% TP1
+CRYPTO_RANGE_TP2_PCT = 1.75  # 1.75% TP2
+CRYPTO_RANGE_TP3_PCT = 2.5   # 2.5% TP3
+CRYPTO_RANGE_SL_PCT = 0.6    # 0.6% SL
+
+# ============================================================================
+# Signal freshness validation multipliers (for any timeframe)
+# ============================================================================
+# These multipliers ensure we only trade signals from previous CLOSED candles,
+# not from the current incomplete candle or very old signals
+#
+# The actual min/max age is calculated dynamically based on timeframe:
+#   MIN_AGE = 0.5 * timeframe_hours (half a bar)
+#   MAX_AGE = 1.5 * timeframe_hours (one and a half bars)
+#
+# Examples:
+#   H1:  MIN=0.5h, MAX=1.5h (30-90 minutes)
+#   M30: MIN=0.25h, MAX=0.75h (15-45 minutes)
+#   M15: MIN=0.125h, MAX=0.375h (7.5-22.5 minutes)
+#   M5:  MIN=0.042h, MAX=0.125h (2.5-7.5 minutes)
+# ============================================================================
+SIGNAL_MIN_AGE_MULTIPLIER = 0.5   # Minimum: half a bar
+SIGNAL_MAX_AGE_MULTIPLIER = 1.5   # Maximum: one and a half bars
 
 
 class LiveBotMT5FullAuto:
@@ -42,10 +124,14 @@ class LiveBotMT5FullAuto:
                  check_interval=3600, risk_percent=2.0, max_positions=9,
                  dry_run=False, bot_id=None, use_database=True,
                  use_3_position_mode=False, total_position_size=None, min_order_size=None,
-                 trailing_stop_pct=0.5):
+                 use_trailing_stops=True, trailing_stop_pct=0.5,
+                 use_regime_based_sl=False, trend_sl=16, range_sl=12,
+                 max_hold_bars=100,
+                 trend_tp1=None, trend_tp2=None, trend_tp3=None,
+                 range_tp1=None, range_tp2=None, range_tp3=None):
         """
         Initialize bot
-        
+
         Args:
             telegram_token: Telegram bot token (optional)
             telegram_chat_id: Telegram chat ID (optional)
@@ -57,6 +143,12 @@ class LiveBotMT5FullAuto:
             dry_run: If True, no real trades
             bot_id: Unique bot identifier for database tracking
             use_database: If True, use database for position tracking
+            use_regime_based_sl: Use fixed regime-based SL instead of strategy SL
+            trend_sl: TREND mode SL in points (default 16 for XAUUSD)
+            range_sl: RANGE mode SL in points (default 12 for XAUUSD)
+            max_hold_bars: Maximum bars to hold position before timeout (default 100, like backtest)
+            trend_tp1/2/3: TREND mode TP levels in points (optional, defaults: 30/55/90 for XAUUSD)
+            range_tp1/2/3: RANGE mode TP levels in points (optional, defaults: 20/35/50 for XAUUSD)
         """
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
@@ -66,7 +158,7 @@ class LiveBotMT5FullAuto:
         self.risk_percent = risk_percent
         self.max_positions = max_positions
         self.dry_run = dry_run
-        
+
         # Bot identification for database
         self.bot_id = bot_id or f"xauusd_bot_{symbol}"
         self.use_database = use_database
@@ -75,31 +167,78 @@ class LiveBotMT5FullAuto:
         self.use_3_position_mode = use_3_position_mode
         self.total_position_size = total_position_size
         self.min_order_size = min_order_size
+        self.use_trailing_stops = use_trailing_stops  # Enable/disable trailing stops
         self.trailing_stop_pct = trailing_stop_pct  # Trailing stop percentage for 3-position mode
 
+        # Regime-based SL settings
+        self.use_regime_based_sl = use_regime_based_sl
+        self.trend_sl_points = trend_sl  # SL for TREND mode in points
+        self.range_sl_points = range_sl  # SL for RANGE mode in points
+
+        # Position timeout settings
+        self.max_hold_bars = max_hold_bars  # Close position after N bars if TP/SL not hit
+
         # Initialize strategy
-        self.strategy = PatternRecognitionStrategy(fib_mode='standard')
+        # For crypto: disable session filtering (trades 24/7)
+        # For forex/gold: enable session filtering (best hours only)
+        is_crypto = is_crypto_symbol(self.symbol)
+        self.strategy = PatternRecognitionStrategy(
+            fib_mode='standard',
+            best_hours_only=False if is_crypto else True
+        )
         
-        # TREND MODE parameters (strong trend)
-        self.trend_tp1 = 30
-        self.trend_tp2 = 55
-        self.trend_tp3 = 90
+        # Log the configuration
+        if is_crypto:
+            print(f"   🌐 Crypto detected ({self.symbol}): Session filtering DISABLED (24/7 trading)")
+        else:
+            print(f"   ⏰ Forex/Commodity ({self.symbol}): Session filtering ENABLED (best hours: 8-10, 13-15 GMT)")
         
-        # RANGE MODE parameters (sideways)
-        self.range_tp1 = 20
-        self.range_tp2 = 35
-        self.range_tp3 = 50
+        # TREND MODE parameters (strong trend) - use provided values or defaults for XAUUSD
+        self.trend_tp1 = trend_tp1 if trend_tp1 is not None else 30
+        self.trend_tp2 = trend_tp2 if trend_tp2 is not None else 55
+        self.trend_tp3 = trend_tp3 if trend_tp3 is not None else 90
+        
+        # RANGE MODE parameters (sideways) - use provided values or defaults for XAUUSD
+        self.range_tp1 = range_tp1 if range_tp1 is not None else 20
+        self.range_tp2 = range_tp2 if range_tp2 is not None else 35
+        self.range_tp3 = range_tp3 if range_tp3 is not None else 50
         
         # Current market regime
         self.current_regime = 'RANGE'
-        
+
         # Position tracking
-        self.trades_file = 'bot_trades_log.csv'
-        self.tp_hits_file = 'bot_tp_hits_log.csv'
+        # FIX: Add symbol to filename for consistency with GUI and crypto bot
+        symbol_clean = self.symbol.replace("/", "_")
+        self.trades_file = f'bot_trades_log_{symbol_clean}.csv'
+        self.tp_hits_file = f'bot_tp_hits_log_{symbol_clean}.csv'
         self.positions_tracker = {}  # {ticket: position_data}
 
         # Phase 2: 3-Position Mode tracking
         self.position_groups = {}  # {group_id: {'tp1_hit': bool, 'max_price': float, 'min_price': float, 'positions': [...]}}
+        self.group_counter = 0  # Counter for position groups (0-99) used in magic number generation
+        self.logged_closed_groups = set()  # Track groups where we've already logged "Position 1 closed but NOT by TP1" to prevent spam
+        
+        # Signal tracking to prevent duplicate opening
+        self.opened_signal_ids = set()  # Track signal IDs that have been opened to prevent duplicates
+
+        # Resilience features (CRITICAL: Network stability)
+        self.running = True  # Flag for graceful shutdown
+        self.watchdog = None  # Will be initialized in run()
+        
+        # Register signal handlers for graceful shutdown (only works in main thread)
+        try:
+            import threading
+            if threading.current_thread() is threading.main_thread():
+                signal.signal(signal.SIGINT, self._signal_handler)
+                signal.signal(signal.SIGTERM, self._signal_handler)
+                print("✅ Signal handlers registered (Ctrl+C to stop)")
+            else:
+                print("ℹ️  Running from GUI - using alternative shutdown method")
+                print("   (This is normal - use the Stop button to stop the bot)")
+                print("   See FAQ_WARNINGS_RU.md for more info")
+        except ValueError as e:
+            print(f"ℹ️  Signal handlers not available: {e}")
+            print("   Bot will use self.running flag for graceful shutdown")
 
         self._initialize_trades_log()
         self._initialize_tp_hits_log()
@@ -119,24 +258,37 @@ class LiveBotMT5FullAuto:
                 self.use_database = False
                 self.db = None
         
-        # Telegram bot (optional)
-        self.telegram_bot = None
+        # Telegram notifier (optional) - using synchronous TelegramNotifier instead of async Bot
+        self.telegram_notifier = None
         if telegram_token and telegram_chat_id:
             try:
-                success, Bot, error_msg = check_telegram_bot_import()
-                if not success:
-                    print(error_msg)
-                else:
-                    try:
-                        self.telegram_bot = Bot(token=telegram_token)
-                    except Exception as bot_error:
-                        print(f"⚠️  Failed to initialize Telegram bot: {bot_error}")
-                        print("     Check your bot token is valid.")
+                self.telegram_notifier = TelegramNotifier(
+                    bot_token=telegram_token,
+                    chat_id=telegram_chat_id,
+                    timezone_offset=5  # UTC+5 (adjust as needed)
+                )
+                print(f"✅ Telegram notifier initialized")
+                # Test connection
+                if self.telegram_notifier.test_connection():
+                    print(f"✅ Telegram bot connection verified")
             except Exception as e:
-                print(f"⚠️  Unexpected error during Telegram initialization: {e}")
-        
+                print(f"⚠️  Failed to initialize Telegram notifier: {e}")
+                self.telegram_notifier = None
+
+        # Keep backward compatibility - some code checks self.telegram_bot
+        self.telegram_bot = self.telegram_notifier
+
+
         self.mt5_connected = False
-    
+
+        # Connection monitoring
+        self.connection_errors = 0
+        self.max_connection_errors = 5
+        self.reconnect_delays = [60, 120, 300, 600, 900]  # Exponential backoff in seconds
+        self.last_successful_fetch = None
+        self.heartbeat_interval = 300  # Check connection every 5 minutes
+        self.last_heartbeat = None
+
     def _initialize_trades_log(self):
         """Initialize CSV file for trade logging"""
         if not os.path.exists(self.trades_file):
@@ -145,9 +297,11 @@ class LiveBotMT5FullAuto:
                 writer.writerow([
                     'Ticket', 'Open_Time', 'Close_Time', 'Type', 'Volume',
                     'Entry_Price', 'SL', 'TP', 'Close_Price', 'Profit',
-                    'Pips', 'Market_Regime', 'Duration_Hours', 'Status', 'Comment'
+                    'Pips', 'Market_Regime', 'Duration_Hours', 'Status', 'Comment',
+                    'Position_Group_ID', 'Position_Num'  # Add 3-position mode fields
                 ])
             print(f"📝 Created trade log file: {self.trades_file}")
+
     
     def _initialize_tp_hits_log(self):
         """Initialize CSV file for TP hits logging"""
@@ -155,16 +309,135 @@ class LiveBotMT5FullAuto:
             with open(self.tp_hits_file, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    'Timestamp', 'Ticket', 'TP_Level', 'Type', 'Volume',
-                    'Entry_Price', 'TP_Target', 'Current_Price', 'SL',
-                    'Profit', 'Pips', 'Market_Regime', 'Duration_Minutes', 'Comment'
+                    'Timestamp', 'Order_ID', 'Position_Num', 'Position_Group_ID', 
+                    'TP_Level', 'Type', 'Amount',
+                    'Entry_Price', 'TP_Target', 'Current_Price', 'SL', 'Trailing_Active',
+                    'Profit', 'Profit_Pct'
                 ])
             print(f"📝 Created TP hits log file: {self.tp_hits_file}")
     
+    def _generate_magic(self, position_num: int, group_counter: int) -> int:
+        """
+        Generate unique magic number for position tracking
+        
+        Format: BBBBPPGG (8 digits)
+        - BBBB: bot_id hash (4 digits)  
+        - PP: position_num (01, 02, 03)
+        - GG: group_counter (00-99)
+        
+        Args:
+            position_num: Position number in group (1, 2, or 3)
+            group_counter: Group counter (0-99)
+            
+        Returns:
+            int: Unique magic number
+        """
+        # Hash bot_id to 4 digits
+        bot_hash = abs(hash(self.bot_id)) % 10000
+        
+        # Combine into 8-digit number
+        magic = int(f"{bot_hash:04d}{position_num:02d}{group_counter:02d}")
+        
+        return magic
+    
+    def _get_position_by_magic(self, position_num: int, group_counter: int):
+        """Get specific position by magic number
+        
+        Args:
+            position_num: Position number in group (1, 2, or 3)
+            group_counter: Group counter (0-99)
+            
+        Returns:
+            MT5 position object or None
+        """
+        magic = self._generate_magic(position_num, group_counter)
+        positions = mt5.positions_get(magic=magic)
+        
+        if positions and len(positions) > 0:
+            return positions[0]
+        return None
+    
+    def _get_group_positions_by_magic(self, group_counter: int) -> dict:
+        """
+        Get all 3 positions of a group by magic number
+        
+        Args:
+            group_counter: Group counter (0-99)
+            
+        Returns:
+            dict: {position_num: mt5_position, ...}
+        """
+        group_positions = {}
+        
+        for pos_num in [1, 2, 3]:
+            pos = self._get_position_by_magic(pos_num, group_counter)
+            if pos:
+                group_positions[pos_num] = pos
+        
+        return group_positions
+    
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals for graceful exit"""
+        print(f"\n⚠️  Received signal {signum}, initiating graceful shutdown...")
+        self.running = False
+    
+    def _cleanup(self):
+        """Cleanup resources on shutdown"""
+        print("\n🧹 Cleaning up resources...")
+        
+        # 1. Stop watchdog
+        if self.watchdog:
+            try:
+                self.watchdog.stop()
+            except Exception as e:
+                print(f"⚠️  Error stopping watchdog: {e}")
+        
+        # 2. MT5 connection (managed by singleton - don't shutdown here)
+        # The MT5Manager singleton maintains the connection for all bots
+        # Only shutdown when entire app closes (in MainWindow.closeEvent)
+        if self.mt5_connected:
+            print("✅ Bot disconnected from shared MT5 connection")
+        
+        # 3. Close database
+        if self.db:
+            try:
+                self.db.close()
+                print("✅ Database connection closed")
+            except Exception as e:
+                print(f"⚠️  Error closing database: {e}")
+        
+        # 4. Send shutdown notification
+        if self.telegram_notifier:
+            try:
+                self.send_telegram("🛑 <b>Bot Stopped</b>\n\nBot has been shut down gracefully.")
+                # Wait for queued messages to be sent
+                self.telegram_notifier.wait_for_queue(timeout=5)
+                print("✅ Shutdown notification sent")
+                # Shutdown the queue processor
+                self.telegram_notifier.shutdown()
+                print("✅ Telegram notifier shut down")
+            except Exception as e:
+                print(f"⚠️  Error sending notification: {e}")
+        
+        print("✅ Cleanup complete")
+    
+    def _get_position_group_model(self):
+        """Helper to get PositionGroup model class (cached import)"""
+        if not hasattr(self, '_PositionGroup'):
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
+                from models.position_group import PositionGroup
+                self._PositionGroup = PositionGroup
+            except Exception as e:
+                print(f"⚠️  Could not import PositionGroup model: {e}")
+                self._PositionGroup = None
+        return self._PositionGroup
+    
     def _log_position_opened(self, ticket, position_type, volume, entry_price,
-                             sl, tp, regime, comment='', position_group_id=None, position_num=0):
+                             sl, tp, regime, comment='', position_group_id=None, position_num=0, magic_number=None):
         """Log when position is opened"""
         open_time = datetime.now()
+        current_timestamp = time.time()
         
         self.positions_tracker[ticket] = {
             'ticket': ticket,
@@ -181,7 +454,14 @@ class LiveBotMT5FullAuto:
             'regime': regime,
             'duration': None,
             'status': 'OPEN',
-            'comment': comment
+            'comment': comment,
+            'position_group_id': position_group_id,
+            'position_num': position_num,
+            'magic_number': magic_number,
+            # CRITICAL: Add timestamps for SL modification protection
+            'opened_at': current_timestamp,  # Unix timestamp for precise age calculation
+            'confirmed_at': None,            # Will be set after broker confirmation
+            'last_sl_modify_at': None        # Track last SL modification time
         }
         
         # Also save to database if enabled
@@ -189,12 +469,15 @@ class LiveBotMT5FullAuto:
             try:
                 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
                 from models.trade_record import TradeRecord
-                
+
+                # FIX: Ensure consistent order_id format with DRY- prefix for dry-run
+                order_id_str = f"DRY-{ticket}" if self.dry_run else str(ticket)
+
                 trade = TradeRecord(
                     trade_id=0,  # Will be auto-assigned by database
                     bot_id=self.bot_id,
                     symbol=self.symbol,  # Add symbol field
-                    order_id=str(ticket),
+                    order_id=order_id_str,
                     open_time=open_time,
                     trade_type=position_type,
                     amount=volume,
@@ -205,14 +488,15 @@ class LiveBotMT5FullAuto:
                     market_regime=regime,
                     comment=comment,
                     position_group_id=position_group_id,
-                    position_num=position_num
+                    position_num=position_num,
+                    magic_number=magic_number
                 )
                 self.db.add_trade(trade)
-                print(f"📊 Position saved to database: Ticket={ticket}")
+                print(f"📊 Position saved to database: Ticket={ticket}, OrderID={order_id_str}, Magic={magic_number}")
             except Exception as e:
                 print(f"⚠️  Failed to save position to database: {e}")
         
-        print(f"📊 Logged opened position: Ticket={ticket}, Type={position_type}, Entry={entry_price}")
+        print(f"📊 Logged opened position: Ticket={ticket}, Type={position_type}, Entry={entry_price}, Magic={magic_number}")
     
     def _log_position_closed(self, ticket, close_price, profit, status='CLOSED'):
         """Log when position is closed"""
@@ -239,8 +523,14 @@ class LiveBotMT5FullAuto:
             pips = (pos['entry_price'] - close_price) * 10
         pos['pips'] = round(pips, 1)
         
-        # Calculate profit percentage (approximate)
-        profit_pct = (pips / pos['entry_price']) * 100 if pos['entry_price'] > 0 else 0
+        # Calculate profit percentage - fixed formula
+        if pos['entry_price'] > 0:
+            if pos['type'] == 'BUY':
+                profit_pct = ((close_price - pos['entry_price']) / pos['entry_price']) * 100
+            else:
+                profit_pct = ((pos['entry_price'] - close_price) / pos['entry_price']) * 100
+        else:
+            profit_pct = 0.0
         
         # Write to CSV
         self._write_trade_to_csv(pos)
@@ -250,12 +540,15 @@ class LiveBotMT5FullAuto:
             try:
                 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'trading_app'))
                 from models.trade_record import TradeRecord
-                
+
+                # FIX: Use same order_id format as when position was opened
+                order_id_str = f"DRY-{ticket}" if self.dry_run else str(ticket)
+
                 trade = TradeRecord(
                     trade_id=0,  # Not used for update
                     bot_id=self.bot_id,
                     symbol=self.symbol,  # Add symbol field
-                    order_id=str(ticket),
+                    order_id=order_id_str,
                     open_time=pos['open_time'],
                     close_time=close_time,
                     duration_hours=pos['duration'],
@@ -269,10 +562,13 @@ class LiveBotMT5FullAuto:
                     profit_percent=profit_pct,
                     status=status,
                     market_regime=pos['regime'],
-                    comment=pos['comment']
+                    comment=pos['comment'],
+                    position_group_id=pos.get('position_group_id'),  # CRITICAL: Preserve group info
+                    position_num=pos.get('position_num', 0),  # CRITICAL: Preserve position number
+                    magic_number=pos.get('magic_number')  # CRITICAL: Preserve magic number
                 )
                 self.db.update_trade(trade)
-                print(f"📊 Position updated in database: Ticket={ticket}, Status={status}")
+                print(f"📊 Position updated in database: Ticket={ticket}, OrderID={order_id_str}, Status={status}")
             except Exception as e:
                 print(f"⚠️  Failed to update position in database: {e}")
         
@@ -300,8 +596,44 @@ class LiveBotMT5FullAuto:
                 trade_data['regime'],
                 trade_data['duration'],
                 trade_data['status'],
-                trade_data['comment']
+                trade_data['comment'],
+                trade_data.get('position_group_id', ''),  # Add group ID
+                trade_data.get('position_num', 0)         # Add position number
             ])
+    
+    def _get_trade_id_by_order(self, order_id):
+        """Get trade_id from database by order_id (cached for performance)"""
+        if not self.use_database or not self.db:
+            return None
+        
+        try:
+            # Create cache if it doesn't exist
+            if not hasattr(self, '_trade_id_cache'):
+                self._trade_id_cache = {}
+                self._cache_timestamp = datetime.now()
+            
+            # Refresh cache every 60 seconds
+            if (datetime.now() - self._cache_timestamp).total_seconds() > 60:
+                self._trade_id_cache = {}
+                self._cache_timestamp = datetime.now()
+            
+            # Check cache first
+            order_id_str = str(order_id)
+            if order_id_str in self._trade_id_cache:
+                return self._trade_id_cache[order_id_str]
+            
+            # Query database
+            trades = self.db.get_trades(self.bot_id, limit=1000)
+            for trade in trades:
+                if trade.order_id == order_id_str:
+                    # Cache the result
+                    self._trade_id_cache[order_id_str] = (trade.trade_id, trade)
+                    return (trade.trade_id, trade)
+            
+            return None
+        except Exception as e:
+            print(f"⚠️  Error looking up trade_id: {e}")
+            return None
     
     def _log_tp_hit(self, ticket, tp_level, current_price):
         """Log when a TP level is hit"""
@@ -331,6 +663,8 @@ class LiveBotMT5FullAuto:
             writer.writerow([
                 datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 ticket,
+                pos.get('position_num', ''),
+                pos.get('position_group_id', ''),
                 tp_level,
                 pos['type'],
                 pos['volume'],
@@ -338,12 +672,32 @@ class LiveBotMT5FullAuto:
                 pos['tp'],
                 current_price,
                 pos['sl'],
+                'TRUE' if pos.get('trailing_stop_active', False) else 'FALSE',
                 round(profit, 2),
-                round(pips, 1),
-                pos['regime'],
-                round(duration_minutes, 1),
-                pos['comment']
+                round((profit / (pos['entry_price'] * pos['volume']) * 100) if pos['entry_price'] > 0 else 0, 2)
             ])
+        
+        # Log TP hit event to database
+        if self.use_database and self.db:
+            try:
+                result = self._get_trade_id_by_order(ticket)
+                if result:
+                    trade_id, _ = result
+                    details = json.dumps({
+                        'price': current_price,
+                        'profit': round(profit, 2),
+                        'pips': round(pips, 1)
+                    })
+                    self.db.log_trade_event(
+                        trade_id=trade_id,
+                        bot_id=self.bot_id,
+                        event_type='TP_HIT',
+                        position_num=pos.get('position_num'),
+                        position_group_id=pos.get('position_group_id'),
+                        details=details
+                    )
+            except Exception as e:
+                print(f"⚠️  Failed to log TP hit to database: {e}")
         
         print(f"🎯 TP HIT LOGGED: Ticket={ticket}, Level={tp_level}, Price={current_price:.2f}, Pips={pips:.1f}")
     
@@ -351,11 +705,17 @@ class LiveBotMT5FullAuto:
         """Sync database positions with actual exchange positions
         
         Detects positions that were manually closed on exchange but still show as OPEN in database
+        Also syncs manual changes to TP/SL levels
         """
         if not self.use_database or not self.db or self.dry_run or not self.mt5_connected:
             return
         
         try:
+            # Ensure MT5 connection is alive before querying
+            if not mt5_manager.ensure_connection():
+                print(f"⚠️  MT5 connection lost - skipping position sync")
+                return
+            
             # Get all OPEN positions from database
             db_trades = self.db.get_open_trades(self.bot_id)
             if not db_trades:
@@ -363,7 +723,14 @@ class LiveBotMT5FullAuto:
             
             # Get current open positions from MT5
             open_positions = mt5.positions_get(symbol=self.symbol)
-            mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+            
+            # Check if positions_get failed (returns None on error)
+            if open_positions is None:
+                print(f"⚠️  Failed to get positions from MT5 - skipping position sync")
+                return
+            
+            # Create a mapping of ticket to MT5 position for easy lookup
+            mt5_positions_map = {pos.ticket: pos for pos in open_positions}
             
             # Check each database position
             for trade in db_trades:
@@ -373,7 +740,7 @@ class LiveBotMT5FullAuto:
                     continue
                 
                 # If position is in database but not on MT5, it was closed manually
-                if ticket not in mt5_position_tickets:
+                if ticket not in mt5_positions_map:
                     print(f"📊 Position #{ticket} manually closed on MT5 - syncing database...")
                     
                     # Get current price for profit calculation
@@ -381,11 +748,11 @@ class LiveBotMT5FullAuto:
                     if tick:
                         close_price = tick.bid if trade.trade_type == 'BUY' else tick.ask
                         
-                        # Calculate profit
+                        # Calculate profit for XAUUSD (1 lot = 100 oz, point value = $100)
                         if trade.trade_type == 'BUY':
-                            profit = (close_price - trade.entry_price) * trade.amount
+                            profit = (close_price - trade.entry_price) * trade.amount * 100
                         else:
-                            profit = (trade.entry_price - close_price) * trade.amount
+                            profit = (trade.entry_price - close_price) * trade.amount * 100
                     else:
                         close_price = trade.entry_price
                         profit = 0.0
@@ -399,8 +766,141 @@ class LiveBotMT5FullAuto:
                     )
                     
                     print(f"✅ Database synced for position #{ticket}")
+                else:
+                    # Position still open - check if TP/SL were modified manually in MT5
+                    mt5_pos = mt5_positions_map[ticket]
+                    
+                    # Check if SL or TP differs between MT5 and database
+                    sl_changed = False
+                    tp_changed = False
+                    
+                    # Get actual values (convert None to 0.0 for comparison)
+                    mt5_sl = mt5_pos.sl if mt5_pos.sl is not None else 0.0
+                    db_sl = trade.stop_loss if trade.stop_loss is not None else 0.0
+                    mt5_tp = mt5_pos.tp if mt5_pos.tp is not None else 0.0
+                    db_tp = trade.take_profit if trade.take_profit is not None else 0.0
+                    
+                    # Check SL difference (allow 0.01 tolerance)
+                    if abs(mt5_sl - db_sl) > 0.01:
+                        sl_changed = True
+                    
+                    # Check TP difference (allow 0.01 tolerance)
+                    if abs(mt5_tp - db_tp) > 0.01:
+                        tp_changed = True
+                    
+                    # Update database if TP or SL changed
+                    if sl_changed or tp_changed:
+                        print(f"📊 Position #{ticket} TP/SL modified in MT5 - syncing database...")
+                        
+                        # Update the trade record
+                        trade.stop_loss = mt5_sl
+                        trade.take_profit = mt5_tp
+                        
+                        # Update in database
+                        self.db.update_trade(trade)
+                        
+                        # Also update in-memory tracker if exists
+                        if ticket in self.positions_tracker:
+                            self.positions_tracker[ticket]['sl'] = trade.stop_loss
+                            self.positions_tracker[ticket]['tp'] = trade.take_profit
+                        
+                        changes = []
+                        if sl_changed:
+                            changes.append(f"SL: {trade.stop_loss:.2f}")
+                        if tp_changed:
+                            changes.append(f"TP: {trade.take_profit:.2f}")
+                        
+                        print(f"✅ Position #{ticket} synced: {', '.join(changes)}")
+                        
         except Exception as e:
             print(f"⚠️  Error syncing positions with exchange: {e}")
+
+    def _restore_positions_from_database(self):
+        """Restore positions from database on bot startup
+        
+        This ensures position_group_id and position_num are preserved after bot restart
+        """
+        if not self.use_database or not self.db:
+            print("   Database not enabled - no positions to restore")
+            return
+        
+        try:
+            # Get all OPEN positions from database
+            db_trades = self.db.get_open_trades(self.bot_id)
+            
+            if not db_trades:
+                print("   No open positions in database")
+                return
+            
+            restored_count = 0
+            
+            for trade in db_trades:
+                # Extract ticket
+                try:
+                    if isinstance(trade.order_id, str) and trade.order_id.startswith('DRY-'):
+                        ticket = trade.order_id  # Keep as string for dry-run
+                    else:
+                        ticket = int(trade.order_id)
+                except (ValueError, TypeError):
+                    ticket = trade.order_id
+                
+                # Restore to in-memory tracker with all metadata
+                self.positions_tracker[ticket] = {
+                    'ticket': ticket,
+                    'open_time': trade.open_time,
+                    'close_time': None,
+                    'type': trade.trade_type,
+                    'volume': trade.amount,
+                    'entry_price': trade.entry_price,
+                    'sl': trade.stop_loss,
+                    'tp': trade.take_profit,
+                    'close_price': None,
+                    'profit': None,
+                    'pips': None,
+                    'regime': trade.market_regime,
+                    'duration': None,
+                    'status': trade.status,
+                    'comment': trade.comment or '',
+                    'position_group_id': trade.position_group_id,  # CRITICAL: Restore group_id
+                    'position_num': trade.position_num,             # CRITICAL: Restore position_num
+                    'opened_at': time.time() - 3600,  # Assume opened at least 1 hour ago (safe for age checks)
+                    'confirmed_at': time.time() - 3600,
+                    'last_sl_modify_at': None
+                }
+                
+                restored_count += 1
+            
+            print(f"   ✅ Restored {restored_count} position(s) from database")
+            
+            # Also restore position groups
+            if self.use_3_position_mode:
+                # Get all position groups for this bot
+                group_ids = set(pos.get('position_group_id') for pos in self.positions_tracker.values() 
+                               if pos.get('position_group_id'))
+                
+                for group_id in group_ids:
+                    try:
+                        db_group = self.db.get_position_group(group_id)
+                        if db_group:
+                            self.position_groups[group_id] = {
+                                'tp1_hit': db_group.tp1_hit,
+                                'sl_hit': False,  # If positions still open, SL wasn't hit
+                                'max_price': db_group.max_price,
+                                'min_price': db_group.min_price,
+                                'positions': [ticket for ticket, pos in self.positions_tracker.items() 
+                                            if pos.get('position_group_id') == group_id],
+                                'entry_price': db_group.entry_price,
+                                'trade_type': db_group.trade_type,
+                                'created_at': time.time() - 3600  # Safe for age checks
+                            }
+                            print(f"   ✅ Restored position group {group_id[:8]}")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not restore position group {group_id[:8]}: {e}")
+                        
+        except Exception as e:
+            print(f"   ⚠️  Error restoring positions from database: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _update_3position_trailing(self, positions_to_check, current_price):
         """
@@ -411,7 +911,7 @@ class LiveBotMT5FullAuto:
         - When any position reaches TP1, activate trailing for Pos 2 & 3
         - Trailing formula: 50% retracement from max profit
         """
-        if not self.use_3_position_mode:
+        if not self.use_3_position_mode or not self.use_trailing_stops:
             return
 
         # Group positions by position_group_id
@@ -427,39 +927,243 @@ class LiveBotMT5FullAuto:
 
         # Process each group
         for group_id, group_positions in groups.items():
-            # Initialize group tracking if needed
+            # CRITICAL: Skip groups where SL was hit (all positions closed)
+            if group_id in self.position_groups and self.position_groups[group_id].get('sl_hit', False):
+                continue  # Skip this group - SL already hit, no trailing needed
+            
+            # Initialize group tracking if needed (CRITICAL FIX #4: Restore from DB)
             if group_id not in self.position_groups:
-                # Find entry price from any position in group
-                entry_price = group_positions[0][1]['entry_price']
-                self.position_groups[group_id] = {
-                    'tp1_hit': False,
-                    'max_price': entry_price,
-                    'min_price': entry_price,
-                    'positions': [p[0] for p in group_positions]
-                }
+                # Try to restore from database first
+                restored_group = None
+                if self.use_database and self.db:
+                    try:
+                        restored_group = self.db.get_position_group(group_id)
+                        if restored_group:
+                            print(f"✅ Restored position group {group_id[:8]} from database")
+                            print(f"   TP1 hit: {restored_group.tp1_hit}, Max: {restored_group.max_price}, Min: {restored_group.min_price}")
+                    except Exception as e:
+                        print(f"⚠️  Could not restore position group from DB: {e}")
+                
+                if restored_group:
+                    # Use restored data
+                    self.position_groups[group_id] = {
+                        'tp1_hit': restored_group.tp1_hit,
+                        'sl_hit': False,  # Always reset on restore (if positions still open, SL wasn't hit)
+                        'max_price': restored_group.max_price,
+                        'min_price': restored_group.min_price,
+                        'positions': [p[0] for p in group_positions],
+                        'entry_price': restored_group.entry_price,
+                        'trade_type': restored_group.trade_type,
+                        'created_at': time.time()  # CRITICAL: Add timestamp
+                    }
+                else:
+                    # Create new group
+                    entry_price = group_positions[0][1]['entry_price']
+                    trade_type = group_positions[0][1]['type']
+                    current_timestamp = time.time()
+                    self.position_groups[group_id] = {
+                        'tp1_hit': False,
+                        'sl_hit': False,  # Track if SL was hit for this group
+                        'max_price': entry_price,
+                        'min_price': entry_price,
+                        'positions': [p[0] for p in group_positions],
+                        'entry_price': entry_price,
+                        'trade_type': trade_type,
+                        'created_at': current_timestamp  # CRITICAL: Add timestamp for age checks
+                    }
+                    
+                    # Save to database
+                    if self.use_database and self.db:
+                        try:
+                            PositionGroup = self._get_position_group_model()
+                            if PositionGroup:
+                                new_group = PositionGroup(
+                                group_id=group_id,
+                                bot_id=self.bot_id,
+                                tp1_hit=False,
+                                entry_price=entry_price,
+                                max_price=entry_price,
+                                min_price=entry_price,
+                                trade_type=trade_type,
+                                created_at=datetime.now(),
+                                updated_at=datetime.now()
+                            )
+                            self.db.save_position_group(new_group)
+                            print(f"✅ Saved new position group {group_id[:8]} to database")
+                        except Exception as e:
+                            print(f"⚠️  Could not save position group to DB: {e}")
 
             group_info = self.position_groups[group_id]
+            
+            # ===== CRITICAL CHECK #1: Group age protection =====
+            # DO NOT modify SL for at least 60 seconds after group creation
+            group_age = time.time() - group_info.get('created_at', 0)
+            if group_age < MIN_POSITION_AGE_FOR_TRAILING:
+                # Silently skip - do not spam logs during cooldown period
+                continue
+            
+            # ===== CRITICAL CHECK #2: Individual position age protection =====
+            # Verify each position is old enough before allowing modifications
+            all_positions_ready = True
+            for ticket, pos_data in group_positions:
+                if ticket in self.positions_tracker:
+                    pos_opened_at = self.positions_tracker[ticket].get('opened_at', 0)
+                    if pos_opened_at > 0:
+                        pos_age = time.time() - pos_opened_at
+                        if pos_age < MIN_POSITION_AGE_FOR_SL_MODIFY:
+                            all_positions_ready = False
+                            break
+            
+            if not all_positions_ready:
+                # At least one position is too young - skip this group
+                continue
+            
+            # ===== ENHANCED LOGGING: Group state for debugging =====
+            if group_age < 120:  # Log for first 2 minutes only to avoid spam
+                print(f"\n🔍 Group {group_id[:8]} passed age checks (age: {group_age:.1f}s)")
+                print(f"   Entry: {group_info['entry_price']:.2f}, Type: {group_info['trade_type']}")
+                print(f"   TP1 hit: {group_info['tp1_hit']}")
+                print(f"   Max price: {group_info['max_price']:.2f}, Min price: {group_info['min_price']:.2f}")
+                print(f"   Positions in group: {len(group_positions)}")
 
-            # Update max/min price
+            # Update max/min price (CRITICAL FIX #4: Save to DB)
+            price_updated = False
             if group_positions[0][1]['type'] == 'BUY':
                 if current_price > group_info['max_price']:
                     group_info['max_price'] = current_price
+                    price_updated = True
             else:  # SELL
                 if current_price < group_info['min_price']:
                     group_info['min_price'] = current_price
+                    price_updated = True
+            
+            # Save to database if price was updated
+            if price_updated and self.use_database and self.db:
+                try:
+                    PositionGroup = self._get_position_group_model()
+                    if PositionGroup:
+                        updated_group = PositionGroup(
+                        group_id=group_id,
+                        bot_id=self.bot_id,
+                        tp1_hit=group_info['tp1_hit'],
+                        entry_price=group_info['entry_price'],
+                        max_price=group_info['max_price'],
+                        min_price=group_info['min_price'],
+                        trade_type=group_info['trade_type'],
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    self.db.update_position_group(updated_group)
+                except Exception as e:
+                    print(f"⚠️  Could not update position group in DB: {e}")
 
-            # Check if any position reached TP1
+            # Check if Position 1 is closed (not in group anymore) OR price reached TP1
+            tp1_just_hit = False
+            pos1_found = False
+            pos1_status = None
             for ticket, pos_data in group_positions:
                 if pos_data.get('position_num') == 1:
+                    pos1_found = True
+                    pos1_status = pos_data.get('status', 'OPEN')
                     tp1 = pos_data['tp']
-                    if pos_data['type'] == 'BUY':
-                        if current_price >= tp1:
+
+                    if not group_info['tp1_hit']:  # Only check if not already hit
+                        # Activate trailing if position 1 is being closed/processed
+                        if pos1_status != 'OPEN':
                             group_info['tp1_hit'] = True
-                            print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
-                    else:  # SELL
-                        if current_price <= tp1:
-                            group_info['tp1_hit'] = True
-                            print(f"🎯 Group {group_id[:8]} TP1 reached! Activating trailing for Pos 2 & 3")
+                            tp1_just_hit = True
+                            print(f"🎯 Group {group_id[:8]} Position 1 closing ({pos1_status})! Activating trailing for Pos 2 & 3")
+                        # Or if price reached TP1 (fallback for same-cycle activation)
+                        elif pos_data['type'] == 'BUY':
+                            if current_price >= tp1:
+                                group_info['tp1_hit'] = True
+                                tp1_just_hit = True
+                                print(f"🎯 Group {group_id[:8]} TP1 reached at {current_price:.2f}! Activating trailing for Pos 2 & 3")
+                        else:  # SELL
+                            if current_price <= tp1:
+                                group_info['tp1_hit'] = True
+                                tp1_just_hit = True
+                                print(f"🎯 Group {group_id[:8]} TP1 reached at {current_price:.2f}! Activating trailing for Pos 2 & 3")
+
+            # If Position 1 not found in group (already closed), check WHY it closed
+            if not pos1_found and not group_info['tp1_hit']:
+                # CRITICAL: Don't activate trailing if position 1 closed by SL or error!
+                # Only activate if it was genuinely closed by TP1
+                
+                # Try to find position 1 in closed trades
+                pos1_closed_by_tp1 = False
+                
+                # Check in-memory tracker first
+                for ticket, pos_data in list(self.positions_tracker.items()):
+                    if (pos_data.get('position_group_id') == group_id and 
+                        pos_data.get('position_num') == 1 and
+                        pos_data.get('status') in ['TP1', 'TP1_PROCESSING']):
+                        pos1_closed_by_tp1 = True
+                        print(f"✅ Group {group_id[:8]} Position 1 confirmed closed by TP1 (from tracker)")
+                        break
+                
+                # If not found in tracker, check database
+                if not pos1_closed_by_tp1 and self.use_database and self.db:
+                    try:
+                        # Get all trades for this bot (using correct method name)
+                        all_trades = self.db.get_trades(self.bot_id, limit=1000)
+                        for trade in all_trades:
+                            if (trade.position_group_id == group_id and 
+                                trade.position_num == 1 and
+                                trade.status in ['TP1', 'TP1_PROCESSING', 'CLOSED']):
+                                # Check if close price was near TP1
+                                if trade.close_price:
+                                    # For BUY: close price should be >= TP1 (or very close)
+                                    # For SELL: close price should be <= TP1 (or very close)
+                                    tp1_price = trade.take_profit
+                                    if group_info['trade_type'] == 'BUY':
+                                        if trade.close_price >= tp1_price * 0.999:  # Within 0.1% of TP1
+                                            pos1_closed_by_tp1 = True
+                                            print(f"✅ Group {group_id[:8]} Position 1 confirmed closed by TP1 (from DB)")
+                                    else:  # SELL
+                                        if trade.close_price <= tp1_price * 1.001:  # Within 0.1% of TP1
+                                            pos1_closed_by_tp1 = True
+                                            print(f"✅ Group {group_id[:8]} Position 1 confirmed closed by TP1 (from DB)")
+                                break
+                    except Exception as e:
+                        print(f"⚠️  Could not check position 1 status in DB: {e}")
+                
+                # Only activate trailing if Position 1 was confirmed to close by TP1
+                if pos1_closed_by_tp1:
+                    group_info['tp1_hit'] = True
+                    tp1_just_hit = True
+                    print(f"🎯 Group {group_id[:8]} Position 1 closed by TP1! Activating trailing for Pos 2 & 3")
+                else:
+                    # Position 1 closed but NOT by TP1 - do NOT activate trailing
+                    # Only log this warning ONCE per group to prevent spam
+                    if group_id not in self.logged_closed_groups:
+                        print(f"⚠️  Group {group_id[:8]} Position 1 closed but NOT by TP1 - trailing NOT activated")
+                        print(f"   This usually means Position 1 was closed by SL or manually")
+                        print(f"   Positions 2 & 3 will keep their original SL")
+                        self.logged_closed_groups.add(group_id)  # Mark as logged to prevent repeated warnings
+
+            
+            # Save tp1_hit to database
+            if tp1_just_hit and self.use_database and self.db:
+                try:
+                    PositionGroup = self._get_position_group_model()
+                    if PositionGroup:
+                        updated_group = PositionGroup(
+                        group_id=group_id,
+                        bot_id=self.bot_id,
+                        tp1_hit=True,
+                        entry_price=group_info['entry_price'],
+                        max_price=group_info['max_price'],
+                        min_price=group_info['min_price'],
+                        trade_type=group_info['trade_type'],
+                        tp1_close_price=current_price,
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    self.db.update_position_group(updated_group)
+                    print(f"✅ Saved TP1 hit to database for group {group_id[:8]}")
+                except Exception as e:
+                    print(f"⚠️  Could not save TP1 hit to DB: {e}")
 
             # Update trailing stops for Pos 2 & 3 if TP1 hit
             if group_info['tp1_hit']:
@@ -468,28 +1172,242 @@ class LiveBotMT5FullAuto:
                     if pos_num in [2, 3]:  # Only Pos 2 and 3 trail
                         entry_price = pos_data['entry_price']
 
+                        # Mark trailing stop as active in database
+                        if self.use_database and self.db:
+                            try:
+                                # Find the trade in database and update trailing_stop_active flag
+                                open_trades = self.db.get_open_trades(self.bot_id)
+                                for trade in open_trades:
+                                    if trade.order_id == str(ticket) and not trade.trailing_stop_active:
+                                        trade.trailing_stop_active = True
+                                        self.db.update_trade(trade)
+                                        print(f"✓ Pos {pos_num} (#{ticket}) marked as trailing stop active in database")
+                                        
+                                        # Log trailing activation event
+                                        try:
+                                            details = json.dumps({
+                                                'max_price': group_info['max_price'],
+                                                'entry_price': entry_price
+                                            })
+                                            self.db.log_trade_event(
+                                                trade_id=trade.trade_id,
+                                                bot_id=self.bot_id,
+                                                event_type='TRAILING_ACTIVATED',
+                                                position_num=pos_num,
+                                                position_group_id=group_id,
+                                                details=details
+                                            )
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to log trailing activation: {e}")
+                                        
+                                        break  # Exit loop after updating the target trade
+                            except Exception as e:
+                                print(f"⚠️  Error updating trailing_stop_active in DB: {e}")
+
                         if pos_data['type'] == 'BUY':
                             # Trailing stop: configurable % retracement from max price
                             new_sl = group_info['max_price'] - (group_info['max_price'] - entry_price) * self.trailing_stop_pct
 
                             # Only update if new SL is better (higher) than current
                             if new_sl > pos_data['sl']:
-                                print(f"   📊 Pos {pos_num} trailing SL updated: {pos_data['sl']:.2f} → {new_sl:.2f}")
-                                pos_data['sl'] = new_sl
-                                # Update in tracker
+                                # ===== CRITICAL VALIDATION #1: Check recent modification =====
                                 if ticket in self.positions_tracker:
-                                    self.positions_tracker[ticket]['sl'] = new_sl
+                                    last_modify = self.positions_tracker[ticket].get('last_sl_modify_at', 0)
+                                    if last_modify > 0:
+                                        time_since_last = time.time() - last_modify
+                                        if time_since_last < MIN_SL_MODIFY_INTERVAL:
+                                            print(f"   ⏳ Pos {pos_num} SL modified too recently ({time_since_last:.1f}s ago), skipping")
+                                            continue
+                                
+                                # ===== CRITICAL VALIDATION #2: Minimum distance from entry =====
+                                distance_from_entry = abs(new_sl - entry_price)
+                                min_distance_from_entry = entry_price * 0.003  # minimum 0.3% from entry
+                                if distance_from_entry < min_distance_from_entry:
+                                    print(f"   ⚠️  Pos {pos_num} new SL too close to entry: {distance_from_entry:.2f} < {min_distance_from_entry:.2f}, skipping")
+                                    continue
+                                
+                                # ===== CRITICAL VALIDATION #3: Minimum distance from current price =====
+                                # Check minimum distance from current price (stop level)
+                                symbol_info = mt5.symbol_info(self.symbol)
+                                if symbol_info:
+                                    stop_level = symbol_info.trade_stops_level
+                                    point = symbol_info.point
+                                    min_distance_broker = stop_level * point
+                                    min_distance_custom = current_price * 0.002  # minimum 0.2% from current price
+                                    min_distance = max(min_distance_broker, min_distance_custom)
+
+                                    # For BUY: SL must be at least min_distance below current price
+                                    distance_from_price = current_price - new_sl
+                                    if distance_from_price < min_distance:
+                                        # SL too close to current price - skip this update
+                                        print(f"   ⚠️  Pos {pos_num} SL too close to price: {distance_from_price:.2f} < {min_distance:.2f}, skipping")
+                                        continue
+
+                                old_sl = pos_data['sl']
+                                print(f"   📊 Pos {pos_num} trailing SL: {old_sl:.2f} → {new_sl:.2f} (entry: {entry_price:.2f}, max: {group_info['max_price']:.2f})")
+
+
+                                # Update SL on MT5 broker (CRITICAL FIX #3)
+                                sl_updated_on_broker = False
+                                if not self.dry_run:
+                                    try:
+                                        request = {
+                                            "action": mt5.TRADE_ACTION_SLTP,
+                                            "position": ticket,
+                                            "sl": new_sl,
+                                            "tp": pos_data['tp'],
+                                            "symbol": self.symbol,
+                                            "magic": 234000,
+                                        }
+                                        result = mt5.order_send(request)
+                                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                            sl_updated_on_broker = True
+                                            print(f"   ✅ SL updated on MT5 broker: {new_sl:.2f}")
+                                        else:
+                                            error_msg = result.comment if result else "No result"
+                                            print(f"   ❌ Failed to update SL on MT5: {error_msg}")
+                                    except Exception as e:
+                                        print(f"   ❌ Error updating SL on MT5: {e}")
+                                else:
+                                    sl_updated_on_broker = True  # Simulate success in dry-run
+                                
+                                # Only update in memory if broker update succeeded
+                                if sl_updated_on_broker:
+                                    pos_data['sl'] = new_sl
+                                    # Update in tracker
+                                    if ticket in self.positions_tracker:
+                                        self.positions_tracker[ticket]['sl'] = new_sl
+                                        self.positions_tracker[ticket]['last_sl_modify_at'] = time.time()  # CRITICAL: Record modification time (BUY)
+                                    
+                                    # Update in database
+                                    if self.use_database and self.db:
+                                        try:
+                                            open_trades = self.db.get_open_trades(self.bot_id)
+                                            for trade in open_trades:
+                                                if trade.order_id == str(ticket):
+                                                    trade.stop_loss = new_sl
+                                                    self.db.update_trade(trade)
+                                                    break
+                                        except Exception as e:
+                                            print(f"   ⚠️  Failed to update SL in database: {e}")
+                                    
+                                    # Send Telegram notification for trailing stop update
+                                    if self.telegram_bot:
+                                        message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                        message += f"Ticket: #{ticket}\n"
+                                        message += f"Position: {pos_num}/3\n"
+                                        message += f"Type: {pos_data['type']}\n"
+                                        message += f"Entry: ${entry_price:.2f}\n"
+                                        message += f"New SL: ${new_sl:.2f}\n"
+                                        message += f"Max Price: ${group_info['max_price']:.2f}"
+                                        try:
+                                            self.send_telegram(message)
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to send Telegram notification: {e}")
+                                else:
+                                    print(f"   ⚠️  SL not updated in memory - broker update failed")
                         else:  # SELL
                             # Trailing stop: configurable % retracement from min price
                             new_sl = group_info['min_price'] + (entry_price - group_info['min_price']) * self.trailing_stop_pct
 
                             # Only update if new SL is better (lower) than current
                             if new_sl < pos_data['sl']:
-                                print(f"   📊 Pos {pos_num} trailing SL updated: {pos_data['sl']:.2f} → {new_sl:.2f}")
-                                pos_data['sl'] = new_sl
-                                # Update in tracker
+                                # ===== CRITICAL VALIDATION #1: Check recent modification =====
                                 if ticket in self.positions_tracker:
-                                    self.positions_tracker[ticket]['sl'] = new_sl
+                                    last_modify = self.positions_tracker[ticket].get('last_sl_modify_at', 0)
+                                    if last_modify > 0:
+                                        time_since_last = time.time() - last_modify
+                                        if time_since_last < MIN_SL_MODIFY_INTERVAL:
+                                            print(f"   ⏳ Pos {pos_num} SL modified too recently ({time_since_last:.1f}s ago), skipping")
+                                            continue
+                                
+                                # ===== CRITICAL VALIDATION #2: Minimum distance from entry =====
+                                distance_from_entry = abs(new_sl - entry_price)
+                                min_distance_from_entry = entry_price * 0.003  # minimum 0.3% from entry
+                                if distance_from_entry < min_distance_from_entry:
+                                    print(f"   ⚠️  Pos {pos_num} new SL too close to entry: {distance_from_entry:.2f} < {min_distance_from_entry:.2f}, skipping")
+                                    continue
+                                
+                                # ===== CRITICAL VALIDATION #3: Minimum distance from current price =====
+                                # Check minimum distance from current price (stop level)
+                                symbol_info = mt5.symbol_info(self.symbol)
+                                if symbol_info:
+                                    stop_level = symbol_info.trade_stops_level
+                                    point = symbol_info.point
+                                    min_distance_broker = stop_level * point
+                                    min_distance_custom = current_price * 0.002  # minimum 0.2% from current price
+                                    min_distance = max(min_distance_broker, min_distance_custom)
+
+                                    # For SELL: SL must be at least min_distance above current price
+                                    distance_from_price = new_sl - current_price
+                                    if distance_from_price < min_distance:
+                                        # SL too close to current price - skip this update
+                                        print(f"   ⚠️  Pos {pos_num} SL too close to price: {distance_from_price:.2f} < {min_distance:.2f}, skipping")
+                                        continue
+
+                                old_sl = pos_data['sl']
+                                print(f"   📊 Pos {pos_num} trailing SL: {old_sl:.2f} → {new_sl:.2f} (entry: {entry_price:.2f}, min: {group_info['min_price']:.2f})")
+
+
+                                # Update SL on MT5 broker (CRITICAL FIX #3)
+                                sl_updated_on_broker = False
+                                if not self.dry_run:
+                                    try:
+                                        request = {
+                                            "action": mt5.TRADE_ACTION_SLTP,
+                                            "position": ticket,
+                                            "sl": new_sl,
+                                            "tp": pos_data['tp'],
+                                            "symbol": self.symbol,
+                                            "magic": 234000,
+                                        }
+                                        result = mt5.order_send(request)
+                                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                            sl_updated_on_broker = True
+                                            print(f"   ✅ SL updated on MT5 broker: {new_sl:.2f}")
+                                        else:
+                                            error_msg = result.comment if result else "No result"
+                                            print(f"   ❌ Failed to update SL on MT5: {error_msg}")
+                                    except Exception as e:
+                                        print(f"   ❌ Error updating SL on MT5: {e}")
+                                else:
+                                    sl_updated_on_broker = True  # Simulate success in dry-run
+                                
+                                # Only update in memory if broker update succeeded
+                                if sl_updated_on_broker:
+                                    pos_data['sl'] = new_sl
+                                    # Update in tracker
+                                    if ticket in self.positions_tracker:
+                                        self.positions_tracker[ticket]['sl'] = new_sl
+                                        self.positions_tracker[ticket]['last_sl_modify_at'] = time.time()  # CRITICAL: Record modification time (SELL)
+                                    
+                                    # Update in database
+                                    if self.use_database and self.db:
+                                        try:
+                                            open_trades = self.db.get_open_trades(self.bot_id)
+                                            for trade in open_trades:
+                                                if trade.order_id == str(ticket):
+                                                    trade.stop_loss = new_sl
+                                                    self.db.update_trade(trade)
+                                                    break
+                                        except Exception as e:
+                                            print(f"   ⚠️  Failed to update SL in database: {e}")
+                                    
+                                    # Send Telegram notification for trailing stop update
+                                    if self.telegram_bot:
+                                        message = f"📊 <b>Trailing Stop Updated</b>\n\n"
+                                        message += f"Ticket: #{ticket}\n"
+                                        message += f"Position: {pos_num}/3\n"
+                                        message += f"Type: {pos_data['type']}\n"
+                                        message += f"Entry: ${entry_price:.2f}\n"
+                                        message += f"New SL: ${new_sl:.2f}\n"
+                                        message += f"Min Price: ${group_info['min_price']:.2f}"
+                                        try:
+                                            self.send_telegram(message)
+                                        except Exception as e:
+                                            print(f"⚠️  Failed to send Telegram notification: {e}")
+                                else:
+                                    print(f"   ⚠️  SL not updated in memory - broker update failed")
 
     def _check_tp_sl_realtime(self):
         """Monitor open positions in real-time and check if TP/SL levels are hit
@@ -510,12 +1428,23 @@ class LiveBotMT5FullAuto:
         if self.use_database and self.db:
             try:
                 db_trades = self.db.get_open_trades(self.bot_id)
+                if self.dry_run:
+                    # Silently monitor positions in background for dry-run mode
+                    pass
+                elif db_trades:
+                    # Log for live mode too
+                    print(f"📊 LIVE: Monitoring {len(db_trades)} open position(s) from database")
                 for trade in db_trades:
-                    # Convert order_id (stored as string) back to int for MT5 ticket
+                    # FIX: Handle dry-run order_ids with DRY- prefix
+                    # Keep ticket as string for dry-run, int for live
                     try:
-                        ticket = int(trade.order_id)
+                        # Try to extract number from DRY-xxx format
+                        if isinstance(trade.order_id, str) and trade.order_id.startswith('DRY-'):
+                            ticket = trade.order_id  # Keep as string "DRY-12345"
+                        else:
+                            ticket = int(trade.order_id)  # Convert to int for live
                     except (ValueError, TypeError):
-                        ticket = trade.order_id
+                        ticket = trade.order_id  # Fallback: keep as-is
                     
                     positions_to_check[ticket] = {
                         'tp': trade.take_profit,
@@ -555,8 +1484,21 @@ class LiveBotMT5FullAuto:
         mt5_position_tickets = set()
         
         if not self.dry_run:
+            # Ensure MT5 connection is alive before querying
+            if not mt5_manager.ensure_connection():
+                print(f"⚠️  MT5 connection lost - skipping position check")
+                return
+            
             open_positions = mt5.positions_get(symbol=self.symbol)
-            mt5_position_tickets = set(pos.ticket for pos in open_positions) if open_positions else set()
+            
+            # Check if positions_get failed (returns None on error)
+            if open_positions is None:
+                print(f"⚠️  Failed to get positions from MT5 - skipping sync check")
+                print(f"   This might be a temporary connection issue")
+                return  # Don't sync if we can't verify MT5 state
+            
+            # Build set of ticket numbers from MT5 positions
+            mt5_position_tickets = set(pos.ticket for pos in open_positions)
         else:
             # In dry_run mode, all database positions are "valid" (use string tickets)
             mt5_position_tickets = set(positions_to_check.keys())
@@ -636,13 +1578,103 @@ class LiveBotMT5FullAuto:
             tp_target = tracked_pos['tp']
             sl_target = tracked_pos['sl']
             
-            # Determine which TP level this is from the comment
-            tp_level = 'UNKNOWN'
-            if 'TP1' in tracked_pos['comment']:
+            # Skip if TP or SL is None/missing
+            if tp_target is None or sl_target is None:
+                print(f"⚠️  Position #{ticket} has missing TP ({tp_target}) or SL ({sl_target}) - skipping check")
+                continue
+            
+            # Convert to float to ensure proper comparison
+            try:
+                tp_target = float(tp_target)
+                sl_target = float(sl_target)
+            except (ValueError, TypeError) as e:
+                print(f"⚠️  Position #{ticket} has invalid TP/SL values - skipping check: {e}")
+                continue
+
+            # Check position timeout (close after max_hold_bars if TP/SL not hit)
+            if self.max_hold_bars > 0:
+                try:
+                    open_time = tracked_pos.get('open_time')
+                    if open_time:
+                        # Calculate how many bars have passed since position opened
+                        from datetime import datetime
+                        if isinstance(open_time, str):
+                            open_time = datetime.fromisoformat(open_time)
+
+                        # Get timeframe in seconds
+                        timeframe_seconds = self.check_interval  # Assumes check_interval matches timeframe
+
+                        # Calculate bars elapsed
+                        time_diff = datetime.now() - open_time
+                        bars_elapsed = int(time_diff.total_seconds() / timeframe_seconds)
+
+                        if bars_elapsed >= self.max_hold_bars:
+                            # Position timeout - close at current price
+                            print(f"⏰ Position #{ticket} timeout after {bars_elapsed} bars (max: {self.max_hold_bars})")
+                            print(f"   Closing at current price: ${current_price:.2f}")
+
+                            # Close position
+                            if not self.dry_run:
+                                # Live: close via MT5
+                                close_request = {
+                                    "action": mt5.TRADE_ACTION_DEAL,
+                                    "symbol": self.symbol,
+                                    "volume": tracked_pos['volume'],
+                                    "type": mt5.ORDER_TYPE_SELL if tracked_pos['type'] == 'BUY' else mt5.ORDER_TYPE_BUY,
+                                    "position": ticket,
+                                    "price": current_price,
+                                    "deviation": 20,
+                                    "magic": 234000,
+                                    "comment": "Timeout",
+                                    "type_time": mt5.ORDER_TIME_GTC,
+                                    "type_filling": self._get_filling_mode(),
+                                }
+                                result = mt5.order_send(close_request)
+                                if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                    print(f"   ✅ Position closed via MT5 on timeout")
+                                else:
+                                    error_msg = f"retcode={result.retcode}" if result else "result is None"
+                                    print(f"   ❌ Failed to close position on timeout: {error_msg}")
+
+                            # Calculate profit
+                            if tracked_pos['type'] == 'BUY':
+                                profit_pct = ((current_price - tracked_pos['entry_price']) / tracked_pos['entry_price']) * 100
+                            else:
+                                profit_pct = ((tracked_pos['entry_price'] - current_price) / tracked_pos['entry_price']) * 100
+
+                            # Log position closed with timeout status
+                            self._log_position_closed(
+                                ticket=ticket,
+                                close_price=current_price,
+                                profit=profit_pct,
+                                status='TIMEOUT'
+                            )
+
+                            continue  # Skip TP/SL checks for this position
+
+                except Exception as e:
+                    print(f"⚠️  Error checking timeout for position #{ticket}: {e}")
+
+            # Determine which TP level this is from position_num or comment
+            tp_level = 'TP1'  # Default for single-position mode
+            position_num = tracked_pos.get('position_num', 0)
+            if position_num == 1:
                 tp_level = 'TP1'
-            elif 'TP2' in tracked_pos['comment']:
+            elif position_num == 2:
                 tp_level = 'TP2'
-            elif 'TP3' in tracked_pos['comment']:
+            elif position_num == 3:
+                tp_level = 'TP3'
+            elif 'P1/3' in tracked_pos.get('comment', ''):
+                tp_level = 'TP1'
+            elif 'P2/3' in tracked_pos.get('comment', ''):
+                tp_level = 'TP2'
+            elif 'P3/3' in tracked_pos.get('comment', ''):
+                tp_level = 'TP3'
+            elif 'TP1' in tracked_pos.get('comment', ''):
+                tp_level = 'TP1'
+            elif 'TP2' in tracked_pos.get('comment', ''):
+                tp_level = 'TP2'
+            elif 'TP3' in tracked_pos.get('comment', ''):
                 tp_level = 'TP3'
             
             # Check if TP or SL is hit based on bar high/low OR current price
@@ -670,6 +1702,14 @@ class LiveBotMT5FullAuto:
             if tp_hit or sl_hit:
                 hit_type = tp_level if tp_hit else 'SL'
                 target_price = tp_target if tp_hit else sl_target
+
+                # FIX: Add debug logging for dry-run
+                if self.dry_run:
+                    print(f"🧪 DRY-RUN: Detected {hit_type} hit for position #{ticket}")
+                    print(f"   Type: {tracked_pos['type']}, Entry: ${tracked_pos['entry_price']:.2f}")
+                    print(f"   TP Target: ${tp_target:.2f}, SL Target: ${sl_target:.2f}")
+                    print(f"   Current Price: ${current_price:.2f}")
+                    print(f"   Ticket type: {type(ticket)}, Tracker has: {ticket in self.positions_tracker}")
                 
                 # Update status in both tracker and database immediately
                 processing_status = f'{hit_type}_PROCESSING'
@@ -704,7 +1744,19 @@ class LiveBotMT5FullAuto:
                 
                 # Log the hit
                 self._log_tp_hit(ticket, hit_type, current_price)
-                
+
+                # FIX: Add detailed logging for TP/SL events
+                print(f"📊 EVENT LOGGED: {hit_type} hit for ticket={ticket}, price={current_price:.2f}")
+                if self.use_database and self.db:
+                    try:
+                        # Count total TP/SL events in database for verification
+                        all_events = self.db.get_trade_events(bot_id=self.bot_id)
+                        tp_events = [e for e in all_events if 'TP' in e.get('event_type', '')]
+                        sl_events = [e for e in all_events if 'SL' in e.get('event_type', '')]
+                        print(f"   Total events in DB: {len(all_events)} (TP: {len(tp_events)}, SL: {len(sl_events)})")
+                    except Exception as e:
+                        print(f"⚠️  Could not query events: {e}")
+
                 # Close the position at current price
                 close_successful = False
                 if not self.dry_run:
@@ -725,7 +1777,7 @@ class LiveBotMT5FullAuto:
                             "magic": 234000,
                             "comment": f"Close_{hit_type}",
                             "type_time": mt5.ORDER_TIME_GTC,
-                            "type_filling": mt5.ORDER_FILLING_IOC,
+                            "type_filling": self._get_filling_mode(),
                         }
                         
                         result = mt5.order_send(request)
@@ -782,8 +1834,115 @@ class LiveBotMT5FullAuto:
                         ticket=ticket,
                         close_price=current_price,
                         profit=profit,
-                        status=hit_type  # Status will be 'TP1', 'TP2', 'TP3', or 'SL'
+                        status='CLOSED'  # Status is always CLOSED after TP/SL hit
                     )
+
+                    # FIX: Add verification logging after position closed
+                    print(f"✅ Position #{ticket} closed successfully")
+                    print(f"   Profit: ${profit:.2f}, Pips: {pips:.1f}")
+                    print(f"   Reason: {hit_type}, Price: ${current_price:.2f}")
+                    
+                    # CRITICAL: If SL is hit in a 3-position group, close ALL positions in the group
+                    if sl_hit and self.use_3_position_mode and tracked_pos.get('position_group_id'):
+                        group_id = tracked_pos.get('position_group_id')
+                        pos_num = tracked_pos.get('position_num', 'Unknown')
+                        
+                        print(f"\n⚠️  SL HIT for Position {pos_num} in group {group_id[:8]}")
+                        print(f"   Closing ALL remaining positions in this group...")
+                        
+                        # Mark group as SL_HIT to prevent further trailing
+                        if group_id in self.position_groups:
+                            self.position_groups[group_id]['sl_hit'] = True
+                        
+                        # Find and close all other positions in the same group
+                        for other_ticket, other_pos in list(self.positions_tracker.items()):
+                            if (other_pos.get('position_group_id') == group_id and 
+                                other_ticket != ticket and
+                                other_pos.get('status') == 'OPEN'):
+                                
+                                other_pos_num = other_pos.get('position_num', 'Unknown')
+                                print(f"   🔄 Closing Position {other_pos_num} (#{other_ticket}) from same group...")
+                                
+                                # Get current price for this position
+                                try:
+                                    tick = mt5.symbol_info_tick(self.symbol)
+                                    if tick:
+                                        group_close_price = tick.bid if other_pos['type'] == 'BUY' else tick.ask
+                                    else:
+                                        group_close_price = current_price
+                                except:
+                                    group_close_price = current_price
+                                
+                                # Close on MT5
+                                if not self.dry_run:
+                                    try:
+                                        order_type = mt5.ORDER_TYPE_SELL if other_pos['type'] == 'BUY' else mt5.ORDER_TYPE_BUY
+                                        request = {
+                                            "action": mt5.TRADE_ACTION_DEAL,
+                                            "symbol": self.symbol,
+                                            "volume": other_pos['volume'],
+                                            "type": order_type,
+                                            "position": other_ticket,
+                                            "price": group_close_price,
+                                            "deviation": 20,
+                                            "magic": 234000,
+                                            "comment": f"Group_SL_Close",
+                                            "type_time": mt5.ORDER_TIME_GTC,
+                                            "type_filling": self._get_filling_mode(),
+                                        }
+                                        result = mt5.order_send(request)
+                                        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                            print(f"      ✅ Position {other_pos_num} closed")
+                                        else:
+                                            print(f"      ❌ Failed to close Position {other_pos_num}")
+                                    except Exception as e:
+                                        print(f"      ❌ Error closing Position {other_pos_num}: {e}")
+                                else:
+                                    print(f"      🧪 DRY RUN: Would close Position {other_pos_num}")
+                                
+                                # Calculate profit for this position
+                                if other_pos['type'] == 'BUY':
+                                    other_pips = (group_close_price - other_pos['entry_price']) * 10
+                                else:
+                                    other_pips = (other_pos['entry_price'] - group_close_price) * 10
+                                point_value = 100.0
+                                other_profit = other_pips / 10 * other_pos['volume'] * point_value
+                                
+                                # Log as closed
+                                self._log_position_closed(
+                                    ticket=other_ticket,
+                                    close_price=group_close_price,
+                                    profit=other_profit,
+                                    status='CLOSED'
+                                )
+                        
+                        print(f"   ✅ Group {group_id[:8]} fully closed due to SL hit\n")
+
+                    # Log SL/TP event to database
+                    if self.use_database and self.db and sl_hit:
+                        try:
+                            result = self._get_trade_id_by_order(ticket)
+                            if result:
+                                trade_id, trade = result
+                                is_trailing = getattr(trade, 'trailing_stop_active', False)
+                                
+                                details = json.dumps({
+                                    'price': current_price,
+                                    'profit': round(profit, 2),
+                                    'pips': round(pips, 1)
+                                })
+                                # Log as TRAILING_HIT if trailing was active, otherwise SL_HIT
+                                event_type = 'TRAILING_HIT' if is_trailing else 'SL_HIT'
+                                self.db.log_trade_event(
+                                    trade_id=trade_id,
+                                    bot_id=self.bot_id,
+                                    event_type=event_type,
+                                    position_num=tracked_pos.get('position_num'),
+                                    position_group_id=tracked_pos.get('position_group_id'),
+                                    details=details
+                                )
+                        except Exception as e:
+                            print(f"⚠️  Failed to log SL hit to database: {e}")
                 
                 # Send Telegram notification
                 if self.telegram_bot and close_successful:
@@ -807,38 +1966,60 @@ class LiveBotMT5FullAuto:
                     message += f"Status: CLOSED"
                     
                     try:
-                        asyncio.run(self.send_telegram(message))
+                        self.send_telegram(message)
                     except Exception as e:
                         print(f"⚠️  Failed to send Telegram notification: {e}")
         
     def connect_mt5(self):
-        """Connect to MT5"""
-        if not mt5.initialize():
-            error_msg = "❌ Failed to initialize MT5"
-            print(error_msg)
-            
-            # Send to Telegram
-            if self.telegram_bot:
-                try:
-                    asyncio.run(self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure:\n1. MetaTrader 5 is installed and running\n2. 'Algo Trading' is enabled\n3. You're logged into an account"))
-                except Exception as e:
-                    print(f"⚠️  Failed to send Telegram notification: {e}")
-            
-            return False
-            
-        account_info = mt5.account_info()
+        """Connect to MT5 with retry and timeout"""
+        
+        def _connect():
+            """Internal connection function with timeout protection"""
+            start_time = time.time()
+
+            # Use MT5Manager singleton instead of direct mt5.initialize()
+            if not mt5_manager.initialize():
+                error = mt5.last_error()
+                raise Exception(f"Failed to initialize MT5: {error}")
+
+            # Check timeout
+            if time.time() - start_time > 25:
+                raise Exception("MT5 initialization timeout")
+
+            account_info = mt5.account_info()
+            if account_info is None:
+                raise Exception("Failed to get account info")
+
+            return account_info
+        
+        # Retry with timeout: 3 attempts, 10 sec interval, 30 sec timeout
+        account_info = retry_with_timeout(
+            func=_connect,
+            max_attempts=3,
+            retry_interval=10,
+            timeout_seconds=30,
+            description="MT5 Connection"
+        )
+        
         if account_info is None:
-            error_msg = "❌ Failed to get account info"
+            error_msg = "❌ Failed to connect to MT5 after 3 attempts"
             print(error_msg)
-            mt5.shutdown()
             
             # Send to Telegram
             if self.telegram_bot:
                 try:
-                    asyncio.run(self.send_telegram(f"❌ <b>MT5 Connection Error</b>\n\n{error_msg}\n\nPlease ensure you're logged into an MT5 account"))
+                    self.send_telegram(
+                        f"❌ <b>MT5 Connection Error</b>\n\n"
+                        f"{error_msg}\n\n"
+                        f"Please ensure:\n"
+                        f"1. MetaTrader 5 is installed and running\n"
+                        f"2. 'Algo Trading' is enabled\n"
+                        f"3. You're logged into an account"
+                    )
                 except Exception as e:
                     print(f"⚠️  Failed to send Telegram notification: {e}")
             
+            self.mt5_connected = False
             return False
             
         self.mt5_connected = True
@@ -848,21 +2029,200 @@ class LiveBotMT5FullAuto:
         # Send success notification to Telegram
         if self.telegram_bot:
             try:
-                asyncio.run(self.send_telegram(f"✅ <b>Connected to MT5</b>\n\nServer: {account_info.server}\nAccount: {account_info.login}\nBalance: ${account_info.balance:.2f}"))
+                self.send_telegram(f"✅ <b>Connected to MT5</b>\n\nServer: {account_info.server}\nAccount: {account_info.login}\nBalance: ${account_info.balance:.2f}")
             except Exception as e:
                 print(f"⚠️  Failed to send Telegram notification: {e}")
         
         return True
         
     def disconnect_mt5(self):
-        """Disconnect from MT5"""
+        """Mark bot as disconnected from MT5 (connection managed by singleton)"""
         if self.mt5_connected:
-            mt5.shutdown()
+            # Don't call mt5.shutdown() - the MT5Manager singleton manages the connection
+            # Other bots may still be using it
             self.mt5_connected = False
-    
+
+    def _get_filling_mode(self):
+        """Get appropriate filling mode for the symbol
+
+        Different brokers support different filling modes:
+        - FOK (Fill or Kill): Execute entire order or reject
+        - IOC (Immediate or Cancel): Execute partial and cancel rest
+        - RETURN: Market execution
+
+        Returns:
+            int: MT5 filling mode constant
+        """
+        symbol_info = mt5.symbol_info(self.symbol)
+        if symbol_info is None:
+            print(f"⚠️  Cannot get symbol info for {self.symbol}, using FOK mode")
+            return mt5.ORDER_FILLING_FOK
+
+        # Check which filling modes are supported
+        filling = symbol_info.filling_mode
+
+        # Prefer FOK > IOC > RETURN
+        if filling & 1:  # FOK is supported (bit 0)
+            if not hasattr(self, '_filling_mode_logged'):
+                print(f"✅ Using FOK (Fill or Kill) filling mode for {self.symbol}")
+                self._filling_mode_logged = True
+            return mt5.ORDER_FILLING_FOK
+        elif filling & 2:  # IOC is supported (bit 1)
+            if not hasattr(self, '_filling_mode_logged'):
+                print(f"✅ Using IOC (Immediate or Cancel) filling mode for {self.symbol}")
+                self._filling_mode_logged = True
+            return mt5.ORDER_FILLING_IOC
+        else:  # RETURN (bit 2)
+            if not hasattr(self, '_filling_mode_logged'):
+                print(f"✅ Using RETURN (Market Execution) filling mode for {self.symbol}")
+                self._filling_mode_logged = True
+            return mt5.ORDER_FILLING_RETURN
+
+    def _handle_connection_error(self, error, operation="operation"):
+        """
+        Handle connection errors with smart retry logic
+
+        Args:
+            error: Exception that occurred
+            operation: Name of the operation that failed
+        """
+        self.connection_errors += 1
+
+        error_msg = f"❌ Connection error during {operation}: {str(error)}"
+        print(error_msg)
+
+        # Mark as disconnected if too many errors
+        if self.connection_errors >= 3:
+            if self.mt5_connected:
+                print(f"⚠️  {self.connection_errors} consecutive errors - marking as disconnected")
+                self.mt5_connected = False
+
+                # Send Telegram notification
+                if self.telegram_bot:
+                    try:
+                        self.send_telegram(
+                            f"🔴 <b>Connection Lost</b>\n\n"
+                            f"Operation: {operation}\n"
+                            f"Error: {str(error)}\n"
+                            f"Consecutive errors: {self.connection_errors}\n\n"
+                            f"Bot will attempt to reconnect..."
+                        )
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+
+        return None
+
+    def _reset_connection_errors(self):
+        """Reset connection error counter after successful operation"""
+        if self.connection_errors > 0:
+            was_errors = self.connection_errors
+            self.connection_errors = 0
+            self.last_successful_fetch = datetime.now()
+
+            # Notify if connection was restored
+            if was_errors >= 3 and self.telegram_bot:
+                try:
+                    self.send_telegram(
+                        f"✅ <b>Connection Restored</b>\n\n"
+                        f"After {was_errors} failed attempts, connection is working again.\n"
+                        f"Bot resumed normal operation."
+                    )
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+
+    def _check_heartbeat(self):
+        """
+        Periodic heartbeat check to verify connection is alive
+        Returns True if check passed, False otherwise
+        """
+        now = datetime.now()
+
+        # Check if heartbeat is needed
+        if self.last_heartbeat:
+            time_since_heartbeat = (now - self.last_heartbeat).total_seconds()
+            if time_since_heartbeat < self.heartbeat_interval:
+                return True  # Too soon for another check
+
+        # Perform heartbeat check
+        try:
+            tick = mt5.symbol_info_tick(self.symbol)
+            if tick and tick.ask > 0:
+                self.last_heartbeat = now
+                self._reset_connection_errors()
+                return True
+        except Exception as e:
+            print(f"⚠️  Heartbeat check failed: {e}")
+            self._handle_connection_error(e, "heartbeat check")
+            return False
+
+        return False
+
+    def _attempt_reconnect(self):
+        """
+        Attempt to reconnect with exponential backoff
+        Returns True if reconnected, False otherwise
+        """
+        # Calculate delay based on error count
+        delay_index = min(self.connection_errors - 1, len(self.reconnect_delays) - 1)
+        delay = self.reconnect_delays[delay_index]
+
+        print(f"🔄 Attempting reconnection (attempt {self.connection_errors}/{self.max_connection_errors})...")
+        print(f"   Waiting {delay}s before reconnect...")
+
+        time.sleep(delay)
+
+        # Attempt reconnection
+        if self.connect_mt5():
+            print("✅ Reconnection successful!")
+            self.connection_errors = 0
+            self.last_successful_fetch = datetime.now()
+
+            # Send success notification
+            if self.telegram_bot:
+                try:
+                    self.send_telegram(
+                        f"✅ <b>Reconnected Successfully</b>\n\n"
+                        f"Connection restored after {delay}s wait.\n"
+                        f"Bot resumed normal operation."
+                    )
+                except Exception as e:
+                    print(f"⚠️  Failed to send Telegram notification: {e}")
+
+            return True
+        else:
+            print(f"❌ Reconnection failed (attempt {self.connection_errors})")
+
+            # Check if max attempts reached
+            if self.connection_errors >= self.max_connection_errors:
+                error_msg = (
+                    f"🛑 <b>Critical: Max Reconnection Attempts Reached</b>\n\n"
+                    f"Failed to reconnect after {self.max_connection_errors} attempts.\n"
+                    f"Bot requires manual intervention.\n\n"
+                    f"Please check:\n"
+                    f"- MT5 terminal is running\n"
+                    f"- Internet connection\n"
+                    f"- Broker connection"
+                )
+                print(f"\n{'='*80}")
+                print(error_msg.replace('<b>', '').replace('</b>', '').replace('\n', '\n'))
+                print(f"{'='*80}\n")
+
+                if self.telegram_bot:
+                    try:
+                        self.send_telegram(error_msg)
+                    except Exception as e:
+                        print(f"⚠️  Failed to send Telegram notification: {e}")
+
+            return False
+
     def _check_closed_positions(self):
         """Check for positions that have been closed and log them"""
         if not self.mt5_connected:
+            return
+        
+        # Ensure MT5 connection is alive before querying
+        if not mt5_manager.ensure_connection():
+            print(f"⚠️  MT5 connection lost - skipping closed position detection")
             return
         
         # Get currently open position tickets
@@ -870,6 +2230,10 @@ class LiveBotMT5FullAuto:
         current_tickets = set()
         if open_positions:
             current_tickets = {pos.ticket for pos in open_positions}
+        elif open_positions is None:
+            # positions_get failed
+            print(f"⚠️  Failed to get positions from MT5 - skipping closed position detection")
+            return
         
         # Find positions that were tracked but are now closed
         tracked_tickets = set(self.positions_tracker.keys())
@@ -895,37 +2259,87 @@ class LiveBotMT5FullAuto:
                         )
                         break
             else:
-                # If we can't find deal history, mark as closed with unknown status
+                # If we can't find deal history, mark as closed
                 pos_data = self.positions_tracker.get(ticket)
                 if pos_data:
                     self._log_position_closed(
                         ticket=ticket,
                         close_price=pos_data['entry_price'],
                         profit=0,
-                        status='UNKNOWN'
+                        status='CLOSED'
                     )
             
-    async def send_telegram(self, message):
-        """Send Telegram notification"""
-        if self.telegram_bot and self.telegram_chat_id:
+    def send_telegram(self, message):
+        """Send Telegram notification (using synchronous TelegramNotifier)"""
+        if self.telegram_notifier:
             try:
-                await self.telegram_bot.send_message(
-                    chat_id=self.telegram_chat_id,
-                    text=message,
-                    parse_mode='HTML'
-                )
+                # Use TelegramNotifier's send_message method
+                # async_send=True queues the message for non-blocking send
+                self.telegram_notifier.send_message(message, parse_mode='HTML', async_send=True)
             except Exception as e:
                 print(f"⚠️  Telegram send failed: {e}")
+
                 
-    def get_market_data(self, bars=500):
-        """Get historical data from MT5"""
+    def get_market_data(self, bars=250):
+        """Get historical data from MT5
+
+        Args:
+            bars: Number of bars to fetch (default 250)
+                  - Market regime detection: 100 bars
+                  - Swing detection: 40 bars (±20)
+                  - Pattern detection: 15 bars
+                  - Buffer: 95 bars
+        """
         if not self.mt5_connected:
             return None
-            
+
         rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, bars)
-        
+
         if rates is None or len(rates) == 0:
+            error = mt5.last_error()
             print(f"❌ Failed to get data for {self.symbol}")
+            print(f"   Error: {error}")
+            print(f"   Possible reasons:")
+            print(f"   • Symbol not found in Market Watch (add it in MT5)")
+            print(f"   • Incorrect symbol name (check broker's symbol list)")
+            print(f"   • No historical data available for this timeframe")
+            print(f"   • Symbol not supported by your broker")
+
+            # Try to get symbol info to diagnose
+            symbol_info = mt5.symbol_info(self.symbol)
+            if symbol_info is None:
+                print(f"   ⚠️  Symbol '{self.symbol}' not found - MT5 connection may be lost!")
+                print(f"   → Attempting to reconnect to MT5...")
+
+                # Try to reconnect using manager
+                try:
+                    if mt5_manager.reconnect():
+                        print(f"   ✅ MT5 reconnected successfully!")
+                        self.mt5_connected = True
+                        # Retry getting data
+                        rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, bars)
+                        if rates is not None and len(rates) > 0:
+                            print(f"   ✅ Data retrieved after reconnection")
+                            # Will continue to dataframe processing below
+                        else:
+                            print(f"   ❌ Still cannot get data after reconnection")
+                            return None
+                    else:
+                        print(f"   ❌ Failed to reconnect to MT5")
+                        self.mt5_connected = False
+                        return None
+                except Exception as e:
+                    print(f"   ❌ Reconnection error: {e}")
+                    self.mt5_connected = False
+                    return None
+            else:
+                if not symbol_info.visible:
+                    print(f"   ⚠️  Symbol exists but not visible in Market Watch")
+                    print(f"   → Right-click Market Watch → Show All, or add symbol manually")
+                return None
+
+        # Check again after potential reconnection
+        if rates is None or len(rates) == 0:
             return None
             
         df = pd.DataFrame(rates)
@@ -942,6 +2356,32 @@ class LiveBotMT5FullAuto:
         df['is_best_hours'] = df.index.hour.isin([8, 9, 10, 13, 14, 15])
         
         return df
+        
+    def _get_timeframe_hours(self):
+        """
+        Get the timeframe in hours
+        
+        Converts MT5 timeframe constant to hours for signal age validation
+        
+        Returns:
+            float: Timeframe in hours
+        """
+        # Map MT5 timeframe constants to hours
+        timeframe_map = {
+            1: 1/60,      # TIMEFRAME_M1 = 1 minute = 1/60 hours
+            5: 5/60,      # TIMEFRAME_M5 = 5 minutes = 5/60 hours
+            15: 15/60,    # TIMEFRAME_M15 = 15 minutes = 0.25 hours
+            30: 30/60,    # TIMEFRAME_M30 = 30 minutes = 0.5 hours
+            16385: 1,     # TIMEFRAME_H1 = 1 hour
+            16388: 4,     # TIMEFRAME_H4 = 4 hours
+            16408: 24,    # TIMEFRAME_D1 = 1 day = 24 hours
+            32769: 168,   # TIMEFRAME_W1 = 1 week = 168 hours
+            49153: 720,   # TIMEFRAME_MN1 = 1 month = ~720 hours
+        }
+        
+        # Get hours from map, default to 1 hour if not found
+        hours = timeframe_map.get(self.timeframe, 1)
+        return hours
         
     def detect_market_regime(self, df, lookback=100):
         """
@@ -971,8 +2411,8 @@ class LiveBotMT5FullAuto:
         # Difference between EMAs in %
         ema_diff_pct = abs((current_fast - current_slow) / current_slow) * 100
         
-        # If EMAs diverge > 0.3% = clear trend
-        ema_trend = ema_diff_pct > 0.3
+        # If EMAs diverge > 0.5% = clear trend
+        ema_trend = ema_diff_pct > 0.5
         
         # 2. ATR (volatility - should be above average)
         high_low = recent_data['high'] - recent_data['low']
@@ -1023,97 +2463,213 @@ class LiveBotMT5FullAuto:
     def analyze_market(self):
         """Analyze market and get signals with adaptive TP levels"""
         try:
-            # Get data
-            print(f"   📥 Fetching market data...")
+            # Get data (no verbose logging to improve speed)
             df = self.get_market_data()
             if df is None:
-                print(f"   ❌ Failed to get market data")
                 return None
-                
-            last_close = df['close'].iloc[-1]
-            last_time = df.index[-1]
-            print(f"   📊 Got {len(df)} candles, last close: ${last_close:.2f} at {last_time.strftime('%Y-%m-%d %H:%M')}")
-            
+
             # Detect market regime
-            print(f"   🔍 Detecting market regime...")
             self.current_regime = self.detect_market_regime(df)
-            print(f"   📊 Market Regime: {self.current_regime}")
-            
+
             # Run strategy
-            print(f"   🧠 Running V3 Adaptive Strategy...")
             result = self.strategy.run_strategy(df)
-            
-            # Get last signal (most recent)
+
+            # Get all signals
             signals = result[result['signal'] != 0]
-            
+
             if len(signals) == 0:
-                print(f"   ℹ️  No signals detected")
                 return None
-                
-            # ONLY CHECK THE MOST RECENT CLOSED CANDLE (not historical signals)
-            # This ensures we only trade on fresh signals, not old ones
-            last_signal = signals.iloc[-1]
-            last_signal_time = signals.index[-1]
-            current_time = df.index[-1]
             
-            # Signal must be from the LAST COMPLETED CANDLE ONLY
-            # If signal is older than 1.5 hours, it's from a previous candle - ignore it
-            time_diff_hours = (current_time - last_signal_time).total_seconds() / 3600
+            # CRITICAL: Signal must be from LAST CLOSED BAR only (bar -1, aka df.index[-2])
+            # 
+            # Bar indexing explanation:
+            # - df.index[-1] = Current bar (position 0 in MT5) - INCOMPLETE, should NOT trade
+            # - df.index[-2] = Last closed bar (position 1 in MT5) - This is where we should look
+            # - df.index[-3] = Older bar - too old, should NOT trade
+            #
+            # Example: Bot runs at 01:00 on H1 timeframe
+            # - df.index[-1] = 01:00 (bar 01:00-02:00, just started, incomplete)
+            # - df.index[-2] = 00:00 (bar 00:00-01:00, just closed) ← Check this one!
+            # - df.index[-3] = 23:00 (previous day, too old)
             
-            if time_diff_hours > 1.5:  # More than 1.5 hours old = not from last closed candle
-                print(f"   ⏰ Last signal is {time_diff_hours:.1f}h old (not from latest candle, skipping)")
+            current_bar_time = df.index[-1]
+            last_closed_bar_time = df.index[-2] if len(df) >= 2 else None
+            
+            if last_closed_bar_time is None:
+                print("   ⚠️  Not enough data to determine last closed bar")
                 return None
-                
-            print(f"   ✅ Signal from latest candle (age: {time_diff_hours:.1f}h)")
             
-            # Adjust TP based on market regime
-            if self.current_regime == 'TREND':
-                tp1_distance = self.trend_tp1
-                tp2_distance = self.trend_tp2
-                tp3_distance = self.trend_tp3
+            # Filter signals to only those from the last closed bar (df.index[-2])
+            # This ensures we're trading ONLY on the bar that just closed, not older bars
+            signals_from_last_closed = signals[signals.index == last_closed_bar_time]
+            
+            if len(signals_from_last_closed) == 0:
+                # No signal on the last closed bar - check if there are any recent signals
+                last_signal = signals.iloc[-1]
+                last_signal_time = signals.index[-1]
+                
+                # Calculate age to provide helpful debug info
+                time_diff_hours = (current_bar_time - last_signal_time).total_seconds() / 3600
+                
+                # DYNAMIC FILTER (adapts to timeframe)
+                # Calculate min/max age based on timeframe
+                timeframe_hours = self._get_timeframe_hours()
+                signal_min_age = SIGNAL_MIN_AGE_MULTIPLIER * timeframe_hours  # Half a bar
+                signal_max_age = SIGNAL_MAX_AGE_MULTIPLIER * timeframe_hours  # One and a half bars
+                
+                # Accept signals within the dynamic range (covers last closed bar at any time)
+                if signal_min_age <= time_diff_hours <= signal_max_age:
+                    # Signal is from a recent closed bar (not necessarily the LAST one)
+                    # This is acceptable for mid-timeframe checks (e.g., bot runs mid-bar)
+                    print(f"   ℹ️  Using signal from recent bar (age: {time_diff_hours:.2f}h, range: {signal_min_age:.2f}-{signal_max_age:.2f}h)")
+                else:
+                    # Signal too fresh (current bar) or too old (2+ bars ago)
+                    if time_diff_hours < signal_min_age:
+                        print(f"   ⏰ Signal too fresh ({time_diff_hours:.2f}h < {signal_min_age:.2f}h) - from current incomplete bar")
+                    else:
+                        print(f"   ⏰ Signal too old ({time_diff_hours:.2f}h > {signal_max_age:.2f}h) - older than 1.5 bars")
+                    return None
             else:
-                tp1_distance = self.range_tp1
-                tp2_distance = self.range_tp2
-                tp3_distance = self.range_tp3
-                
-            # Calculate all 3 TP levels
+                # Found signal on the last closed bar - use it!
+                last_signal = signals_from_last_closed.iloc[-1]
+                last_signal_time = last_closed_bar_time
+                print(f"   ✅ Signal found on last closed bar: {last_closed_bar_time.strftime('%Y-%m-%d %H:%M')}")
+            
+            # Get entry price for signal ID generation
             entry = last_signal['entry_price']
-            sl = last_signal['stop_loss']
             
-            if last_signal['signal'] == 1:  # LONG
-                tp1 = entry + tp1_distance
-                tp2 = entry + tp2_distance
-                tp3 = entry + tp3_distance
-            else:  # SHORT
-                tp1 = entry - tp1_distance
-                tp2 = entry - tp2_distance
-                tp3 = entry - tp3_distance
+            # Generate unique signal ID to prevent duplicate opening
+            # Signal ID is based on: timestamp (rounded to hour), direction, and entry price
+            signal_timestamp_str = last_signal_time.strftime('%Y%m%d%H')  # Round to hour
+            signal_direction = int(last_signal['signal'])
+            signal_entry = round(entry, 2)
+            signal_id = f"{signal_timestamp_str}_{signal_direction}_{signal_entry}"
+            
+            # Check if we've already opened this signal
+            if signal_id in self.opened_signal_ids:
+                # Already opened this signal - skip to prevent duplicate
+                return None
+
+            # ============================================================================
+            # CRYPTO-AWARE TP/SL CALCULATION
+            # ============================================================================
+            # Check if this is a crypto symbol (BTC, ETH, SOL, etc.)
+            # Crypto uses percentage-based SL/TP, not points/pips
+            is_crypto = is_crypto_symbol(self.symbol)
+            
+            if is_crypto:
+                # CRYPTO: Use percentage-based calculations
+                if self.current_regime == 'TREND':
+                    tp1_pct = CRYPTO_TREND_TP1_PCT
+                    tp2_pct = CRYPTO_TREND_TP2_PCT
+                    tp3_pct = CRYPTO_TREND_TP3_PCT
+                    sl_pct = CRYPTO_TREND_SL_PCT
+                else:  # RANGE
+                    tp1_pct = CRYPTO_RANGE_TP1_PCT
+                    tp2_pct = CRYPTO_RANGE_TP2_PCT
+                    tp3_pct = CRYPTO_RANGE_TP3_PCT
+                    sl_pct = CRYPTO_RANGE_SL_PCT
                 
-            direction = "LONG" if last_signal['signal'] == 1 else "SHORT"
-            print(f"\n   ✅ FRESH SIGNAL FROM LATEST CANDLE!")
-            print(f"      Direction: {direction}")
-            print(f"      Market Regime: {self.current_regime}")
-            print(f"      Signal time: {last_signal_time.strftime('%Y-%m-%d %H:%M')}")
-            print(f"      Age: {time_diff_hours:.1f}h ago")
-            print(f"      Entry: ${entry:.2f}")
-            print(f"      SL: ${sl:.2f}")
-            print(f"      TP1: ${tp1:.2f} ({tp1_distance}p)")
-            print(f"      TP2: ${tp2:.2f} ({tp2_distance}p)")
-            print(f"      TP3: ${tp3:.2f} ({tp3_distance}p)")
-            
-            # Calculate risk/reward (for TP2)
-            if last_signal['signal'] == 1:
-                risk = entry - sl
-                reward = tp2 - entry
+                # Calculate SL/TP as percentages of entry price
+                if last_signal['signal'] == 1:  # LONG
+                    sl = entry * (1 - sl_pct / 100)
+                    tp1 = entry * (1 + tp1_pct / 100)
+                    tp2 = entry * (1 + tp2_pct / 100)
+                    tp3 = entry * (1 + tp3_pct / 100)
+                else:  # SHORT
+                    sl = entry * (1 + sl_pct / 100)
+                    tp1 = entry * (1 - tp1_pct / 100)
+                    tp2 = entry * (1 - tp2_pct / 100)
+                    tp3 = entry * (1 - tp3_pct / 100)
+                
+                print(f"   📊 CRYPTO MODE: Using percentage-based SL/TP")
+                print(f"      Regime: {self.current_regime}")
+                print(f"      SL: {sl_pct:.2f}% | TP1/2/3: {tp1_pct:.2f}%/{tp2_pct:.2f}%/{tp3_pct:.2f}%")
             else:
-                risk = sl - entry
-                reward = entry - tp2
-                
-            rr = reward / risk if risk > 0 else 0
-            print(f"      Risk: {risk:.2f} points")
-            print(f"      Reward (TP2): {reward:.2f} points")
-            print(f"      Risk:Reward = 1:{rr:.2f}")
-            
+                # FOREX/COMMODITIES: Use points-based calculations
+                # Adjust TP based on market regime
+                if self.current_regime == 'TREND':
+                    tp1_distance = self.trend_tp1
+                    tp2_distance = self.trend_tp2
+                    tp3_distance = self.trend_tp3
+                else:
+                    tp1_distance = self.range_tp1
+                    tp2_distance = self.range_tp2
+                    tp3_distance = self.range_tp3
+
+                # Calculate SL based on settings
+                if self.use_regime_based_sl:
+                    # Use regime-based fixed SL
+                    sl_distance = self.trend_sl_points if self.current_regime == 'TREND' else self.range_sl_points
+                    if last_signal['signal'] == 1:  # LONG
+                        sl = entry - sl_distance
+                    else:  # SHORT
+                        sl = entry + sl_distance
+                else:
+                    # Use strategy-calculated SL
+                    sl = last_signal['stop_loss']
+
+                if last_signal['signal'] == 1:  # LONG
+                    tp1 = entry + tp1_distance
+                    tp2 = entry + tp2_distance
+                    tp3 = entry + tp3_distance
+                else:  # SHORT
+                    tp1 = entry - tp1_distance
+                    tp2 = entry - tp2_distance
+                    tp3 = entry - tp3_distance
+
+            # Validate SL/TP values
+            if sl <= 0:
+                print(f"\n   ❌ Invalid SL: ${sl:.2f} (must be positive)")
+                print(f"      Entry: ${entry:.2f}, Strategy SL: ${last_signal['stop_loss']:.2f}")
+                print(f"      Signal: {last_signal['signal']} ({'LONG' if last_signal['signal'] == 1 else 'SHORT'})")
+                print(f"      Regime: {last_signal.get('regime', 'UNKNOWN')}")
+                print(f"      Use regime-based SL: {self.use_regime_based_sl}")
+                print(f"      Pattern: {last_signal.get('pattern', 'UNKNOWN')}")
+                print(f"      Signal type: {last_signal.get('signal_type', 'UNKNOWN')}")
+                print(f"\n   ⚠️  This signal was rejected by validation")
+                print(f"      The strategy may have a bug in SL calculation")
+                if self.use_regime_based_sl:
+                    sl_setting = self.trend_sl_points if last_signal.get('regime') == 'TREND' else self.range_sl_points
+                    print(f"      Regime SL setting: {sl_setting} points")
+                return None
+
+            # For LONG: SL should be below entry, TP above
+            # For SHORT: SL should be above entry, TP below
+            if last_signal['signal'] == 1:  # LONG
+                if sl >= entry:
+                    print(f"\n   ❌ Invalid LONG setup: SL (${sl:.2f}) >= Entry (${entry:.2f})")
+                    return None
+                if tp1 <= entry:
+                    print(f"\n   ❌ Invalid LONG setup: TP1 (${tp1:.2f}) <= Entry (${entry:.2f})")
+                    return None
+            else:  # SHORT
+                if sl <= entry:
+                    print(f"\n   ❌ Invalid SHORT setup: SL (${sl:.2f}) <= Entry (${entry:.2f})")
+                    return None
+                if tp1 >= entry:
+                    print(f"\n   ❌ Invalid SHORT setup: TP1 (${tp1:.2f}) >= Entry (${entry:.2f})")
+                    return None
+
+            # Only print signal details when signal is found (not on every check)
+            direction = "LONG" if last_signal['signal'] == 1 else "SHORT"
+            print(f"\n   ✅ SIGNAL FOUND!")
+            print(f"      {direction} | {self.current_regime} | Entry: ${entry:.2f}")
+            print(f"      SL: ${sl:.2f} | TP1/2/3: ${tp1:.2f}/${tp2:.2f}/${tp3:.2f}")
+            print(f"      Signal ID: {signal_id}")
+
+            # Store distance values for position tracking
+            if is_crypto:
+                # For crypto, store percentage values
+                tp1_dist = tp1_pct
+                tp2_dist = tp2_pct
+                tp3_dist = tp3_pct
+            else:
+                # For forex/commodities, store point values
+                tp1_dist = tp1_distance
+                tp2_dist = tp2_distance
+                tp3_dist = tp3_distance
+
             return {
                 'direction': last_signal['signal'],
                 'entry': entry,
@@ -1121,11 +2677,13 @@ class LiveBotMT5FullAuto:
                 'tp1': tp1,
                 'tp2': tp2,
                 'tp3': tp3,
-                'tp1_distance': tp1_distance,
-                'tp2_distance': tp2_distance,
-                'tp3_distance': tp3_distance,
+                'tp1_distance': tp1_dist,
+                'tp2_distance': tp2_dist,
+                'tp3_distance': tp3_dist,
                 'time': last_signal_time,
-                'regime': self.current_regime
+                'regime': self.current_regime,
+                'signal_id': signal_id,  # Add signal ID for duplicate tracking
+                'is_crypto': is_crypto   # Add crypto flag for display formatting
             }
             
         except Exception as e:
@@ -1172,9 +2730,15 @@ class LiveBotMT5FullAuto:
         """Get open positions for symbol"""
         if not self.mt5_connected:
             return []
+        
+        # Ensure MT5 connection is alive before querying
+        if not mt5_manager.ensure_connection():
+            print(f"⚠️  MT5 connection lost - cannot get open positions")
+            return []
             
         positions = mt5.positions_get(symbol=self.symbol)
         if positions is None:
+            print(f"⚠️  Failed to get positions from MT5")
             return []
             
         return list(positions)
@@ -1195,17 +2759,51 @@ class LiveBotMT5FullAuto:
         print(f"{'='*60}")
 
         # Calculate position size
-        lot_size = self.calculate_position_size(signal['entry'], signal['sl'])
-
-        print(f"   Lot size: {lot_size}")
+        if self.total_position_size is not None:
+            # Use fixed position size from settings
+            lot_size = self.total_position_size
+            print(f"   Lot size (fixed): {lot_size}")
+        else:
+            # Calculate based on risk
+            lot_size = self.calculate_position_size(signal['entry'], signal['sl'])
+            print(f"   Lot size (risk-based): {lot_size}")
 
         if self.dry_run:
-            print(f"\n🧪 DRY RUN: Would open {direction_str} position:")
+            print(f"\n🧪 DRY RUN: Opening simulated {direction_str} position:")
             print(f"   Symbol: {self.symbol}")
             print(f"   Lot: {lot_size}")
             print(f"   Entry: {signal['entry']:.2f}")
             print(f"   SL: {signal['sl']:.2f}")
-            print(f"   TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}p)")
+            # Format distance with % or p depending on symbol type
+            dist_unit = '%' if signal.get('is_crypto', False) else 'p'
+            print(f"   TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}{dist_unit})")
+
+            # Create simulated ticket number with timestamp
+            simulated_ticket = int(time.time() * 1000)
+
+            # Log position to tracker and database
+            position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
+            regime = signal.get('regime', 'UNKNOWN')
+            regime_code = "T" if regime == 'TREND' else "R"
+
+            self._log_position_opened(
+                ticket=simulated_ticket,
+                position_type=position_type,
+                volume=lot_size,
+                entry_price=signal['entry'],
+                sl=signal['sl'],
+                tp=signal['tp2'],
+                regime=regime,
+                comment=f"V3_{regime_code}"
+            )
+            
+            # Track signal ID to prevent duplicate opening
+            if 'signal_id' in signal:
+                self.opened_signal_ids.add(signal['signal_id'])
+                print(f"   📝 Signal ID tracked: {signal['signal_id']}")
+
+            print(f"   ✅ Simulated position logged: DRY-{simulated_ticket}")
+            print(f"\n🧪 DRY RUN: Simulated position created and tracked")
             return True
 
         # Get current price
@@ -1232,7 +2830,7 @@ class LiveBotMT5FullAuto:
             "magic": 234000,
             "comment": f"V3_{regime_code}",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._get_filling_mode(),
         }
 
         # Send order
@@ -1260,6 +2858,27 @@ class LiveBotMT5FullAuto:
             regime=regime,
             comment=f"V3_{regime_code}"
         )
+        
+        # Track signal ID to prevent duplicate opening
+        if 'signal_id' in signal:
+            self.opened_signal_ids.add(signal['signal_id'])
+            print(f"   📝 Signal ID tracked: {signal['signal_id']}")
+
+        # Send Telegram notification
+        if self.telegram_bot:
+            message = f"🤖 <b>Position Opened</b>\n\n"
+            message += f"Direction: {direction_str}\n"
+            message += f"Market Regime: {regime}\n"
+            message += f"Symbol: {self.symbol}\n"
+            message += f"Lot: {lot_size}\n"
+            message += f"Entry: ${result.price:.2f}\n"
+            message += f"SL: ${signal['sl']:.2f}\n"
+            message += f"TP: ${signal['tp2']:.2f}\n"
+            message += f"Risk: {self.risk_percent}%"
+            try:
+                self.send_telegram(message)
+            except Exception as e:
+                print(f"⚠️  Failed to send Telegram notification: {e}")
 
         return True
 
@@ -1267,47 +2886,148 @@ class LiveBotMT5FullAuto:
         """Open 3 independent positions with different TP levels and trailing (Phase 2)"""
         direction_str = "BUY" if signal['direction'] == 1 else "SELL"
         group_id = str(uuid.uuid4())
+        
+        # Increment group counter (reset to 0 after 99)
+        self.group_counter = (self.group_counter + 1) % 100
+        current_group_counter = self.group_counter
 
         print(f"\n{'='*60}")
         print(f"📈 OPENING 3-POSITION {direction_str} GROUP")
         print(f"{'='*60}")
         print(f"   Group ID: {group_id}")
+        print(f"   Group Counter: {current_group_counter}")
         
         # Check max positions (need room for 3 positions)
         open_positions = self.get_open_positions()
         if len(open_positions) + 3 > self.max_positions:
-            print(f"⚠️  Not enough room for 3 positions (need {3}, have {self.max_positions - len(open_positions)} slots)")
+            print(f"⚠️  Not enough room for 3 positions on {self.symbol} (need 3, have {self.max_positions - len(open_positions)} slots, {len(open_positions)} positions open)")
             return False
             
         # Calculate total lot size
-        total_lot_size = self.calculate_position_size(signal['entry'], signal['sl'])
+        if self.total_position_size is not None:
+            # Use fixed position size from settings
+            total_lot_size = self.total_position_size
+            print(f"   Using fixed position size: {total_lot_size} lot")
+        else:
+            # Calculate based on risk
+            total_lot_size = self.calculate_position_size(signal['entry'], signal['sl'])
+            print(f"   Calculated position size (risk-based): {total_lot_size} lot")
+        
+        # Prepare common parameters
+        symbol_info = mt5.symbol_info(self.symbol)
+        if symbol_info is None:
+            print(f"❌ Symbol info not found")
+            return False
         
         # Split into 3 parts: 33%, 33%, 34%
         lot1 = round(total_lot_size * 0.33, 2)
         lot2 = round(total_lot_size * 0.33, 2)
         lot3 = round(total_lot_size * 0.34, 2)
         
+        # Check if ANY lot size is below minimum - reject the trade
+        min_lot = symbol_info.volume_min
+        if lot1 < min_lot or lot2 < min_lot or lot3 < min_lot:
+            print(f"\n{'='*60}")
+            print(f"❌ INSUFFICIENT POSITION SIZE FOR 3-POSITION MODE")
+            print(f"{'='*60}")
+            print(f"   Total position size: {total_lot_size} lot")
+            print(f"   Calculated positions:")
+            print(f"      Position 1 (TP1): {lot1} lot")
+            print(f"      Position 2 (TP2): {lot2} lot")
+            print(f"      Position 3 (TP3): {lot3} lot")
+            print(f"   Broker minimum: {min_lot} lot per position")
+            print(f"\n   ⚠️  REQUIRED ACTION:")
+            print(f"   • Minimum total position size needed: {min_lot * 3} lot")
+            print(f"   • Current total position size: {total_lot_size} lot")
+            print(f"   • Please increase position size in bot settings")
+            print(f"   • Or disable 3-position mode and use single position")
+            print(f"{'='*60}\n")
+            return False
+        
         print(f"   Total lot size: {total_lot_size}")
         print(f"   Position 1 (TP1): {lot1} lot")
         print(f"   Position 2 (TP2): {lot2} lot")
         print(f"   Position 3 (TP3): {lot3} lot")
         
+        # Format distance with % or p depending on symbol type
+        dist_unit = '%' if signal.get('is_crypto', False) else 'p'
+        
         if self.dry_run:
-            print(f"\n🧪 DRY RUN: Would open 3 {direction_str} positions:")
+            print(f"\n🧪 DRY RUN: Opening simulated 3 {direction_str} positions:")
+            print(f"   Group ID: {group_id}")
             print(f"   Entry: {signal['entry']:.2f}")
             print(f"   SL: {signal['sl']:.2f}")
-            print(f"   Position 1: {lot1} lot, TP1: {signal['tp1']:.2f} ({signal['tp1_distance']}p)")
-            print(f"   Position 2: {lot2} lot, TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}p)")
-            print(f"   Position 3: {lot3} lot, TP3: {signal['tp3']:.2f} ({signal['tp3_distance']}p)")
+            print(f"   Position 1: {lot1} lot, TP1: {signal['tp1']:.2f} ({signal['tp1_distance']}{dist_unit})")
+            print(f"   Position 2: {lot2} lot, TP2: {signal['tp2']:.2f} ({signal['tp2_distance']}{dist_unit})")
+            print(f"   Position 3: {lot3} lot, TP3: {signal['tp3']:.2f} ({signal['tp3_distance']}{dist_unit})")
             print(f"   Total risk: {self.risk_percent}%")
+
+            # Generate simulated positions and log them
+            regime = signal.get('regime', 'UNKNOWN')
+            regime_code = "T" if regime == 'TREND' else "R"
+            position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
+
+            tp_levels = [
+                (signal['tp1'], lot1, 'TP1', signal['tp1_distance'], 1),
+                (signal['tp2'], lot2, 'TP2', signal['tp2_distance'], 2),
+                (signal['tp3'], lot3, 'TP3', signal['tp3_distance'], 3)
+            ]
+
+            for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
+                # Generate unique magic for this position
+                magic = self._generate_magic(pos_num, current_group_counter)
+                
+                # Create simulated ticket number with timestamp
+                simulated_ticket = int(time.time() * 1000) + pos_num
+
+                # Log position to tracker and database
+                self._log_position_opened(
+                    ticket=simulated_ticket,
+                    position_type=position_type,
+                    volume=lot_size,
+                    entry_price=signal['entry'],
+                    sl=signal['sl'],
+                    tp=tp_price,
+                    regime=regime,
+                    comment=f"M{magic}_P{pos_num}_{tp_name}",  # Short DB comment
+                    position_group_id=group_id,
+                    position_num=pos_num,
+                    magic_number=magic
+                )
+
+                print(f"   ✅ Simulated {tp_name} position logged: DRY-{simulated_ticket}, Magic={magic}")
+                time.sleep(0.1)  # Small delay between simulated orders
+
+            # Save PositionGroup to database for dry-run too
+            if self.use_database and self.db:
+                try:
+                    PositionGroup = self._get_position_group_model()
+                    if PositionGroup:
+                        new_group = PositionGroup(
+                            group_id=group_id,
+                            bot_id=self.bot_id,
+                            tp1_hit=False,
+                            entry_price=signal['entry'],
+                            max_price=signal['entry'],
+                            min_price=signal['entry'],
+                            trade_type=direction_str,
+                            group_counter=current_group_counter,
+                            created_at=datetime.now(),
+                            updated_at=datetime.now()
+                        )
+                        self.db.save_position_group(new_group)
+                        print(f"✅ Position group saved to database (dry-run): {group_id[:8]} (counter={current_group_counter})")
+                except Exception as e:
+                    print(f"⚠️  Could not save position group to DB: {e}")
+            
+            # Track signal ID to prevent duplicate opening
+            if 'signal_id' in signal:
+                self.opened_signal_ids.add(signal['signal_id'])
+                print(f"   📝 Signal ID tracked: {signal['signal_id']}")
+
+            print(f"\n🧪 DRY RUN: 3 simulated positions created and tracked")
             return True
-            
-        # Prepare common parameters
-        symbol_info = mt5.symbol_info(self.symbol)
-        if symbol_info is None:
-            print(f"❌ Symbol info not found")
-            return False
-            
+
         # Get current price
         tick = mt5.symbol_info_tick(self.symbol)
         if tick is None:
@@ -1327,12 +3047,10 @@ class LiveBotMT5FullAuto:
         ]
 
         for tp_price, lot_size, tp_name, tp_distance, pos_num in tp_levels:
-            # Ensure minimum lot size
-            if lot_size < symbol_info.volume_min:
-                print(f"   ⚠️  {tp_name}: lot size {lot_size} < minimum {symbol_info.volume_min}, skipping")
-                continue
-                
-            # Create request
+            # Generate unique magic for this position
+            magic = self._generate_magic(pos_num, current_group_counter)
+            
+            # Create request (lot sizes already validated above)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "symbol": self.symbol,
@@ -1342,27 +3060,53 @@ class LiveBotMT5FullAuto:
                 "sl": signal['sl'],
                 "tp": tp_price,
                 "deviation": 20,
-                "magic": 234000,
-                "comment": f"V3_{regime_code}_{tp_name}",
+                "magic": magic,
+                "comment": f"M{magic}",  # Short comment: magic contains all info (BBBBPPGG)
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
+                "type_filling": self._get_filling_mode(),
             }
             
-            # Send order
-            result = mt5.order_send(request)
+            # Send order with retry logic (up to 3 attempts)
+            result = None
+            max_retries = 3
+            for attempt in range(max_retries):
+                # Ensure connection before sending order
+                if not mt5_manager.ensure_connection():
+                    print(f"   ⚠️  MT5 connection lost - attempt {attempt + 1}/{max_retries}")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)  # Brief pause before retry
+                        continue
+                    else:
+                        break
+                
+                result = mt5.order_send(request)
+                
+                if result is not None:
+                    break  # Success, exit retry loop
+                
+                # Retry on None result (connection issue)
+                if attempt < max_retries - 1:
+                    print(f"   ⚠️  {tp_name} order attempt {attempt + 1} failed - retrying...")
+                    time.sleep(1)  # Brief pause before retry
             
             if result is None:
-                print(f"   ❌ {tp_name} order failed: No result")
+                print(f"   ❌ {tp_name} order failed after {max_retries} attempts: No result from broker")
+                print(f"      Check: MT5 connection, symbol availability, trading permissions")
                 continue
-                
+
             if result.retcode != mt5.TRADE_RETCODE_DONE:
-                print(f"   ❌ {tp_name} order failed: {result.retcode} - {result.comment}")
+                print(f"   ❌ {tp_name} order failed!")
+                print(f"      Error code: {result.retcode}")
+                print(f"      Message: {result.comment}")
+                print(f"      Volume: {lot_size} lot, Price: ${price:.2f}")
                 continue
                 
             print(f"   ✅ {tp_name} position opened!")
             print(f"      Order: #{result.order}")
             print(f"      Lot: {lot_size}")
-            print(f"      TP: {tp_price:.2f} ({tp_distance}p)")
+            # Format distance with % or p depending on symbol type
+            dist_unit = '%' if signal.get('is_crypto', False) else 'p'
+            print(f"      TP: {tp_price:.2f} ({tp_distance}{dist_unit})")
             
             # Log position
             position_type = 'BUY' if signal['direction'] == 1 else 'SELL'
@@ -1375,9 +3119,10 @@ class LiveBotMT5FullAuto:
                 sl=signal['sl'],
                 tp=tp_price,
                 regime=regime,
-                comment=f"V3_{regime_code}_P{pos_num}/3",
+                comment=f"M{magic}_P{pos_num}_{tp_name}",  # Short DB comment
                 position_group_id=group_id,
-                position_num=pos_num
+                position_num=pos_num,
+                magic_number=magic
             )
 
             positions_opened.append((result.order, tp_name, tp_price))
@@ -1385,13 +3130,40 @@ class LiveBotMT5FullAuto:
         
         if len(positions_opened) == 0:
             print(f"\n❌ Failed to open any positions!")
+            print(f"   Possible reasons:")
+            print(f"   - Incorrect filling mode (check broker requirements)")
+            print(f"   - Insufficient margin")
+            print(f"   - Symbol not available for trading")
+            print(f"   - Market closed")
+            print(f"   - MT5 connection issue")
             return False
         
         print(f"\n✅ Successfully opened {len(positions_opened)}/3 positions!")
         
+        # Save PositionGroup to database (CRITICAL FIX: Create position group record)
+        if self.use_database and self.db:
+            try:
+                PositionGroup = self._get_position_group_model()
+                if PositionGroup:
+                    new_group = PositionGroup(
+                        group_id=group_id,
+                        bot_id=self.bot_id,
+                        tp1_hit=False,
+                        entry_price=signal['entry'],
+                        max_price=signal['entry'],
+                        min_price=signal['entry'],
+                        trade_type=direction_str,
+                        group_counter=current_group_counter,
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    self.db.save_position_group(new_group)
+                    print(f"✅ Position group saved to database: {group_id[:8]} (counter={current_group_counter})")
+            except Exception as e:
+                print(f"⚠️  Failed to save position group to database: {e}")
+        
         # Send Telegram notification
         if self.telegram_bot:
-            import asyncio
             regime = signal.get('regime', 'UNKNOWN')
             message = f"🤖 <b>3 Positions Opened (Multi-TP)</b>\n\n"
             message += f"Direction: {direction_str}\n"
@@ -1402,9 +3174,53 @@ class LiveBotMT5FullAuto:
             for ticket, tp_name, tp_price in positions_opened:
                 message += f"  {tp_name}: ${tp_price:.2f} (#{ticket})\n"
             message += f"\nTotal risk: {self.risk_percent}%"
-            asyncio.run(self.send_telegram(message))
+            self.send_telegram(message)
+        
+        # Track signal ID to prevent duplicate opening
+        if 'signal_id' in signal:
+            self.opened_signal_ids.add(signal['signal_id'])
+            print(f"   📝 Signal ID tracked: {signal['signal_id']}")
             
         return True
+    
+    def _cleanup_old_signal_ids(self):
+        """Clean up signal IDs older than 7 days to prevent memory growth
+        
+        Signal IDs are in format: YYYYMMDDHH_direction_entry
+        We can parse the timestamp and remove old ones
+        """
+        if not self.opened_signal_ids:
+            return
+        
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.now() - timedelta(days=7)
+        cutoff_str = cutoff_date.strftime('%Y%m%d')
+        
+        # Filter out old signal IDs with validation
+        old_count = len(self.opened_signal_ids)
+        cleaned_ids = set()
+        
+        for sig_id in self.opened_signal_ids:
+            try:
+                # Validate format: YYYYMMDDHH_direction_entry
+                parts = sig_id.split('_')
+                if len(parts) >= 3:
+                    timestamp_str = parts[0]
+                    # Keep only recent signals (timestamp >= cutoff)
+                    if timestamp_str >= cutoff_str:
+                        cleaned_ids.add(sig_id)
+                else:
+                    # Invalid format - keep it to avoid data loss
+                    cleaned_ids.add(sig_id)
+            except Exception:
+                # Error parsing - keep it to avoid data loss
+                cleaned_ids.add(sig_id)
+        
+        self.opened_signal_ids = cleaned_ids
+        new_count = len(self.opened_signal_ids)
+        
+        if old_count != new_count:
+            print(f"   🧹 Cleaned up {old_count - new_count} old signal IDs (keeping {new_count})")
     
     def generate_report(self):
         """Generate trading report from CSV log"""
@@ -1500,41 +3316,80 @@ class LiveBotMT5FullAuto:
                 self._check_closed_positions()
             
     def run(self):
-        """Main bot loop - runs exactly on the hour (01:00, 02:00, etc.)"""
+        """Main bot loop with resilience features"""
         print(f"\n{'='*80}")
-        print(f"🤖 BOT STARTED - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'='*80}")
-        print(f"📊 Configuration:")
+        print(f"🤖 BOT STARTING - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'='*80}\n")
+        
+        # Detailed startup logging
+        print("📡 Step 1/5: Connecting to MT5...")
+        start_time = time.time()
+        if not self.connect_mt5():
+            print(f"❌ Failed after {time.time() - start_time:.1f}s")
+            return
+        print(f"✅ Connected in {time.time() - start_time:.1f}s\n")
+        
+        print("💾 Step 2/5: Verifying database connection...")
+        start_time = time.time()
+        if self.use_database and not self.db:
+            print(f"⚠️  Database not available, continuing without it")
+        print(f"✅ Database ready in {time.time() - start_time:.1f}s\n")
+        
+        print("📊 Step 3/5: Loading initial market data...")
+        start_time = time.time()
+        
+        def _fetch_initial_data():
+            rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, 200)
+            if rates is None or len(rates) == 0:
+                raise Exception("No data received")
+            return rates
+        
+        rates = retry_with_timeout(
+            func=_fetch_initial_data,
+            max_attempts=3,
+            retry_interval=10,
+            timeout_seconds=20,
+            description=f"Download {self.symbol} data"
+        )
+        
+        if rates is None:
+            print(f"❌ Failed to download initial data after 3 attempts")
+            return
+        print(f"✅ Downloaded {len(rates)} bars in {time.time() - start_time:.1f}s\n")
+        
+        print("🛡️  Step 4/5: Starting watchdog...")
+        self.watchdog = BotWatchdog(timeout=300, check_interval=30)
+        self.watchdog.start()
+        print()
+        
+        print("🎯 Step 5/5: Restoring positions from database...")
+        self._restore_positions_from_database()
+        
+        # Show final configuration
+        print(f"\n📋 Configuration:")
         print(f"   Symbol: {self.symbol}")
         print(f"   Timeframe: H1")
         print(f"   Strategy: V3 Adaptive (TREND/RANGE detection)")
-        print(f"   Check interval: Every hour on the hour (01:00, 02:00, 03:00...)")
-        print(f"   Signal source: ONLY latest closed candle (no historical signals)")
+        print(f"   Check interval: Every hour on the hour")
         print(f"   Risk per trade: {self.risk_percent}%")
         print(f"   Max positions: {self.max_positions}")
         print(f"   Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}")
-        print(f"   🎯 Real-time TP/SL monitoring: Every 10 seconds (checks bar high/low)")
-        print(f"\n🎯 Adaptive TP Levels:")
-        print(f"   TREND Mode: {self.trend_tp1}p / {self.trend_tp2}p / {self.trend_tp3}p")
-        print(f"   RANGE Mode: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p")
-        print(f"\n📁 Log Files:")
-        print(f"   Trade log: {self.trades_file}")
-        print(f"   TP hits log: {self.tp_hits_file}")
+        print()
+        
+        print(f"{'='*80}")
+        print(f"✅ BOT FULLY STARTED - Ready to trade!")
         print(f"{'='*80}\n")
         
         if self.dry_run:
-            print("🧪 DRY RUN MODE: All trades will be simulated only")
-            print("   ✅ Analysis will run normally")
-            print("   ✅ Signals will be detected")
-            print("   ✅ Position sizing will be calculated")
-            print("   ⚠️  NO real trades will be executed\n")
+            print("🧪 DRY RUN MODE: All trades will be simulated only\n")
         else:
-            print("🚀 LIVE TRADING MODE: Real trades will be executed!")
-            print("   ⚠️  Monitor your account regularly")
-            print("   ⚠️  Stop the bot with Ctrl+C\n")
+            print("🚀 LIVE TRADING MODE: Real trades will be executed!\n")
         
         # Send startup notification to Telegram
         if self.telegram_bot and self.telegram_chat_id:
+            # Format TP/SL units based on symbol type
+            dist_unit = '%' if is_crypto_symbol(self.symbol) else 'p'
+            
             startup_message = f"""
 🤖 <b>BOT STARTED</b>
 
@@ -1547,15 +3402,15 @@ Max positions: {self.max_positions}
 Mode: {'🧪 DRY RUN (TEST)' if self.dry_run else '🚀 LIVE TRADING'}
 
 🎯 <b>TP Levels:</b>
-TREND: {self.trend_tp1}p / {self.trend_tp2}p / {self.trend_tp3}p
-RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
+TREND: {self.trend_tp1}{dist_unit} / {self.trend_tp2}{dist_unit} / {self.trend_tp3}{dist_unit}
+RANGE: {self.range_tp1}{dist_unit} / {self.range_tp2}{dist_unit} / {self.range_tp3}{dist_unit}
 
 ⏰ <b>Started at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ✅ Bot is now active and monitoring the market!
 """
             try:
-                asyncio.run(self.send_telegram(startup_message))
+                self.send_telegram(startup_message)
                 print("📱 Startup notification sent to Telegram")
             except Exception as e:
                 print(f"⚠️  Failed to send startup notification: {e}")
@@ -1567,7 +3422,8 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
         iteration = 0
         
         try:
-            while True:
+            while self.running:  # ✅ Check running flag instead of while True
+                self.watchdog.heartbeat()  # Send heartbeat at start of iteration
                 iteration += 1
                 
                 print(f"\n{'='*80}")
@@ -1576,11 +3432,16 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 
                 # Check connection
                 if not self.mt5_connected:
+                    self.watchdog.heartbeat()
                     print("❌ MT5 disconnected! Attempting to reconnect...")
-                    if not self.connect_mt5():
-                        print("❌ Reconnection failed. Waiting 60s...")
-                        time.sleep(60)
+                    if not self._attempt_reconnect():
+                        print("❌ Reconnection failed. Will retry next iteration...")
                         continue
+
+                self.watchdog.heartbeat()
+
+                # Periodic heartbeat check
+                self._check_heartbeat()
                 
                 # Check current positions
                 open_positions = self.get_open_positions()
@@ -1593,6 +3454,10 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                 
                 # Check for closed positions and log them
                 self._check_closed_positions()
+                
+                # Cleanup old signal IDs periodically (every 24 hours based on iteration counter)
+                if iteration % 24 == 0:
+                    self._cleanup_old_signal_ids()
                 
                 print(f"📊 Open positions: {len(open_positions)}/{self.max_positions}")
                 
@@ -1642,7 +3507,7 @@ RANGE: {self.range_tp1}p / {self.range_tp2}p / {self.range_tp3}p
                         direction_str = 'LONG' if signal['direction'] == 1 else 'SHORT'
                         print(f"⚠️  Already have {direction_str} position - skipping")
                     elif len(open_positions) >= self.max_positions:
-                        print(f"⚠️  Max positions reached ({self.max_positions}) - skipping")
+                        print(f"⚠️  Max positions reached for {self.symbol} ({self.max_positions}) - skipping")
                     else:
                         # Open position
                         print(f"📈 Attempting to open position...")
@@ -1702,7 +3567,7 @@ Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 🛑 Bot has been stopped by user.
 """
                 try:
-                    asyncio.run(self.send_telegram(shutdown_message))
+                    self.send_telegram(shutdown_message)
                     print("📱 Shutdown notification sent to Telegram")
                 except Exception as e:
                     print(f"⚠️  Failed to send shutdown notification: {e}")
@@ -1716,6 +3581,5 @@ Stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             import traceback
             traceback.print_exc()
         finally:
-            print("🔌 Disconnecting from MT5...")
-            self.disconnect_mt5()
-            print("✅ Shutdown complete")
+            # Always cleanup resources
+            self._cleanup()

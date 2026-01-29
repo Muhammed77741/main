@@ -2,9 +2,10 @@
 Main Window - main GUI window for the trading app
 """
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QPlainTextEdit, QListWidget, QListWidgetItem,
-    QGroupBox, QMessageBox, QSplitter, QApplication, QFrame, QGridLayout
+    QGroupBox, QMessageBox, QSplitter, QApplication, QFrame, QGridLayout,
+    QSpinBox
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QFont, QIcon, QColor
@@ -307,6 +308,25 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.bot_list)
 
+        # Buttons row
+        buttons_layout = QHBoxLayout()
+
+        # Add Bot button
+        add_bot_btn = QPushButton("➕ Add MT5 Bot")
+        add_bot_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                min-height: 40px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        add_bot_btn.clicked.connect(self.show_add_bot_dialog)
+        buttons_layout.addWidget(add_bot_btn)
+
         # Refresh button
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.setStyleSheet("""
@@ -320,7 +340,9 @@ class MainWindow(QMainWindow):
             }
         """)
         refresh_btn.clicked.connect(self.refresh_bot_list)
-        layout.addWidget(refresh_btn)
+        buttons_layout.addWidget(refresh_btn)
+
+        layout.addLayout(buttons_layout)
 
         return panel
 
@@ -481,6 +503,21 @@ class MainWindow(QMainWindow):
         settings_btn.setMinimumHeight(50)
         layout.addWidget(settings_btn)
 
+        # Delete button
+        delete_btn = QPushButton("🗑️ Delete Bot")
+        delete_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #D32F2F;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #B71C1C;
+            }
+        """)
+        delete_btn.clicked.connect(self.delete_bot)
+        delete_btn.setMinimumHeight(50)
+        layout.addWidget(delete_btn)
+
         # Positions button
         positions_btn = QPushButton("📊 Positions")
         positions_btn.setStyleSheet("""
@@ -590,6 +627,8 @@ class MainWindow(QMainWindow):
         self.update_info_display()
         self.update_status_display()
         self.update_controls()
+        # Trigger immediate price fetch for the newly selected bot if it has positions
+        self.start_price_fetching()
 
     def on_bot_selection_changed(self, current, previous):
         """Handle bot selection change"""
@@ -646,14 +685,25 @@ class MainWindow(QMainWindow):
         <p><b>Status:</b> {'🟢 RUNNING' if status.status == 'running' else '⚫ STOPPED' if status.status == 'stopped' else '🔴 ERROR'}</p>
         """
 
-        if status.status == 'running':
-            status_html += f"""
-            <p><b>Balance:</b> ${status.balance:,.2f}</p>
-            <p><b>Equity:</b> ${status.equity:,.2f}</p>
-            <p><b>P&L Today:</b> ${status.pnl_today:+,.2f} ({status.pnl_percent:+.2f}%)</p>
-            <p><b>Open Positions:</b> {status.open_positions}/{status.max_positions}</p>
-            """
+        # Get actual open positions count from database (more reliable than status object)
+        try:
+            open_trades = self.db.get_open_trades(self.current_bot_id)
+            actual_open_positions = len(open_trades) if open_trades else 0
+        except Exception as e:
+            # Fallback to status if DB read fails, log the error for debugging
+            print(f"⚠️  Failed to get open positions from DB: {e}")
+            actual_open_positions = status.open_positions
+        
+        # Always show balance/equity info (not dependent on running status)
+        # This ensures balance is visible even when bot status temporarily changes
+        status_html += f"""
+        <p><b>Balance:</b> ${status.balance:,.2f}</p>
+        <p><b>Equity:</b> ${status.equity:,.2f}</p>
+        <p><b>P&L Today:</b> ${status.pnl_today:+,.2f} ({status.pnl_percent:+.2f}%)</p>
+        <p><b>Open Positions:</b> {actual_open_positions}/{status.max_positions}</p>
+        """
 
+        if status.status == 'running':
             if status.current_regime:
                 status_html += f"<p><b>Market Regime:</b> {status.current_regime}</p>"
 
@@ -720,7 +770,7 @@ class MainWindow(QMainWindow):
             self.price_fetcher = None
 
     def update_live_positions_display(self):
-        """Update live open positions display"""
+        """Update live open positions display - simplified to show only count and P&L%"""
         if not hasattr(self, 'live_positions_label') or self.live_positions_label is None:
             return
 
@@ -733,7 +783,7 @@ class MainWindow(QMainWindow):
             open_trades = self.db.get_open_trades(self.current_bot_id)
 
             if not open_trades or len(open_trades) == 0:
-                self.live_positions_label.setText("<p style='color: #666; font-size: 12px;'>No open positions</p>")
+                self.live_positions_label.setText("<p style='color: #666; font-size: 13px;'>No open positions</p>")
                 return
 
             # Get bot config
@@ -745,60 +795,50 @@ class MainWindow(QMainWindow):
             # Use cached price from background fetcher (non-blocking)
             current_price = self.current_prices.get(self.current_bot_id)
 
-            # Calculate total P&L with current price
-            total_pnl = 0.0
-            for trade in open_trades:
-                if current_price and trade.entry_price > 0:
-                    if trade.trade_type.upper() == 'BUY':
-                        trade.profit = (current_price - trade.entry_price) * trade.amount
-                    elif trade.trade_type.upper() == 'SELL':
-                        trade.profit = (trade.entry_price - current_price) * trade.amount
-                total_pnl += (trade.profit or 0.0)
-
-            # Build HTML display
+            # Build display with position count (always show this)
             positions_html = f"""
-            <div style='font-size: 12px;'>
-            <p style='font-weight: bold; font-size: 13px; margin-bottom: 8px;'>
-                {len(open_trades)} position{'s' if len(open_trades) != 1 else ''} open |
-                Total P&L: <span style='color: {'#4CAF50' if total_pnl >= 0 else '#F44336'}; font-weight: bold;'>
-                ${total_pnl:+,.2f}</span>
-            </p>
+            <div style='font-size: 14px; padding: 8px;'>
+                <p style='margin: 4px 0;'>
+                    <b>Open Positions:</b> <span style='font-size: 16px; color: #2196F3; font-weight: bold;'>{len(open_trades)}</span>
+                </p>
             """
 
-            # Add each position
-            for trade in open_trades[:5]:  # Show max 5 positions
-                # Determine color based on profit
-                pnl_color = '#4CAF50' if (trade.profit or 0) >= 0 else '#F44336'
-                type_icon = '🔵' if trade.trade_type == 'BUY' else '🔴'
+            # Calculate and show P&L only if price is available
+            if current_price and current_price > 0:
+                # Calculate total P&L and total entry value for percentage
+                total_pnl = 0.0
+                total_entry_value = 0.0
+                
+                for trade in open_trades:
+                    if trade.entry_price and trade.entry_price > 0 and trade.amount:
+                        if trade.trade_type.upper() == 'BUY':
+                            trade.profit = (current_price - trade.entry_price) * trade.amount
+                        elif trade.trade_type.upper() == 'SELL':
+                            trade.profit = (trade.entry_price - current_price) * trade.amount
+                    total_pnl += (trade.profit or 0.0)
+                    # Add to entry value only if both values are valid
+                    if trade.entry_price and trade.amount:
+                        total_entry_value += trade.entry_price * trade.amount
 
-                # Use fetched current price or fallback to entry price
-                display_price = current_price if current_price else trade.entry_price
-
-                # Calculate P&L percentage
-                profit_pct = 0.0
-                if trade.entry_price > 0 and trade.amount > 0:
-                    entry_value = trade.entry_price * trade.amount
-                    profit_pct = ((trade.profit or 0) / entry_value * 100) if entry_value > 0 else 0.0
-
-                positions_html += f"""
-                <div style='margin: 6px 0; padding: 6px; background-color: #FAFAFA; border-left: 3px solid {pnl_color}; border-radius: 3px;'>
-                    <p style='margin: 2px 0;'>
-                        <b>{type_icon} {trade.symbol if trade.symbol else 'N/A'}</b>
-                        <span style='color: #666;'>{trade.trade_type}</span>
-                    </p>
-                    <p style='margin: 2px 0; font-size: 11px; color: #666;'>
-                        Entry: {trade.entry_price:,.4f} → Current: {display_price:,.4f}
-                    </p>
-                    <p style='margin: 2px 0; font-size: 11px;'>
-                        P&L: <span style='color: {pnl_color}; font-weight: bold;'>
-                        ${(trade.profit or 0):+,.2f} ({profit_pct:+.2f}%)</span>
-                    </p>
-                </div>
+                # Calculate total P&L percentage with proper validation
+                if total_entry_value > 0:
+                    total_pnl_pct = (total_pnl / total_entry_value * 100)
+                    pnl_color = '#4CAF50' if total_pnl >= 0 else '#F44336'
+                    positions_html += f"""
+                <p style='margin: 4px 0;'>
+                    <b>Total P&L:</b> <span style='color: {pnl_color}; font-weight: bold; font-size: 16px;'>
+                    {total_pnl_pct:+.2f}%</span>
+                </p>
                 """
-            
-            if len(open_trades) > 5:
-                positions_html += f"<p style='color: #666; font-size: 11px; margin-top: 5px;'>...and {len(open_trades) - 5} more</p>"
-            
+                else:
+                    # Show calculating if we have price but can't calculate
+                    positions_html += "<p style='margin: 4px 0; color: #FF9800;'><b>Total P&L:</b> Calculating...</p>"
+            else:
+                # Price not available yet - trigger immediate fetch
+                if not self.price_fetcher or not self.price_fetcher.isRunning():
+                    self.start_price_fetching()
+                positions_html += "<p style='margin: 4px 0; color: #FF9800;'><b>Total P&L:</b> Fetching price...</p>"
+
             positions_html += "</div>"
             
             self.live_positions_label.setText(positions_html)
@@ -1058,30 +1098,17 @@ class MainWindow(QMainWindow):
             return
 
         config = self.bot_manager.get_config(self.current_bot_id)
-        
-        # Check for supported bots: BTC/ETH (Binance) and XAUUSD/Gold (MT5)
-        bot_name_upper = config.name.upper()
-        symbol_upper = config.symbol.upper() if config.symbol else ''
-        
-        is_supported = (
-            'BTC' in bot_name_upper or 
-            'ETH' in bot_name_upper or
-            'BITCOIN' in bot_name_upper or 
-            'ETHEREUM' in bot_name_upper or
-            'XAUUSD' in bot_name_upper or
-            'GOLD' in bot_name_upper or
-            'XAU' in bot_name_upper or
-            'BTC' in symbol_upper or 
-            'ETH' in symbol_upper or
-            'XAUUSD' in symbol_upper or
-            'XAU' in symbol_upper
-        )
-        
+
+        # Signal Analysis is available for MT5 and Binance bots
+        exchange = config.exchange.upper() if config.exchange else ''
+
+        is_supported = exchange in ['MT5', 'BINANCE']
+
         if not is_supported:
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Information)
             msg.setWindowTitle("Not Available")
-            msg.setText("ℹ️  Signal Analysis is currently available for BTC, ETH, and XAUUSD bots only.")
+            msg.setText("ℹ️  Signal Analysis is available for MT5 and Binance bots only.")
             msg.setStyleSheet("""
                 QMessageBox {
                     background-color: white;
@@ -1311,5 +1338,410 @@ class MainWindow(QMainWindow):
         print("🗄️  Closing database...")
         self.db.close()
 
+        # Shutdown shared MT5 connection
+        print("🔌 Closing MT5 connection...")
+        try:
+            from core.mt5_manager import mt5_manager
+            mt5_manager.shutdown()
+        except Exception as e:
+            print(f"⚠️  Error closing MT5: {e}")
+
         print("✅ Application closed cleanly")
         event.accept()
+
+    def show_add_bot_dialog(self):
+        """Show dialog to add new MT5 bot"""
+        from PySide6.QtWidgets import (QDialog, QLineEdit, QDoubleSpinBox, QDialogButtonBox,
+                                        QListWidget, QListWidgetItem)
+        from PySide6.QtCore import Qt
+
+        # First, load available MT5 symbols
+        try:
+            import MetaTrader5 as mt5
+
+            # Try to shutdown first in case already connected
+            mt5.shutdown()
+
+            # Try to initialize
+            if not mt5.initialize():
+                # Get error info
+                error = mt5.last_error()
+                QMessageBox.warning(
+                    self,
+                    "MT5 Not Available",
+                    f"Could not connect to MetaTrader 5.\n\n"
+                    f"Error: {error}\n\n"
+                    f"Please check:\n"
+                    f"• MT5 is running\n"
+                    f"• You are logged in to your trading account\n"
+                    f"• No other Python script is using MT5"
+                )
+                return
+
+            # Get ALL symbols (not just visible ones)
+            symbols = mt5.symbols_get()
+            mt5.shutdown()
+
+            if not symbols:
+                QMessageBox.warning(
+                    self,
+                    "No Symbols Available",
+                    "No trading symbols found in MT5.\n\nPlease check your MT5 connection."
+                )
+                return
+
+            # Get all symbol names (both visible and hidden)
+            symbol_names = [s.name for s in symbols]
+
+            # Prioritize common pairs
+            priority_symbols = []
+            other_symbols = []
+
+            common_prefixes = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD',
+                             'XAUUSD', 'XAGUSD', 'BTCUSD', 'ETHUSD', 'GER', 'US30', 'NAS100']
+
+            for symbol in symbol_names:
+                if any(symbol.startswith(prefix) for prefix in common_prefixes):
+                    priority_symbols.append(symbol)
+                else:
+                    other_symbols.append(symbol)
+
+            priority_symbols.sort()
+            other_symbols.sort()
+            symbol_list = priority_symbols + other_symbols
+
+        except ImportError:
+            QMessageBox.warning(
+                self,
+                "MT5 Library Missing",
+                "MetaTrader5 Python library is not installed.\n\n"
+                "Install it with: pip install MetaTrader5"
+            )
+            return
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Error Loading Symbols",
+                f"Failed to load MT5 symbols: {str(e)}"
+            )
+            return
+
+        # Create dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add New MT5 Bot")
+        dialog.setMinimumWidth(600)
+        dialog.setMinimumHeight(550)
+
+        layout = QVBoxLayout(dialog)
+
+        # Title
+        title = QLabel("➕ Add New MT5 Trading Bot")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title)
+
+        # Symbol selection section
+        symbol_section = QVBoxLayout()
+        symbol_section.setSpacing(5)
+
+        symbol_label = QLabel("Select Symbol:")
+        symbol_label.setStyleSheet("font-weight: bold;")
+        symbol_section.addWidget(symbol_label)
+
+        # Search box for filtering
+        search_input = QLineEdit()
+        search_input.setPlaceholderText("🔍 Type to search symbols...")
+        search_input.setStyleSheet("min-height: 30px; padding: 5px; font-size: 13px;")
+        symbol_section.addWidget(search_input)
+
+        # Symbol list
+        symbol_list_widget = QListWidget()
+        symbol_list_widget.addItems(symbol_list)
+        symbol_list_widget.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                font-size: 13px;
+                background-color: white;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            QListWidget::item:hover {
+                background-color: #f5f5f5;
+            }
+            QListWidget::item:selected {
+                background-color: #2196F3;
+                color: white;
+            }
+        """)
+        symbol_list_widget.setMinimumHeight(200)
+        symbol_list_widget.setMaximumHeight(250)
+
+        # Don't select anything by default - user must choose
+        # This prevents accidental creation of unwanted pairs
+        symbol_list_widget.setCurrentRow(-1)  # No selection
+
+        symbol_section.addWidget(symbol_list_widget)
+
+        # Connect search to filter
+        def filter_symbols():
+            search_text = search_input.text().upper()
+            for i in range(symbol_list_widget.count()):
+                item = symbol_list_widget.item(i)
+                item.setHidden(search_text not in item.text())
+
+        search_input.textChanged.connect(filter_symbols)
+
+        layout.addLayout(symbol_section)
+
+        # Form for other inputs
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        # Name input
+        name_input = QLineEdit()
+        name_input.setPlaceholderText("e.g., Euro/Dollar, Gold")
+        name_input.setStyleSheet("min-height: 30px; padding: 5px;")
+        form.addRow("Display Name:", name_input)
+
+        # Separator
+        separator = QLabel("───────────────────────────────")
+        separator.setStyleSheet("color: #ccc; margin: 10px 0;")
+        form.addRow("", separator)
+
+        # TP/SL defaults
+        defaults_label = QLabel("<i>Default TP/SL values (points):</i>")
+        defaults_label.setStyleSheet("color: #666;")
+        form.addRow("", defaults_label)
+
+        # Trend TP levels
+        trend_tp1_spin = QDoubleSpinBox()
+        trend_tp1_spin.setRange(0.001, 5000)
+        trend_tp1_spin.setDecimals(3)
+        trend_tp1_spin.setSingleStep(0.1)
+        trend_tp1_spin.setValue(30)
+        trend_tp1_spin.setSuffix(" pts")
+        form.addRow("Trend TP1:", trend_tp1_spin)
+
+        trend_tp2_spin = QDoubleSpinBox()
+        trend_tp2_spin.setRange(0.001, 5000)
+        trend_tp2_spin.setDecimals(3)
+        trend_tp2_spin.setSingleStep(0.1)
+        trend_tp2_spin.setValue(55)
+        trend_tp2_spin.setSuffix(" pts")
+        form.addRow("Trend TP2:", trend_tp2_spin)
+
+        trend_tp3_spin = QDoubleSpinBox()
+        trend_tp3_spin.setRange(0.001, 5000)
+        trend_tp3_spin.setDecimals(3)
+        trend_tp3_spin.setSingleStep(0.1)
+        trend_tp3_spin.setValue(90)
+        trend_tp3_spin.setSuffix(" pts")
+        form.addRow("Trend TP3:", trend_tp3_spin)
+
+        # SL defaults
+        trend_sl_spin = QDoubleSpinBox()
+        trend_sl_spin.setRange(0.001, 1000)
+        trend_sl_spin.setDecimals(3)
+        trend_sl_spin.setSingleStep(0.1)
+        trend_sl_spin.setValue(16)
+        trend_sl_spin.setSuffix(" pts")
+        form.addRow("Trend SL:", trend_sl_spin)
+
+        # Max hold bars (timeout)
+        max_hold_bars_spin = QSpinBox()
+        max_hold_bars_spin.setRange(0, 1000)
+        max_hold_bars_spin.setValue(100)
+        max_hold_bars_spin.setSuffix(" bars")
+        max_hold_bars_spin.setToolTip("Close position after N bars if TP/SL not hit (0 = disabled)")
+        form.addRow("Position Timeout:", max_hold_bars_spin)
+
+        layout.addLayout(form)
+
+        # Info note
+        info_note = QLabel(
+            "<i>💡 Tip: You can adjust these values later in Settings</i>"
+        )
+        info_note.setStyleSheet("color: #666; margin-top: 10px;")
+        layout.addWidget(info_note)
+
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        # Show dialog
+        if dialog.exec() == QDialog.Accepted:
+            # Get selected symbol from list
+            selected_item = symbol_list_widget.currentItem()
+            if not selected_item:
+                QMessageBox.warning(self, "No Selection", "Please select a symbol from the list!")
+                return
+
+            symbol = selected_item.text().strip().upper()
+            name = name_input.text().strip()
+
+            # Validation
+            if not symbol:
+                QMessageBox.warning(self, "Invalid Input", "Please select a symbol!")
+                return
+
+            if not name:
+                name = symbol  # Use symbol as name if not provided
+
+            # Check if bot already exists
+            bot_id = symbol.lower().replace('/', '_')
+            if bot_id in self.bot_manager.get_all_bot_ids():
+                QMessageBox.warning(
+                    self,
+                    "Bot Exists",
+                    f"A bot for {symbol} already exists!"
+                )
+                return
+
+            # Validate that symbol exists in MT5 (final check)
+            try:
+                import MetaTrader5 as mt5
+                mt5.shutdown()
+                if not mt5.initialize():
+                    QMessageBox.warning(
+                        self,
+                        "MT5 Connection Error",
+                        "Could not connect to MT5 to validate symbol."
+                    )
+                    return
+
+                symbol_info = mt5.symbol_info(symbol)
+                if symbol_info is None:
+                    mt5.shutdown()
+                    QMessageBox.warning(
+                        self,
+                        "Invalid Symbol",
+                        f"Symbol '{symbol}' not found in MT5.\n\n"
+                        f"Please make sure:\n"
+                        f"• Symbol exists in your broker\n"
+                        f"• Symbol name is correct"
+                    )
+                    return
+
+                # Try to enable symbol if it's not visible
+                if not symbol_info.visible:
+                    if not mt5.symbol_select(symbol, True):
+                        print(f"⚠️  Could not enable symbol {symbol}, but will proceed anyway")
+
+                mt5.shutdown()
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Validation Error",
+                    f"Could not validate symbol: {str(e)}"
+                )
+                return
+
+            try:
+                # Create new config
+                from models import BotConfig
+
+                new_config = BotConfig(
+                    bot_id=bot_id,
+                    name=name,
+                    symbol=symbol,
+                    exchange='MT5',
+                    trend_tp1=trend_tp1_spin.value(),
+                    trend_tp2=trend_tp2_spin.value(),
+                    trend_tp3=trend_tp3_spin.value(),
+                    range_tp1=20,  # Default range values
+                    range_tp2=35,
+                    range_tp3=50,
+                    trend_sl=trend_sl_spin.value(),
+                    range_sl=12,
+                    max_hold_bars=max_hold_bars_spin.value(),
+                )
+
+                # Save to database
+                self.db.save_config(new_config)
+
+                # Add to bot manager
+                self.bot_manager.configs[bot_id] = new_config
+
+                # Refresh bot list
+                self.refresh_bot_list()
+
+                # Show success
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"✅ Bot '{name}' ({symbol}) added successfully!"
+                )
+
+                self.log(f"✅ New bot added: {name} ({symbol})")
+
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to add bot: {str(e)}"
+                )
+                self.log(f"❌ Failed to add bot: {str(e)}")
+
+    def delete_bot(self):
+        """Delete the currently selected bot"""
+        if not self.current_bot_id:
+            QMessageBox.warning(self, "No Bot Selected", "Please select a bot to delete.")
+            return
+
+        bot_id = self.current_bot_id
+        config = self.bot_manager.get_config(bot_id)
+        if not config:
+            QMessageBox.warning(self, "Error", "Could not find bot configuration.")
+            return
+
+        bot_name = config.name
+
+        # Confirm deletion
+        reply = QMessageBox.question(
+            self,
+            "Confirm Deletion",
+            f"Are you sure you want to delete '{bot_name}' bot?\n\nThis will remove all configuration data.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            # Stop bot if running
+            status = self.bot_manager.get_status(bot_id)
+            if status and status.status == 'running':
+                self.log(f"⏹ Stopping {bot_name} before deletion...")
+                self.bot_manager.stop_bot(bot_id)
+                # Wait a bit for bot to stop
+                import time
+                time.sleep(1)
+
+            # Delete from database
+            cursor = self.db.conn.cursor()
+            cursor.execute("DELETE FROM bot_configs WHERE bot_id = ?", (bot_id,))
+            self.db.conn.commit()
+
+            # Remove from bot_manager
+            if bot_id in self.bot_manager.configs:
+                del self.bot_manager.configs[bot_id]
+
+            # Clear current selection
+            self.current_bot_id = None
+
+            # Refresh bot list
+            self.refresh_bot_list()
+
+            self.log(f"✅ Bot '{bot_name}' deleted successfully")
+            QMessageBox.information(self, "Success", f"Bot '{bot_name}' has been deleted.")
+
+        except Exception as e:
+            self.log(f"❌ Failed to delete bot: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to delete bot: {str(e)}")

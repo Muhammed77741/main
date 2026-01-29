@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(where:*)",
+      "Bash(\"C:\\\\Users\\\\Мирас\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\python.exe\" \"C:\\\\Users\\\\Мирас\\\\.claude-worktrees\\\\main-1\\\\wizardly-morse\\\\remove_binance_bots.py\")",
+      "Bash(/c/Users/Мирас/AppData/Local/Microsoft/WindowsApps/python.exe:*)",
+      "Bash(/c/Users/Мирас/AppData/Local/Programs/Python/Launcher/py remove_binance_bots.py)",
+      "Bash(PYTHONIOENCODING=utf-8 /c/Users/Мирас/AppData/Local/Programs/Python/Launcher/py:*)",
+      "Bash(/c/Users/Мирас/AppData/Local/Programs/Python/Launcher/py -m py_compile:*)",
+      "Bash(grep:*)",
+      "Bash(py -c:*)",
+      "Bash(sqlite3:*)",
+      "Bash(py check_config.py:*)",
+      "Bash(py test_position_size.py:*)",
+      "Bash(py test_mt5_connection.py:*)",
+      "Bash(py check_positions.py:*)",
+      "Bash(py:*)",
+      "Bash(C:UsersМирасAppDataLocalMicrosoftWindowsAppspython.exe check_config.py)"
+    ]
+  }
+}

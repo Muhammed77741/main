@@ -39,11 +39,15 @@ class BotManager(QObject):
                 self.configs[config.bot_id] = config
 
     def _create_default_configs(self):
-        """Create default configurations for all bots"""
+        """Create default configurations for all bots (MT5 only)"""
         default_configs = [
             BotConfig.default_xauusd(),
-            BotConfig.default_btc(),
-            BotConfig.default_eth(),
+            BotConfig.default_eurusd(),
+            BotConfig.default_gbpusd(),
+            BotConfig.default_usdjpy(),
+            # Binance configs disabled
+            # BotConfig.default_btc(),
+            # BotConfig.default_eth(),
         ]
 
         for config in default_configs:
